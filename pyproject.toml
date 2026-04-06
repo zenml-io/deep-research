@@ -16,5 +16,8 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["deep_research*"]
 
+[tool.setuptools.package-data]
+"deep_research.prompts" = ["*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
