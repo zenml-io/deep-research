@@ -1,3 +1,4 @@
+from time import monotonic
 from uuid import uuid4
 
 from kitaru import flow, log, wait
@@ -53,6 +54,19 @@ def _run_iteration(plan, ledger, iteration, config, council_models):
     return run_supervisor(plan, ledger, iteration, config)
 
 
+def _resolve_runtime_config(
+    config: ResearchConfig | None,
+    resolved_tier: Tier,
+) -> ResearchConfig:
+    if config is None:
+        return ResearchConfig.for_tier(resolved_tier)
+    if config.tier != resolved_tier:
+        return ResearchConfig.for_tier(resolved_tier).model_copy(
+            update={"require_plan_approval": config.require_plan_approval}
+        )
+    return config
+
+
 @flow
 def research_flow(
     brief: str,
@@ -61,9 +75,7 @@ def research_flow(
 ) -> InvestigationPackage:
     classification = classify_request(brief, config)
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
-    config = config or ResearchConfig.for_tier(resolved_tier)
-    if config.tier != resolved_tier:
-        config = config.model_copy(update={"tier": resolved_tier})
+    config = _resolve_runtime_config(config, resolved_tier)
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
@@ -72,6 +84,10 @@ def research_flow(
             question=classification.clarification_question,
         )
         classification = classify_request(brief, config)
+        resolved_tier = (
+            classification.recommended_tier if tier == "auto" else Tier(tier)
+        )
+        config = _resolve_runtime_config(config, resolved_tier)
 
     plan = build_plan(brief, classification, config.tier)
     if config.require_plan_approval:
@@ -88,6 +104,7 @@ def research_flow(
     spent_usd = 0.0
     council_models = _resolve_council_models(config)
     stop_reason = StopReason.MAX_ITERATIONS
+    start_time = monotonic()
 
     for iteration in range(config.max_iterations):
         supervisor_result = _run_iteration(
@@ -114,7 +131,7 @@ def research_flow(
             coverage,
             iteration_history[:-1],
             spent_usd=spent_usd,
-            elapsed_seconds=0,
+            elapsed_seconds=int(monotonic() - start_time),
             max_iterations=config.max_iterations,
             epsilon=0.05,
             min_coverage=0.60,
