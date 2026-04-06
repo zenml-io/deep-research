@@ -2,6 +2,8 @@ import importlib
 import sys
 import types
 
+from deep_research.models import SelectionGraph
+
 
 def _load_research_flow_module():
     def checkpoint(*, type):
@@ -175,7 +177,9 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     )
     monkeypatch.setattr(module, "log", lambda **kwargs: None)
     monkeypatch.setattr(
-        module, "build_selection_graph", lambda ledger, plan: {"items": []}
+        module,
+        "build_selection_graph",
+        lambda ledger, plan: SelectionGraph(items=[]),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -241,7 +245,9 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
     monkeypatch.setattr(module, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(module, "log", lambda **kwargs: None)
     monkeypatch.setattr(
-        module, "build_selection_graph", lambda ledger, plan: {"items": []}
+        module,
+        "build_selection_graph",
+        lambda ledger, plan: SelectionGraph(items=[]),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -329,7 +335,9 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     )
     monkeypatch.setattr(module, "log", lambda **kwargs: None)
     monkeypatch.setattr(
-        module, "build_selection_graph", lambda ledger, plan: {"items": []}
+        module,
+        "build_selection_graph",
+        lambda ledger, plan: SelectionGraph(items=[]),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 

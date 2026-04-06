@@ -57,6 +57,7 @@ def test_render_reading_path_returns_markdown_payload() -> None:
 
     assert payload.name == "reading_path"
     assert "useful" in payload.content_markdown
+    assert module.render_reading_path._checkpoint_type == "llm_call"
 
 
 def test_render_backing_report_returns_goal_and_selected_count() -> None:
@@ -79,6 +80,7 @@ def test_render_backing_report_returns_goal_and_selected_count() -> None:
     assert payload.name == "backing_report"
     assert "Goal: Answer the brief" in payload.content_markdown
     assert "Selected: 1" in payload.content_markdown
+    assert module.render_backing_report._checkpoint_type == "llm_call"
 
 
 def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
