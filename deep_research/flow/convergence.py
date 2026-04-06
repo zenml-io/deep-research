@@ -31,7 +31,7 @@ def check_convergence(
         previous = history[-1]
         coverage_gain = current.total - previous.coverage
 
-        if previous.new_candidate_count == 0:
+        if coverage_gain <= 0:
             return StopDecision(should_stop=True, reason=StopReason.LOOP_STALL)
         if coverage_gain < epsilon:
             return StopDecision(should_stop=True, reason=StopReason.DIMINISHING_RETURNS)
