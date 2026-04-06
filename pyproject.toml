@@ -1,0 +1,13 @@
+[project]
+name = "deep-research"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "kitaru",
+  "pydantic>=2",
+  "pydantic-ai",
+  "pydantic-settings",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
