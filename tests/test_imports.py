@@ -12,6 +12,7 @@ def test_package_modules_import() -> None:
         "deep_research.renderers",
         "deep_research.critique",
         "deep_research.package",
+        "deep_research.prompts",
         "deep_research.tools",
     ]
     for module in modules:
