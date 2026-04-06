@@ -19,6 +19,13 @@ from deep_research.models import (
 
 
 def _load_research_flow_module():
+    class FakeHandle:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
@@ -31,7 +38,7 @@ def _load_research_flow_module():
 
     def flow(func):
         def run(*args, **kwargs):
-            return func(*args, **kwargs)
+            return FakeHandle(func(*args, **kwargs))
 
         func.run = run
         return func
