@@ -30,6 +30,15 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
             error="command not allowed",
         )
 
+    if any(_is_disallowed_path_argument(arg) for arg in argv[1:]):
+        return RawToolResult(
+            tool_name="run_bash",
+            provider="bash",
+            payload={},
+            ok=False,
+            error="command not allowed",
+        )
+
     with tempfile.TemporaryDirectory(prefix="deep-research-") as temp_dir:
         try:
             completed = subprocess.run(
@@ -75,3 +84,14 @@ def _is_allowed_command(command_name: str) -> bool:
         return False
 
     return command_name in ALLOWED_COMMANDS
+
+
+def _is_disallowed_path_argument(argument: str) -> bool:
+    if not argument or argument.startswith("-"):
+        return False
+
+    path = Path(argument)
+    if path.is_absolute():
+        return True
+
+    return ".." in path.parts

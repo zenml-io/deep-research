@@ -64,3 +64,10 @@ def test_run_bash_blocks_interpreter_bypass_attempts() -> None:
 
     assert result.ok is False
     assert result.error == "command not allowed"
+
+
+def test_run_bash_blocks_absolute_path_arguments() -> None:
+    result = run_bash("ls /")
+
+    assert result.ok is False
+    assert result.error == "command not allowed"
