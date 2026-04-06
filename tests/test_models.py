@@ -169,6 +169,55 @@ def test_iteration_budget_rejects_negative_values() -> None:
         IterationBudget(input_tokens=-1)
 
 
+def test_iteration_budget_rejects_inconsistent_total_tokens() -> None:
+    with pytest.raises(ValidationError):
+        IterationBudget(input_tokens=10, output_tokens=20, total_tokens=25)
+
+
+def test_iteration_record_rejects_invalid_ranges() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=-1)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, new_candidate_count=-1)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, coverage=1.1)
+
+
+def test_evidence_candidate_rejects_invalid_url() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="not-a-url",
+            provider="test",
+            source_kind="web",
+        )
+
+
+def test_evidence_candidate_rejects_out_of_range_scores() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            quality_score=1.1,
+        )
+
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            relevance_score=-0.1,
+        )
+
+
 def test_request_classification_rejects_inconsistent_clarification_state() -> None:
     with pytest.raises(ValidationError):
         RequestClassification(
@@ -185,4 +234,15 @@ def test_request_classification_rejects_inconsistent_clarification_state() -> No
             recommended_tier=Tier.DEEP,
             needs_clarification=False,
             clarification_question="What is the deadline?",
+        )
+
+
+def test_request_classification_rejects_whitespace_only_question() -> None:
+    with pytest.raises(ValidationError):
+        RequestClassification(
+            audience_mode="technical",
+            freshness_mode="current",
+            recommended_tier=Tier.DEEP,
+            needs_clarification=True,
+            clarification_question="   ",
         )

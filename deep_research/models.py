@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, model_validator
 
 from deep_research.enums import StopReason, Tier
 
@@ -24,13 +24,21 @@ class EvidenceSnippet(StrictBaseModel):
 class EvidenceCandidate(StrictBaseModel):
     key: str
     title: str
-    url: str
+    url: AnyUrl
     snippets: list[EvidenceSnippet] = Field(default_factory=list)
     provider: str
     source_kind: str
     quality_score: float = 0.0
     relevance_score: float = 0.0
     selected: bool = False
+
+    @model_validator(mode="after")
+    def validate_scores(self) -> "EvidenceCandidate":
+        if not 0.0 <= self.quality_score <= 1.0:
+            raise ValueError("quality_score must be between 0.0 and 1.0")
+        if not 0.0 <= self.relevance_score <= 1.0:
+            raise ValueError("relevance_score must be between 0.0 and 1.0")
+        return self
 
 
 class EvidenceLedger(StrictBaseModel):
@@ -50,6 +58,16 @@ class IterationRecord(StrictBaseModel):
     iteration: int
     new_candidate_count: int = 0
     coverage: float = 0.0
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "IterationRecord":
+        if self.iteration < 0:
+            raise ValueError("iteration must be non-negative")
+        if self.new_candidate_count < 0:
+            raise ValueError("new_candidate_count must be non-negative")
+        if not 0.0 <= self.coverage <= 1.0:
+            raise ValueError("coverage must be between 0.0 and 1.0")
+        return self
 
 
 class IterationTrace(StrictBaseModel):
@@ -121,6 +139,8 @@ class IterationBudget(StrictBaseModel):
             raise ValueError("total_tokens must be non-negative")
         if self.estimated_cost_usd < 0.0:
             raise ValueError("estimated_cost_usd must be non-negative")
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("total_tokens must equal input_tokens plus output_tokens")
         return self
 
 
@@ -157,7 +177,10 @@ class RequestClassification(StrictBaseModel):
     @model_validator(mode="after")
     def validate_clarification_state(self) -> "RequestClassification":
         if self.needs_clarification:
-            if not self.clarification_question:
+            if (
+                self.clarification_question is None
+                or not self.clarification_question.strip()
+            ):
                 raise ValueError(
                     "clarification_question must be set when clarification is needed"
                 )
