@@ -1,16 +1,27 @@
 import shlex
 import subprocess
 import tempfile
+from pathlib import Path
 
 from deep_research.models import RawToolResult
 
 
-DENYLIST = {"rm", "mv", "sudo", "chmod", "chown", "dd"}
+ALLOWED_COMMANDS = {"echo", "ls", "pwd", "true", "false"}
 
 
 def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
-    argv = shlex.split(command)
-    if not argv or argv[0] in DENYLIST:
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return RawToolResult(
+            tool_name="run_bash",
+            provider="bash",
+            payload={},
+            ok=False,
+            error=str(exc),
+        )
+
+    if not argv or not _is_allowed_command(argv[0]):
         return RawToolResult(
             tool_name="run_bash",
             provider="bash",
@@ -57,3 +68,10 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
         ok=completed.returncode == 0,
         error=None if completed.returncode == 0 else completed.stderr,
     )
+
+
+def _is_allowed_command(command_name: str) -> bool:
+    if Path(command_name).is_absolute():
+        return False
+
+    return command_name in ALLOWED_COMMANDS
