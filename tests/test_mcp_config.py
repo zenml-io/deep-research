@@ -11,3 +11,17 @@ def test_build_mcp_toolsets_calls_factories() -> None:
         [MCPServerConfig(id="brave", factory=lambda: sentinel)]
     )
     assert toolsets == [sentinel]
+
+
+def test_build_mcp_toolsets_preserves_factory_order() -> None:
+    first = object()
+    second = object()
+
+    toolsets = build_mcp_toolsets(
+        [
+            MCPServerConfig(id="first", factory=lambda: first),
+            MCPServerConfig(id="second", factory=lambda: second),
+        ]
+    )
+
+    assert toolsets == [first, second]
