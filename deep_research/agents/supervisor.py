@@ -1,7 +1,7 @@
 from kitaru.adapters import pydantic_ai as kp
 from pydantic_ai import Agent
 
-from deep_research.models import SupervisorDecision
+from deep_research.models import SupervisorCheckpointResult
 from deep_research.prompts.loader import load_prompt
 
 
@@ -12,7 +12,7 @@ def build_supervisor_agent(
         Agent(
             model_name,
             name="supervisor",
-            result_type=SupervisorDecision,
+            result_type=SupervisorCheckpointResult,
             system_prompt=load_prompt("supervisor"),
             toolsets=toolsets,
             tools=tools,

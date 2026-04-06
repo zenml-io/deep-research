@@ -10,7 +10,7 @@ def _install_agent_stubs(monkeypatch):
     allowed_result_types = {
         "RequestClassification",
         "ResearchPlan",
-        "SupervisorDecision",
+        "SupervisorCheckpointResult",
         "RelevanceCheckpointResult",
         "SelectionGraph",
         "RenderPayload",
@@ -132,7 +132,12 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
     expected = [
         ("classifier", "classifier", "RequestClassification", None),
         ("planner", "planner", "ResearchPlan", None),
-        ("supervisor", "supervisor", "SupervisorDecision", {"mode": "full"}),
+        (
+            "supervisor",
+            "supervisor",
+            "SupervisorCheckpointResult",
+            {"mode": "full"},
+        ),
         (
             "relevance_scorer",
             "relevance_scorer",

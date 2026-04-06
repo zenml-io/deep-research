@@ -9,9 +9,12 @@ def normalize_evidence(raw_results: list[RawToolResult]) -> list[EvidenceCandida
     candidates: list[EvidenceCandidate] = []
     for result in raw_results:
         if result.ok:
+            nested_results = result.payload.get("results")
+            if nested_results is None:
+                nested_results = result.payload.get("items", [])
             candidates.extend(
                 normalize_tool_results(
-                    result.payload.get("results", []),
+                    nested_results,
                     provider=result.provider,
                     source_kind=result.payload.get("source_kind", "web"),
                 )

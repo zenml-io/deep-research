@@ -19,8 +19,13 @@ from deep_research.models import (
 )
 
 
+def _clear_modules(*names: str) -> None:
+    for name in names:
+        sys.modules.pop(name, None)
+
+
 def _clear_checkpoint_modules() -> None:
-    for name in [
+    _clear_modules(
         "deep_research.checkpoints.classify",
         "deep_research.checkpoints.plan",
         "deep_research.checkpoints.supervisor",
@@ -29,8 +34,51 @@ def _clear_checkpoint_modules() -> None:
         "deep_research.checkpoints.merge",
         "deep_research.checkpoints.evaluate",
         "deep_research.checkpoints.select",
-    ]:
-        sys.modules.pop(name, None)
+    )
+
+
+def _install_supervisor_factory_dependency_stubs(monkeypatch):
+    wrap_calls = []
+
+    class FakeAgent:
+        def __init__(self, model_name, **kwargs):
+            self.model_name = model_name
+            self.kwargs = kwargs
+
+    def wrap(agent, tool_capture_config=None):
+        wrapped = {
+            "agent": agent,
+            "tool_capture_config": tool_capture_config,
+        }
+        wrap_calls.append(wrapped)
+        return wrapped
+
+    monkeypatch.setitem(
+        sys.modules, "pydantic_ai", types.SimpleNamespace(Agent=FakeAgent)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kitaru.adapters",
+        types.SimpleNamespace(pydantic_ai=types.SimpleNamespace(wrap=wrap)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kitaru",
+        types.SimpleNamespace(
+            adapters=types.SimpleNamespace(pydantic_ai=types.SimpleNamespace(wrap=wrap))
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.prompts.loader",
+        types.SimpleNamespace(load_prompt=lambda name: f"prompt:{name}"),
+    )
+    return wrap_calls
+
+
+def _load_supervisor_factory_module():
+    _clear_modules("deep_research.agents.supervisor")
+    return importlib.import_module("deep_research.agents.supervisor")
 
 
 def _install_kitaru_checkpoint_stub(monkeypatch):
@@ -201,6 +249,40 @@ def test_normalize_evidence_accepts_raw_results(monkeypatch) -> None:
     assert normalized[0].title == "A"
     assert normalized[0].provider == "brave"
     assert module.normalize_evidence._checkpoint_type == "tool_call"
+
+
+def test_normalize_evidence_accepts_raw_results_with_items_payload(monkeypatch) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+
+    module = _import_checkpoint_module("deep_research.checkpoints.normalize")
+
+    result = RawToolResult(
+        tool_name="search",
+        provider="brave",
+        payload={
+            "items": [
+                {
+                    "title": "B",
+                    "url": "https://b.example",
+                    "description": "y",
+                }
+            ]
+        },
+    )
+    normalized = module.normalize_evidence([result])
+
+    assert normalized[0].title == "B"
+    assert normalized[0].snippets[0].text == "y"
+
+
+def test_supervisor_factory_uses_checkpoint_result_contract(monkeypatch) -> None:
+    wrap_calls = _install_supervisor_factory_dependency_stubs(monkeypatch)
+
+    module = _load_supervisor_factory_module()
+
+    module.build_supervisor_agent("test-model", toolsets=[], tools=[])
+
+    assert wrap_calls[0]["agent"].kwargs["result_type"] is SupervisorCheckpointResult
 
 
 def test_classify_request_uses_configured_model_and_returns_output(monkeypatch) -> None:
