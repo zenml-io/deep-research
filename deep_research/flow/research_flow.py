@@ -58,13 +58,14 @@ def _resolve_runtime_config(
     config: ResearchConfig | None,
     resolved_tier: Tier,
 ) -> ResearchConfig:
+    base_config = ResearchConfig.for_tier(resolved_tier)
     if config is None:
-        return ResearchConfig.for_tier(resolved_tier)
-    if config.tier != resolved_tier:
-        return ResearchConfig.for_tier(resolved_tier).model_copy(
-            update={"require_plan_approval": config.require_plan_approval}
-        )
-    return config
+        return base_config
+    if config.tier == resolved_tier:
+        return config
+    overrides = config.model_dump()
+    overrides["tier"] = resolved_tier
+    return base_config.model_copy(update=overrides)
 
 
 @flow

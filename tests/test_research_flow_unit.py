@@ -248,3 +248,98 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
     package = module.research_flow.run("brief")
 
     assert package["run_summary"].stop_reason is module.StopReason.TIME_EXHAUSTED
+
+
+def test_research_flow_preserves_overrides_when_clarification_changes_tier(
+    monkeypatch,
+) -> None:
+    module = _load_research_flow_module()
+    incoming_config = module.ResearchConfig.for_tier(module.Tier.STANDARD).model_copy(
+        update={
+            "council_mode": True,
+            "council_size": 5,
+            "supervisor_model": "custom/supervisor",
+            "planner_model": "custom/planner",
+            "cost_budget_usd": 9.5,
+            "time_box_seconds": 321,
+        }
+    )
+    classifications = [
+        types.SimpleNamespace(
+            recommended_tier=module.Tier.STANDARD,
+            needs_clarification=True,
+            clarification_question="Clarify?",
+        ),
+        types.SimpleNamespace(
+            recommended_tier=module.Tier.DEEP,
+            needs_clarification=False,
+            clarification_question=None,
+        ),
+    ]
+    observed_configs = []
+
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        lambda brief, config: classifications.pop(0),
+    )
+    monkeypatch.setattr(
+        module,
+        "wait",
+        lambda **kwargs: (
+            "clarified brief" if kwargs["name"] == "clarify_brief" else True
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        lambda brief, classification, tier: types.SimpleNamespace(goal="goal"),
+    )
+
+    def fake_run_iteration(plan, ledger, iteration, config, council_models):
+        observed_configs.append(config)
+        return types.SimpleNamespace(
+            raw_results=[],
+            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        )
+
+    monkeypatch.setattr(module, "_run_iteration", fake_run_iteration)
+    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        lambda candidates, plan, config: types.SimpleNamespace(
+            candidates=[],
+            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        ),
+    )
+    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        lambda ledger, plan: types.SimpleNamespace(total=1.0),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True,
+            reason=module.StopReason.CONVERGED,
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module, "build_selection_graph", lambda ledger, plan: {"items": []}
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    module.research_flow.run("initial brief", config=incoming_config)
+
+    config = observed_configs[0]
+    assert config.tier is module.Tier.DEEP
+    assert config.council_mode is True
+    assert config.council_size == 5
+    assert config.supervisor_model == "custom/supervisor"
+    assert config.planner_model == "custom/planner"
+    assert config.cost_budget_usd == 9.5
+    assert config.time_box_seconds == 321
