@@ -56,8 +56,8 @@ def normalize_tool_results(
             )
 
         normalized.append(
-            EvidenceCandidate(
-                key=_candidate_key(provider, url),
+            candidate := EvidenceCandidate(
+                key="pending",
                 title=str(item.get("title") or url or f"result-{idx}").strip(),
                 url=url,
                 snippets=snippets,
@@ -65,5 +65,6 @@ def normalize_tool_results(
                 source_kind=source_kind,
             )
         )
+        candidate.key = _candidate_key(provider, str(candidate.url))
 
     return normalized

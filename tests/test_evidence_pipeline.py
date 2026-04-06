@@ -76,6 +76,22 @@ def test_normalize_tool_results_generates_stable_provider_url_keys() -> None:
     assert first_batch[0].key == repeated_batch[0].key
 
 
+def test_normalize_tool_results_uses_canonicalized_url_for_key_identity() -> None:
+    upper_host = normalize_tool_results(
+        [{"title": "One", "url": "https://EXAMPLE.com/one"}],
+        provider="brave",
+        source_kind="web",
+    )
+    lower_host = normalize_tool_results(
+        [{"title": "One", "url": "https://example.com/one"}],
+        provider="brave",
+        source_kind="web",
+    )
+
+    assert str(upper_host[0].url) == str(lower_host[0].url)
+    assert upper_host[0].key == lower_host[0].key
+
+
 def test_dedupe_candidates_prefers_url_identity() -> None:
     first = EvidenceCandidate(
         key="1",
