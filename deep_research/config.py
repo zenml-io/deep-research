@@ -1,18 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from deep_research.enums import Tier
 
 
 class ModelPricing(BaseModel):
-    input_per_million_usd: float = 0.0
-    output_per_million_usd: float = 0.0
+    input_per_million_usd: float = Field(default=0.0, ge=0.0)
+    output_per_million_usd: float = Field(default=0.0, ge=0.0)
 
 
 class TierConfig(BaseModel):
-    max_iterations: int
-    cost_budget_usd: float
-    time_box_seconds: int
+    max_iterations: int = Field(gt=0)
+    cost_budget_usd: float = Field(ge=0.0)
+    time_box_seconds: int = Field(gt=0)
     critique_enabled: bool = False
     judge_enabled: bool = False
     allows_council: bool = False
@@ -23,16 +23,16 @@ class ResearchSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RESEARCH_", extra="ignore")
 
     default_tier: Tier = Tier.STANDARD
-    default_max_iterations: int = 3
-    default_cost_budget_usd: float = 0.10
-    daily_cost_limit_usd: float = 10.0
-    convergence_epsilon: float = 0.05
-    convergence_min_coverage: float = 0.60
-    max_tool_calls_per_cycle: int = 5
-    tool_timeout_sec: int = 20
-    source_quality_floor: float = 0.30
-    council_size: int = 3
-    council_cost_budget_usd: float = 2.0
+    default_max_iterations: int = Field(default=3, gt=0)
+    default_cost_budget_usd: float = Field(default=0.10, ge=0.0)
+    daily_cost_limit_usd: float = Field(default=10.0, ge=0.0)
+    convergence_epsilon: float = Field(default=0.05, ge=0.0, le=1.0)
+    convergence_min_coverage: float = Field(default=0.60, ge=0.0, le=1.0)
+    max_tool_calls_per_cycle: int = Field(default=5, gt=0)
+    tool_timeout_sec: int = Field(default=20, gt=0)
+    source_quality_floor: float = Field(default=0.30, ge=0.0, le=1.0)
+    council_size: int = Field(default=3, gt=0)
+    council_cost_budget_usd: float = Field(default=2.0, ge=0.0)
     classifier_model: str = "gemini/gemini-2.0-flash-lite"
     planner_model: str = "gemini/gemini-2.5-flash"
     supervisor_model: str = "gemini/gemini-2.5-flash"
@@ -47,6 +47,8 @@ class ResearchConfig(BaseModel):
     max_iterations: int
     cost_budget_usd: float
     time_box_seconds: int
+    critique_enabled: bool = False
+    judge_enabled: bool = False
     council_mode: bool = False
     council_size: int = 1
     require_plan_approval: bool = True
@@ -95,6 +97,8 @@ class ResearchConfig(BaseModel):
             max_iterations=base.max_iterations,
             cost_budget_usd=base.cost_budget_usd,
             time_box_seconds=base.time_box_seconds,
+            critique_enabled=base.critique_enabled,
+            judge_enabled=base.judge_enabled,
             council_mode=False,
             council_size=settings.council_size if base.allows_council else 1,
             require_plan_approval=base.requires_plan_approval,
