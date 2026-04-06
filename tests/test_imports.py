@@ -1,4 +1,8 @@
 from importlib import import_module
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 
 def test_package_modules_import() -> None:
@@ -17,3 +21,22 @@ def test_package_modules_import() -> None:
     ]
     for module in modules:
         import_module(module)
+
+
+def test_package_builds_wheel() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "wheel",
+                ".",
+                "--no-deps",
+                "--wheel-dir",
+                tmpdir,
+            ],
+            check=True,
+        )
+
+        assert list(Path(tmpdir).glob("*.whl"))
