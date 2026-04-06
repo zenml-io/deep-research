@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from contextlib import contextmanager
 
 from deep_research.config import ResearchConfig
 from deep_research.enums import StopReason, Tier
@@ -16,6 +17,20 @@ from deep_research.models import (
     SelectionGraph,
     SupervisorCheckpointResult,
 )
+
+
+@contextmanager
+def _preserve_modules(*names: str):
+    sentinel = object()
+    originals = {name: sys.modules.get(name, sentinel) for name in names}
+    try:
+        yield
+    finally:
+        for name, value in originals.items():
+            if value is sentinel:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
 
 
 def _load_research_flow_module():
@@ -43,18 +58,19 @@ def _load_research_flow_module():
         func.run = run
         return func
 
-    sys.modules["kitaru"] = types.SimpleNamespace(
-        checkpoint=checkpoint,
-        flow=flow,
-        log=lambda **kwargs: None,
-        wait=lambda **kwargs: None,
-    )
-    sys.modules["kitaru.adapters"] = types.SimpleNamespace(
-        pydantic_ai=types.SimpleNamespace(wrap=lambda agent, **kwargs: agent)
-    )
-    sys.modules["pydantic_ai"] = types.SimpleNamespace(Agent=object)
-    sys.modules.pop("deep_research.flow.research_flow", None)
-    return importlib.import_module("deep_research.flow.research_flow")
+    with _preserve_modules("kitaru", "kitaru.adapters", "pydantic_ai"):
+        sys.modules["kitaru"] = types.SimpleNamespace(
+            checkpoint=checkpoint,
+            flow=flow,
+            log=lambda **kwargs: None,
+            wait=lambda **kwargs: None,
+        )
+        sys.modules["kitaru.adapters"] = types.SimpleNamespace(
+            pydantic_ai=types.SimpleNamespace(wrap=lambda agent, **kwargs: agent)
+        )
+        sys.modules["pydantic_ai"] = types.SimpleNamespace(Agent=object)
+        sys.modules.pop("deep_research.flow.research_flow", None)
+        return importlib.import_module("deep_research.flow.research_flow")
 
 
 def _sample_plan() -> ResearchPlan:
@@ -135,6 +151,22 @@ def _patch_success_path(module, monkeypatch) -> None:
             content_markdown="# BR\n",
         ),
     )
+
+
+def test_load_research_flow_module_restores_stubbed_modules() -> None:
+    sentinel_kitaru = object()
+    sentinel_adapters = object()
+    sentinel_pydantic_ai = object()
+
+    original_kitaru = sys.modules.get("kitaru", sentinel_kitaru)
+    original_adapters = sys.modules.get("kitaru.adapters", sentinel_adapters)
+    original_pydantic_ai = sys.modules.get("pydantic_ai", sentinel_pydantic_ai)
+
+    _load_research_flow_module()
+
+    assert sys.modules.get("kitaru", sentinel_kitaru) is original_kitaru
+    assert sys.modules.get("kitaru.adapters", sentinel_adapters) is original_adapters
+    assert sys.modules.get("pydantic_ai", sentinel_pydantic_ai) is original_pydantic_ai
 
 
 def test_research_flow_returns_package(monkeypatch) -> None:
