@@ -6,6 +6,7 @@ from deep_research.prompts.loader import load_prompt
 
 
 def build_writer_agent(model_name: str):
+    """Create a Kitaru-wrapped PydanticAI agent for rendering report content."""
     return kp.wrap(
         Agent(
             model_name,

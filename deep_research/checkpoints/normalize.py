@@ -6,15 +6,13 @@ from deep_research.providers.normalization import normalize_tool_results
 
 @checkpoint(type="tool_call")
 def normalize_evidence(raw_results: list[RawToolResult]) -> list[EvidenceCandidate]:
+    """Checkpoint: convert raw tool outputs into normalized evidence candidates."""
     candidates: list[EvidenceCandidate] = []
     for result in raw_results:
         if result.ok:
-            nested_results = result.payload.get("results")
-            if nested_results is None:
-                nested_results = result.payload.get("items", [])
             candidates.extend(
                 normalize_tool_results(
-                    nested_results,
+                    [result],
                     provider=result.provider,
                     source_kind=result.payload.get("source_kind", "web"),
                 )

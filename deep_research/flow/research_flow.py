@@ -1,4 +1,3 @@
-import inspect
 from time import monotonic
 from uuid import uuid4
 
@@ -38,146 +37,25 @@ APPROVE_PLAN_WAIT_NAME = "approve_plan"
 CLARIFY_BRIEF_WAIT_NAME = "clarify_brief"
 
 
-def _call_with_optional_dependency(func, *args, after=None, id=None, **kwargs):
-    call_kwargs = dict(kwargs)
-    if after is not None:
-        call_kwargs["after"] = after
-    if id is not None:
-        call_kwargs["id"] = id
-    try:
-        return func(*args, **call_kwargs)
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
-        fallback_kwargs = dict(kwargs)
-        return func(*args, **fallback_kwargs)
-
-
-def _submit_with_optional_dependency(func, *args, after=None, id=None, **kwargs):
-    if inspect.isfunction(func) or inspect.ismethod(func):
-        return _call_with_optional_dependency(
-            func,
-            *args,
-            after=after,
-            id=id,
-            **kwargs,
-        )
-
-    submit = getattr(func, "submit")
-    submit_kwargs = dict(kwargs)
-    if after is not None:
-        submit_kwargs["after"] = after
-    if id is not None:
-        submit_kwargs["id"] = id
-    try:
-        return submit(*args, **submit_kwargs)
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
-        return submit(*args, **kwargs)
-
-
-def _resolve_checkpoint_output(value):
-    loader = getattr(value, "load", None)
-    if callable(loader):
-        return loader()
-    return value
-
-
-def _resolve_council_models(config: ResearchConfig) -> list[str]:
-    return [config.supervisor_model] * config.council_size
-
-
-def _run_council_iteration(plan, ledger, iteration, config, council_models):
-    futures = [
-        _submit_with_optional_dependency(
-            run_council_generator,
-            plan,
-            ledger,
-            iteration,
-            model_name,
-            config,
-            id=f"council_{index}",
-        )
-        for index, model_name in enumerate(council_models)
-    ]
-    return aggregate_council_results(
-        [_resolve_checkpoint_output(future) for future in futures]
-    )
-
-
-def _run_council_iteration_with_dependency(
-    plan,
-    ledger,
-    iteration,
-    config,
-    council_models,
-    after=None,
-):
-    futures = [
-        _submit_with_optional_dependency(
-            run_council_generator,
-            plan,
-            ledger,
-            iteration,
-            model_name,
-            config,
-            id=f"council_{index}",
-            after=after,
-        )
-        for index, model_name in enumerate(council_models)
-    ]
-    return (
-        aggregate_council_results(
-            [_resolve_checkpoint_output(future) for future in futures]
-        ),
-        futures,
-    )
-
-
 def _run_iteration(plan, ledger, iteration, config, council_models):
+    """Execute one research iteration via council mode or single supervisor."""
     if config.council_mode:
-        return _resolve_checkpoint_output(
-            _run_council_iteration(plan, ledger, iteration, config, council_models)
-        )
-    return _resolve_checkpoint_output(run_supervisor(plan, ledger, iteration, config))
-
-
-_DEFAULT_RUN_ITERATION = _run_iteration
-
-
-def _run_iteration_with_dependency(
-    plan,
-    ledger,
-    iteration,
-    config,
-    council_models,
-    after=None,
-):
-    if config.council_mode:
-        return _run_council_iteration_with_dependency(
-            plan,
-            ledger,
-            iteration,
-            config,
-            council_models,
-            after=after,
-        )
-    checkpoint_output = _submit_with_optional_dependency(
-        run_supervisor,
-        plan,
-        ledger,
-        iteration,
-        config,
-        after=after,
-    )
-    return _resolve_checkpoint_output(checkpoint_output), checkpoint_output
+        futures = [
+            run_council_generator.submit(
+                plan, ledger, iteration, model_name, config,
+                id=f"council_{index}",
+            )
+            for index, model_name in enumerate(council_models)
+        ]
+        return aggregate_council_results([f.load() for f in futures])
+    return run_supervisor.submit(plan, ledger, iteration, config).load()
 
 
 def _resolve_runtime_config(
     config: ResearchConfig | None,
     resolved_tier: Tier,
 ) -> ResearchConfig:
+    """Return a ResearchConfig aligned to the resolved tier, merging any overrides."""
     base_config = ResearchConfig.for_tier(resolved_tier)
     if config is None:
         return base_config
@@ -194,12 +72,8 @@ def research_flow(
     tier: str = "auto",
     config: ResearchConfig | None = None,
 ) -> InvestigationPackage:
-    classification_dependency = _submit_with_optional_dependency(
-        classify_request,
-        brief,
-        config,
-    )
-    classification = _resolve_checkpoint_output(classification_dependency)
+    """Orchestrate the full research pipeline from brief to investigation package."""
+    classification = classify_request.submit(brief, config).load()
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
     config = _resolve_runtime_config(config, resolved_tier)
 
@@ -209,25 +83,13 @@ def research_flow(
             schema=str,
             question=classification.clarification_question,
         )
-        classification_dependency = _submit_with_optional_dependency(
-            classify_request,
-            brief,
-            config,
-            after=classification_dependency,
-        )
-        classification = _resolve_checkpoint_output(classification_dependency)
+        classification = classify_request.submit(brief, config).load()
         resolved_tier = (
             classification.recommended_tier if tier == "auto" else Tier(tier)
         )
         config = _resolve_runtime_config(config, resolved_tier)
 
-    plan_dependency = _submit_with_optional_dependency(
-        build_plan,
-        brief,
-        classification_dependency,
-        config.tier,
-    )
-    plan = _resolve_checkpoint_output(plan_dependency)
+    plan = build_plan.submit(brief, classification, config.tier).load()
     if config.require_plan_approval:
         approved = wait(
             name=APPROVE_PLAN_WAIT_NAME,
@@ -240,63 +102,28 @@ def research_flow(
     ledger = EvidenceLedger()
     iteration_history: list[IterationRecord] = []
     spent_usd = 0.0
-    council_models = _resolve_council_models(config)
+    council_models = [config.supervisor_model] * config.council_size
     stop_reason = StopReason.MAX_ITERATIONS
     start_time = monotonic()
-    iteration_dependency = plan_dependency
-    ledger_dependency = None
 
     for iteration in range(config.max_iterations):
-        if _run_iteration is _DEFAULT_RUN_ITERATION:
-            supervisor_result, supervisor_dependency = _run_iteration_with_dependency(
-                plan_dependency,
-                ledger_dependency or ledger,
-                iteration,
-                config,
-                council_models,
-                after=iteration_dependency,
-            )
-        else:
-            supervisor_result = _run_iteration(
-                plan,
-                ledger,
-                iteration,
-                config,
-                council_models,
-            )
-            supervisor_dependency = iteration_dependency
+        supervisor_result = _run_iteration(
+            plan, ledger, iteration, config, council_models,
+        )
         spent_usd += supervisor_result.budget.estimated_cost_usd
 
-        normalized_dependency = _submit_with_optional_dependency(
-            normalize_evidence,
+        candidates = normalize_evidence.submit(
             supervisor_result.raw_results,
-            after=supervisor_dependency,
-        )
-        candidates = _resolve_checkpoint_output(normalized_dependency)
-        relevance_result = _resolve_checkpoint_output(
-            relevance_dependency := _submit_with_optional_dependency(
-                score_relevance,
-                normalized_dependency,
-                plan_dependency,
-                config,
-            )
-        )
+        ).load()
+        relevance_result = score_relevance.submit(
+            candidates, plan, config,
+        ).load()
         spent_usd += relevance_result.budget.estimated_cost_usd
 
-        scored = relevance_result.candidates
-        ledger_dependency = _submit_with_optional_dependency(
-            merge_evidence,
-            scored,
-            ledger_dependency or ledger,
-            after=relevance_dependency,
-        )
-        ledger = _resolve_checkpoint_output(ledger_dependency)
-        coverage_dependency = _submit_with_optional_dependency(
-            evaluate_coverage,
-            ledger_dependency,
-            plan_dependency,
-        )
-        coverage = _resolve_checkpoint_output(coverage_dependency)
+        ledger = merge_evidence.submit(
+            relevance_result.candidates, ledger,
+        ).load()
+        coverage = evaluate_coverage.submit(ledger, plan).load()
         iteration_history.append(
             IterationRecord(
                 iteration=iteration,
@@ -311,35 +138,20 @@ def research_flow(
             spent_usd=spent_usd,
             elapsed_seconds=int(monotonic() - start_time),
             max_iterations=config.max_iterations,
-            epsilon=0.05,
-            min_coverage=0.60,
+            epsilon=config.convergence_epsilon,
+            min_coverage=config.convergence_min_coverage,
             budget_limit_usd=config.cost_budget_usd,
             time_limit_seconds=config.time_box_seconds,
         )
         log(iteration=iteration, coverage=coverage.total, spent_usd=spent_usd)
-        iteration_dependency = coverage_dependency
         if decision.should_stop:
             stop_reason = decision.reason or StopReason.MAX_ITERATIONS
             break
 
-    selection = _submit_with_optional_dependency(
-        build_selection_graph,
-        ledger_dependency or ledger,
-        plan_dependency,
-        after=iteration_dependency,
-    )
-    reading_path = _submit_with_optional_dependency(
-        render_reading_path,
-        selection,
-    )
-    backing_report = _submit_with_optional_dependency(
-        render_backing_report,
-        selection,
-        ledger_dependency or ledger,
-        plan_dependency,
-    )
-    return _call_with_optional_dependency(
-        assemble_package,
+    selection = build_selection_graph.submit(ledger, plan, config).load()
+    reading_future = render_reading_path.submit(selection)
+    backing_future = render_backing_report.submit(selection, ledger, plan)
+    return assemble_package(
         run_summary=RunSummary(
             run_id=f"run-{uuid4()}",
             brief=brief,
@@ -347,9 +159,9 @@ def research_flow(
             stop_reason=stop_reason,
             status="completed",
         ),
-        research_plan=plan_dependency,
-        evidence_ledger=ledger_dependency or ledger,
+        research_plan=plan,
+        evidence_ledger=ledger,
         selection_graph=selection,
         iteration_trace=IterationTrace(iterations=iteration_history),
-        renders=[reading_path, backing_report],
+        renders=[reading_future.load(), backing_future.load()],
     )

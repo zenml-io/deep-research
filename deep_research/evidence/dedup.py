@@ -2,6 +2,7 @@ from deep_research.models import EvidenceCandidate
 
 
 def dedupe_candidates(candidates: list[EvidenceCandidate]) -> list[EvidenceCandidate]:
+    """Remove duplicate candidates, keeping the first occurrence by URL or title."""
     seen: dict[str, EvidenceCandidate] = {}
 
     for candidate in candidates:

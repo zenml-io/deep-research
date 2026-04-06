@@ -8,6 +8,7 @@ from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResu
 def _iter_result_items(
     raw_results: list[Mapping[str, Any] | RawToolResult],
 ) -> list[Mapping[str, Any]]:
+    """Flatten raw results into a list of individual item mappings."""
     items: list[Mapping[str, Any]] = []
 
     for raw_result in raw_results:
@@ -26,6 +27,7 @@ def _iter_result_items(
 
 
 def _candidate_key(provider: str, url: str) -> str:
+    """Generate a deterministic short hash key from provider and URL."""
     identity = f"{provider}:{url}".encode("utf-8")
     return f"{provider}-{sha256(identity).hexdigest()[:16]}"
 
@@ -35,6 +37,7 @@ def normalize_tool_results(
     provider: str,
     source_kind: str,
 ) -> list[EvidenceCandidate]:
+    """Transform raw tool results into typed EvidenceCandidate instances."""
     normalized: list[EvidenceCandidate] = []
 
     for idx, item in enumerate(_iter_result_items(raw_results)):
@@ -55,16 +58,18 @@ def normalize_tool_results(
                 )
             )
 
+        candidate = EvidenceCandidate(
+            key="pending",
+            title=str(item.get("title") or url or f"result-{idx}").strip(),
+            url=url,
+            snippets=snippets,
+            provider=provider,
+            source_kind=source_kind,
+        )
         normalized.append(
-            candidate := EvidenceCandidate(
-                key="pending",
-                title=str(item.get("title") or url or f"result-{idx}").strip(),
-                url=url,
-                snippets=snippets,
-                provider=provider,
-                source_kind=source_kind,
+            candidate.model_copy(
+                update={"key": _candidate_key(provider, str(candidate.url))}
             )
         )
-        candidate.key = _candidate_key(provider, str(candidate.url))
 
     return normalized

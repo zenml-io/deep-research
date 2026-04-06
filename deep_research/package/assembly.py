@@ -18,6 +18,7 @@ def assemble_package(
     iteration_trace: IterationTrace,
     renders: list[RenderPayload],
 ) -> InvestigationPackage:
+    """Construct an InvestigationPackage from its constituent parts."""
     return InvestigationPackage(
         run_summary=run_summary,
         research_plan=research_plan,

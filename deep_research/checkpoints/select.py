@@ -7,8 +7,11 @@ from deep_research.models import EvidenceLedger, ResearchPlan, SelectionGraph
 
 
 @checkpoint(type="llm_call")
-def build_selection_graph(ledger: EvidenceLedger, plan: ResearchPlan) -> SelectionGraph:
-    model_name = ResearchConfig.for_tier(Tier.STANDARD).curator_model
+def build_selection_graph(
+    ledger: EvidenceLedger, plan: ResearchPlan, config: ResearchConfig | None = None
+) -> SelectionGraph:
+    """Checkpoint: curate the final selection of evidence items from the ledger."""
+    model_name = config.curator_model if config else ResearchConfig.for_tier(Tier.STANDARD).curator_model
     agent = build_curator_agent(model_name)
     prompt = {
         "plan": plan.model_dump(mode="json"),

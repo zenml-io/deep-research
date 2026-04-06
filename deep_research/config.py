@@ -52,6 +52,8 @@ class ResearchConfig(BaseModel):
     council_mode: bool = False
     council_size: int = 1
     require_plan_approval: bool = True
+    convergence_epsilon: float = 0.05
+    convergence_min_coverage: float = 0.60
     classifier_model: str
     planner_model: str
     supervisor_model: str
@@ -64,6 +66,7 @@ class ResearchConfig(BaseModel):
     def for_tier(
         cls, tier: Tier, settings: ResearchSettings | None = None
     ) -> "ResearchConfig":
+        """Build a ResearchConfig with defaults appropriate for the given tier."""
         settings = settings or ResearchSettings()
         mapping = {
             Tier.QUICK: TierConfig(
@@ -102,6 +105,8 @@ class ResearchConfig(BaseModel):
             council_mode=False,
             council_size=settings.council_size if base.allows_council else 1,
             require_plan_approval=base.requires_plan_approval,
+            convergence_epsilon=settings.convergence_epsilon,
+            convergence_min_coverage=settings.convergence_min_coverage,
             classifier_model=settings.classifier_model,
             planner_model=settings.planner_model,
             supervisor_model=settings.supervisor_model,

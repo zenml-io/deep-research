@@ -14,6 +14,7 @@ def render_backing_report(
     ledger: EvidenceLedger,
     plan: ResearchPlan,
 ) -> RenderPayload:
+    """Checkpoint: render the backing report markdown from the selection and plan."""
     del ledger
     return RenderPayload(
         name="backing_report",

@@ -10,6 +10,7 @@ from deep_research.models import RequestClassification, ResearchPlan
 def build_plan(
     brief: str, classification: RequestClassification, tier: Tier
 ) -> ResearchPlan:
+    """Checkpoint: generate a structured research plan from the brief and tier."""
     del classification
     model_name = ResearchConfig.for_tier(tier).planner_model
     return build_planner_agent(model_name).run_sync(brief).output

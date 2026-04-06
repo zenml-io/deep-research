@@ -11,10 +11,6 @@ from deep_research.models import (
     SupervisorCheckpointResult,
 )
 
-# Council fan-out happens in flow scope via checkpoint.submit(); this module only
-# defines the generator checkpoint and pure aggregation helpers.
-
-
 @checkpoint(type="llm_call")
 def run_council_generator(
     plan: ResearchPlan,
@@ -23,6 +19,7 @@ def run_council_generator(
     model_name: str,
     config: ResearchConfig,
 ) -> SupervisorCheckpointResult:
+    """Checkpoint: run one council member's supervisor turn for parallel evidence gathering."""
     return _execute_supervisor_turn(
         plan,
         ledger,
@@ -35,6 +32,7 @@ def run_council_generator(
 def aggregate_council_results(
     grouped_results: list[SupervisorCheckpointResult],
 ) -> SupervisorCheckpointResult:
+    """Merge raw results and budgets from all council members into one result."""
     merged: list[RawToolResult] = []
     budget = IterationBudget()
     for group in grouped_results:

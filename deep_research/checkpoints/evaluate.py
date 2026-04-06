@@ -4,6 +4,7 @@ from deep_research.models import CoverageScore, EvidenceLedger, ResearchPlan
 
 
 def _text_for_candidate(candidate_text_parts: list[str]) -> str:
+    """Join and lowercase text parts for substring coverage matching."""
     return " ".join(
         part.strip().lower() for part in candidate_text_parts if part.strip()
     )
@@ -11,6 +12,7 @@ def _text_for_candidate(candidate_text_parts: list[str]) -> str:
 
 @checkpoint(type="tool_call")
 def evaluate_coverage(ledger: EvidenceLedger, plan: ResearchPlan) -> CoverageScore:
+    """Checkpoint: compute subtopic, diversity, and density coverage scores."""
     entries = ledger.entries
     if not entries:
         return CoverageScore(

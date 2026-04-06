@@ -5,13 +5,27 @@ import types
 from deep_research.models import SelectionGraph
 
 
+def _as_checkpoint(func):
+    """Add .submit() to a plain function so it behaves like a Kitaru checkpoint."""
+
+    def submit(*args, after=None, id=None, **kwargs):
+        result = func(*args, **kwargs)
+        return types.SimpleNamespace(load=lambda: result)
+
+    func.submit = submit
+    return func
+
+
 def _load_research_flow_module():
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
-            func.submit = lambda *args, **kwargs: types.SimpleNamespace(
-                load=lambda: func(*args, **kwargs)
-            )
+
+            def submit(*args, after=None, id=None, **kwargs):
+                result = func(*args, **kwargs)
+                return types.SimpleNamespace(load=lambda: result)
+
+            func.submit = submit
             return func
 
         return decorator
@@ -41,24 +55,31 @@ def test_run_iteration_uses_council_when_enabled(monkeypatch) -> None:
     module = _load_research_flow_module()
     called = {"council": False}
 
-    def fake_council(*args, **kwargs):
-        called["council"] = True
-        return type(
-            "SupervisorCheckpointResult",
-            (),
-            {
-                "raw_results": [],
-                "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
-            },
-        )()
+    result_obj = type(
+        "SupervisorCheckpointResult",
+        (),
+        {
+            "raw_results": [],
+            "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
+        },
+    )()
 
-    monkeypatch.setattr(module, "_run_council_iteration", fake_council)
+    def fake_council_generator(*args, **kwargs):
+        called["council"] = True
+        return result_obj
+
+    monkeypatch.setattr(
+        module, "run_council_generator", _as_checkpoint(fake_council_generator)
+    )
+    monkeypatch.setattr(
+        module, "aggregate_council_results", lambda results: result_obj
+    )
 
     module._run_iteration(
         plan=None,
         ledger=None,
         iteration=0,
-        config=type("C", (), {"council_mode": True, "council_size": 3})(),
+        config=type("C", (), {"council_mode": True})(),
         council_models=["m1", "m2", "m3"],
     )
 
@@ -69,20 +90,22 @@ def test_run_iteration_uses_supervisor_when_council_disabled(monkeypatch) -> Non
     module = _load_research_flow_module()
     called = {"supervisor": False}
 
+    result_obj = type(
+        "SupervisorCheckpointResult",
+        (),
+        {
+            "raw_results": [],
+            "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
+        },
+    )()
+
     def fake_supervisor(*args, **kwargs):
         called["supervisor"] = True
-        return type(
-            "SupervisorCheckpointResult",
-            (),
-            {
-                "raw_results": [],
-                "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
-            },
-        )()
+        return result_obj
 
-    monkeypatch.setattr(module, "run_supervisor", fake_supervisor)
+    monkeypatch.setattr(module, "run_supervisor", _as_checkpoint(fake_supervisor))
 
-    module._run_iteration(
+    result = module._run_iteration(
         plan=None,
         ledger=None,
         iteration=0,
@@ -91,11 +114,11 @@ def test_run_iteration_uses_supervisor_when_council_disabled(monkeypatch) -> Non
     )
 
     assert called["supervisor"] is True
+    assert result is result_obj
 
 
-def test_run_iteration_loads_supervisor_artifact_when_needed(monkeypatch) -> None:
+def test_run_iteration_returns_supervisor_result(monkeypatch) -> None:
     module = _load_research_flow_module()
-    loaded = {"count": 0}
     payload = type(
         "SupervisorCheckpointResult",
         (),
@@ -105,13 +128,10 @@ def test_run_iteration_loads_supervisor_artifact_when_needed(monkeypatch) -> Non
         },
     )()
 
-    class FakeArtifact:
-        def load(self):
-            loaded["count"] += 1
-            return payload
-
     monkeypatch.setattr(
-        module, "run_supervisor", lambda *args, **kwargs: FakeArtifact()
+        module,
+        "run_supervisor",
+        _as_checkpoint(lambda *args, **kwargs: payload),
     )
 
     result = module._run_iteration(
@@ -123,22 +143,6 @@ def test_run_iteration_loads_supervisor_artifact_when_needed(monkeypatch) -> Non
     )
 
     assert result is payload
-    assert loaded["count"] == 1
-
-
-def test_resolve_council_models_uses_configured_supervisor_model() -> None:
-    module = _load_research_flow_module()
-    config = type(
-        "C",
-        (),
-        {"council_size": 3, "supervisor_model": "openai/gpt-4o-mini"},
-    )()
-
-    assert module._resolve_council_models(config) == [
-        "openai/gpt-4o-mini",
-        "openai/gpt-4o-mini",
-        "openai/gpt-4o-mini",
-    ]
 
 
 def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
@@ -160,7 +164,7 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda brief, config: classifications.pop(0),
+        _as_checkpoint(lambda brief, config: classifications.pop(0)),
     )
     monkeypatch.setattr(
         module,
@@ -172,9 +176,11 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: (
-            build_plan_tiers.append(tier)
-            or types.SimpleNamespace(goal=f"plan for {brief}")
+        _as_checkpoint(
+            lambda brief, classification, tier: (
+                build_plan_tiers.append(tier)
+                or types.SimpleNamespace(goal=f"plan for {brief}")
+            )
         ),
     )
     monkeypatch.setattr(
@@ -185,20 +191,26 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         ),
     )
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: types.SimpleNamespace(
-            candidates=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+    )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan: types.SimpleNamespace(total=1.0),
+        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
     )
     monkeypatch.setattr(
         module,
@@ -212,7 +224,7 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan: SelectionGraph(items=[]),
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -230,16 +242,20 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda brief, config: types.SimpleNamespace(
-            recommended_tier=module.Tier.STANDARD,
-            needs_clarification=False,
-            clarification_question=None,
+        _as_checkpoint(
+            lambda brief, config: types.SimpleNamespace(
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: types.SimpleNamespace(goal="goal"),
+        _as_checkpoint(
+            lambda brief, classification, tier: types.SimpleNamespace(goal="goal")
+        ),
     )
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
@@ -250,20 +266,26 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         ),
     )
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: types.SimpleNamespace(
-            candidates=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+    )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan: types.SimpleNamespace(total=0.1),
+        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=0.1)),
     )
 
     def fake_check_convergence(*args, **kwargs):
@@ -280,7 +302,7 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan: SelectionGraph(items=[]),
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -320,7 +342,7 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda brief, config: classifications.pop(0),
+        _as_checkpoint(lambda brief, config: classifications.pop(0)),
     )
     monkeypatch.setattr(
         module,
@@ -332,10 +354,12 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: types.SimpleNamespace(goal="goal"),
+        _as_checkpoint(
+            lambda brief, classification, tier: types.SimpleNamespace(goal="goal")
+        ),
     )
 
-    def fake_run_iteration(plan, ledger, iteration, config, council_models):
+    def fake_run_iteration(plan, ledger, iteration, config, council_models, **kwargs):
         observed_configs.append(config)
         return types.SimpleNamespace(
             raw_results=[],
@@ -343,20 +367,26 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
         )
 
     monkeypatch.setattr(module, "_run_iteration", fake_run_iteration)
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: types.SimpleNamespace(
-            candidates=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+    )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan: types.SimpleNamespace(total=1.0),
+        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
     )
     monkeypatch.setattr(
         module,
@@ -370,7 +400,7 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan: SelectionGraph(items=[]),
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -386,10 +416,17 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     assert config.time_box_seconds == 321
 
 
-def test_research_flow_loads_intermediate_checkpoint_artifacts_in_flow_scope(
-    monkeypatch,
-) -> None:
+def test_research_flow_calls_all_checkpoints(monkeypatch) -> None:
+    """Verify the flow materializes every checkpoint via .submit().load()."""
     module = _load_research_flow_module()
+    called = set()
+
+    def track(name, result):
+        def fn(*args, **kwargs):
+            called.add(name)
+            return result
+
+        return _as_checkpoint(fn)
 
     classification = types.SimpleNamespace(
         recommended_tier=module.Tier.STANDARD,
@@ -397,45 +434,10 @@ def test_research_flow_loads_intermediate_checkpoint_artifacts_in_flow_scope(
         clarification_question=None,
     )
     plan = types.SimpleNamespace(goal="goal", subtopics=["topic"], key_questions=["q"])
-    normalized_candidates = [types.SimpleNamespace(key="k")]
-    relevance_result = types.SimpleNamespace(
-        candidates=[],
-        budget=types.SimpleNamespace(estimated_cost_usd=0.0),
-    )
-    selection = SelectionGraph(items=[])
 
-    loaded = {
-        "classification": 0,
-        "plan": 0,
-        "normalize": 0,
-        "score": 0,
-        "merge": 0,
-        "coverage": 0,
-        "selection": 0,
-        "reading": 0,
-        "backing": 0,
-    }
-
-    class FakeArtifact:
-        def __init__(self, key, value):
-            self.key = key
-            self.value = value
-
-        def load(self):
-            loaded[self.key] += 1
-            return self.value
-
-    monkeypatch.setattr(
-        module,
-        "classify_request",
-        lambda brief, config: FakeArtifact("classification", classification),
-    )
+    monkeypatch.setattr(module, "classify_request", track("classify", classification))
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
-    monkeypatch.setattr(
-        module,
-        "build_plan",
-        lambda brief, classification_value, tier: FakeArtifact("plan", plan),
-    )
+    monkeypatch.setattr(module, "build_plan", track("plan", plan))
     monkeypatch.setattr(
         module,
         "_run_iteration",
@@ -444,27 +446,25 @@ def test_research_flow_loads_intermediate_checkpoint_artifacts_in_flow_scope(
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         ),
     )
-    monkeypatch.setattr(
-        module,
-        "normalize_evidence",
-        lambda raw_results: FakeArtifact("normalize", normalized_candidates),
-    )
+    monkeypatch.setattr(module, "normalize_evidence", track("normalize", []))
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan_value, config: FakeArtifact("score", relevance_result),
+        track(
+            "score",
+            types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            ),
+        ),
     )
     monkeypatch.setattr(
-        module,
-        "merge_evidence",
-        lambda scored, ledger: FakeArtifact("merge", ledger),
+        module, "merge_evidence", track("merge", module.EvidenceLedger())
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan_value: FakeArtifact(
-            "coverage", types.SimpleNamespace(total=1.0)
-        ),
+        track("coverage", types.SimpleNamespace(total=1.0)),
     )
     monkeypatch.setattr(
         module,
@@ -478,92 +478,72 @@ def test_research_flow_loads_intermediate_checkpoint_artifacts_in_flow_scope(
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan_value: FakeArtifact("selection", selection),
+        track("selection", SelectionGraph(items=[])),
     )
     monkeypatch.setattr(
         module,
         "render_reading_path",
-        lambda selection_value: FakeArtifact(
-            "reading", types.SimpleNamespace(name="reading_path")
-        ),
+        track("reading", types.SimpleNamespace(name="reading_path")),
     )
     monkeypatch.setattr(
         module,
         "render_backing_report",
-        lambda selection_value, ledger, plan_value: FakeArtifact(
-            "backing", types.SimpleNamespace(name="backing_report")
-        ),
+        track("backing", types.SimpleNamespace(name="backing_report")),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
-    package = module.research_flow.run("brief")
+    module.research_flow.run("brief")
 
-    assert package["research_plan"].value is plan
-    assert package["selection_graph"].value is selection
-    assert [render.key for render in package["renders"]] == ["reading", "backing"]
-    assert loaded == {
-        "classification": 1,
-        "plan": 1,
-        "normalize": 1,
-        "score": 1,
-        "merge": 1,
-        "coverage": 1,
-        "selection": 0,
-        "reading": 0,
-        "backing": 0,
+    assert called == {
+        "classify",
+        "plan",
+        "normalize",
+        "score",
+        "merge",
+        "coverage",
+        "selection",
+        "reading",
+        "backing",
     }
 
 
-def test_research_flow_preserves_terminal_checkpoint_dependencies(monkeypatch) -> None:
+def test_research_flow_passes_loaded_values_to_terminal_checkpoints(
+    monkeypatch,
+) -> None:
+    """Verify renderers receive loaded values and assemble_package gets correct args."""
     module = _load_research_flow_module()
-    package_value = {"package": True}
     selection = SelectionGraph(items=[])
-    loaded = {"selection": 0, "reading": 0, "backing": 0, "package": 0}
-
-    class FakeArtifact:
-        def __init__(self, key, value):
-            self.key = key
-            self.value = value
-
-        def load(self):
-            loaded[self.key] += 1
-            return self.value
-
-    selection_artifact = FakeArtifact("selection", selection)
-    reading_artifact = FakeArtifact(
-        "reading", types.SimpleNamespace(name="reading_path")
-    )
-    backing_artifact = FakeArtifact(
-        "backing", types.SimpleNamespace(name="backing_report")
-    )
-    package_artifact = FakeArtifact("package", package_value)
     captured = {}
 
-    def fake_render_reading_path(selection_value):
-        captured["reading_input"] = selection_value
-        return reading_artifact
+    def fake_render_reading(sel):
+        captured["reading_selection"] = sel
+        return types.SimpleNamespace(name="reading_path")
 
-    def fake_render_backing_report(selection_value, ledger, plan):
-        captured["backing_input"] = selection_value
-        return backing_artifact
+    def fake_render_backing(sel, ledger, plan):
+        captured["backing_selection"] = sel
+        return types.SimpleNamespace(name="backing_report")
 
-    def fake_assemble_package(**kwargs):
+    def fake_assemble(**kwargs):
         captured["assemble_kwargs"] = kwargs
-        return package_artifact
+        return kwargs
 
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda brief, config: types.SimpleNamespace(
-            recommended_tier=module.Tier.STANDARD,
-            needs_clarification=False,
-            clarification_question=None,
+        _as_checkpoint(
+            lambda brief, config: types.SimpleNamespace(
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: types.SimpleNamespace(goal="goal"),
+        _as_checkpoint(
+            lambda brief, classification, tier: types.SimpleNamespace(goal="goal")
+        ),
     )
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
@@ -574,20 +554,26 @@ def test_research_flow_preserves_terminal_checkpoint_dependencies(monkeypatch) -
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         ),
     )
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: types.SimpleNamespace(
-            candidates=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+    )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan: types.SimpleNamespace(total=1.0),
+        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
     )
     monkeypatch.setattr(
         module,
@@ -601,32 +587,19 @@ def test_research_flow_preserves_terminal_checkpoint_dependencies(monkeypatch) -
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan: selection_artifact,
+        _as_checkpoint(lambda ledger, plan, config=None: selection),
     )
     monkeypatch.setattr(
-        module,
-        "render_reading_path",
-        fake_render_reading_path,
+        module, "render_reading_path", _as_checkpoint(fake_render_reading)
     )
     monkeypatch.setattr(
-        module,
-        "render_backing_report",
-        fake_render_backing_report,
+        module, "render_backing_report", _as_checkpoint(fake_render_backing)
     )
-    monkeypatch.setattr(
-        module,
-        "assemble_package",
-        fake_assemble_package,
-    )
+    monkeypatch.setattr(module, "assemble_package", fake_assemble)
 
-    package = module.research_flow.run("brief")
+    module.research_flow.run("brief")
 
-    assert package is package_artifact
-    assert captured["reading_input"] is selection_artifact
-    assert captured["backing_input"] is selection_artifact
-    assert captured["assemble_kwargs"]["selection_graph"] is selection_artifact
-    assert captured["assemble_kwargs"]["renders"] == [
-        reading_artifact,
-        backing_artifact,
-    ]
-    assert loaded == {"selection": 0, "reading": 0, "backing": 0, "package": 0}
+    assert captured["reading_selection"] is selection
+    assert captured["backing_selection"] is selection
+    assert captured["assemble_kwargs"]["selection_graph"] is selection
+    assert len(captured["assemble_kwargs"]["renders"]) == 2

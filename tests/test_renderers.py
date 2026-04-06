@@ -11,13 +11,27 @@ from deep_research.models import (
 )
 
 
+def _as_checkpoint(func):
+    """Add .submit() to a plain function so it behaves like a Kitaru checkpoint."""
+
+    def submit(*args, after=None, id=None, **kwargs):
+        result = func(*args, **kwargs)
+        return types.SimpleNamespace(load=lambda: result)
+
+    func.submit = submit
+    return func
+
+
 def _install_kitaru_stub() -> None:
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
-            func.submit = lambda *args, **kwargs: types.SimpleNamespace(
-                load=lambda: func(*args, **kwargs)
-            )
+
+            def submit(*args, after=None, id=None, **kwargs):
+                result = func(*args, **kwargs)
+                return types.SimpleNamespace(load=lambda: result)
+
+            func.submit = submit
             return func
 
         return decorator
@@ -94,22 +108,26 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda brief, config: types.SimpleNamespace(
-            recommended_tier=module.Tier.STANDARD,
-            needs_clarification=False,
-            clarification_question=None,
+        _as_checkpoint(
+            lambda brief, config: types.SimpleNamespace(
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: ResearchPlan(
-            goal="Answer the brief",
-            key_questions=["What matters?"],
-            subtopics=["core"],
-            queries=["example query"],
-            sections=["Overview"],
-            success_criteria=["Produce a summary"],
+        _as_checkpoint(
+            lambda brief, classification, tier: ResearchPlan(
+                goal="Answer the brief",
+                key_questions=["What matters?"],
+                subtopics=["core"],
+                queries=["example query"],
+                sections=["Overview"],
+                success_criteria=["Produce a summary"],
+            )
         ),
     )
     monkeypatch.setattr(
@@ -120,20 +138,30 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         ),
     )
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module,
+        "normalize_evidence",
+        _as_checkpoint(lambda raw_results: []),
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: types.SimpleNamespace(
-            candidates=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger: ledger),
+    )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        lambda ledger, plan: types.SimpleNamespace(total=1.0),
+        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
     )
     monkeypatch.setattr(
         module,
@@ -143,25 +171,35 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
             reason=module.StopReason.CONVERGED,
         ),
     )
-    monkeypatch.setattr(module, "build_selection_graph", lambda ledger, plan: selection)
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: selection),
+    )
     monkeypatch.setattr(module, "log", lambda **kwargs: None)
     monkeypatch.setattr(
         module,
         "render_reading_path",
-        lambda rendered_selection: (
-            reading_path_calls.append(rendered_selection)
-            or RenderPayload(name="reading_path", content_markdown="# Reading Path\n")
+        _as_checkpoint(
+            lambda rendered_selection: (
+                reading_path_calls.append(rendered_selection)
+                or RenderPayload(
+                    name="reading_path", content_markdown="# Reading Path\n"
+                )
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "render_backing_report",
-        lambda rendered_selection, rendered_ledger, rendered_plan: (
-            backing_report_calls.append(
-                (rendered_selection, rendered_ledger, rendered_plan)
-            )
-            or RenderPayload(
-                name="backing_report", content_markdown="# Backing Report\n"
+        _as_checkpoint(
+            lambda rendered_selection, rendered_ledger, rendered_plan: (
+                backing_report_calls.append(
+                    (rendered_selection, rendered_ledger, rendered_plan)
+                )
+                or RenderPayload(
+                    name="backing_report", content_markdown="# Backing Report\n"
+                )
             )
         ),
     )

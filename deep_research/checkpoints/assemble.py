@@ -21,6 +21,7 @@ def assemble_package(
     iteration_trace: IterationTrace,
     renders: list[RenderPayload],
 ) -> InvestigationPackage:
+    """Checkpoint: combine all research artifacts into the final investigation package."""
     return _assemble_package(
         run_summary=run_summary,
         research_plan=research_plan,

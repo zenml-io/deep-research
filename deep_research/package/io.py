@@ -4,6 +4,7 @@ from deep_research.models import InvestigationPackage
 
 
 def _sanitize_path_component(value: str, *, field_name: str) -> str:
+    """Validate that a string is safe for use as a single path component."""
     if value in {"", ".", ".."}:
         raise ValueError(f"Unsafe path component for {field_name}: {value!r}")
     if value != value.strip():
@@ -14,11 +15,13 @@ def _sanitize_path_component(value: str, *, field_name: str) -> str:
 
 
 def write_markdown(content: str, path: Path) -> None:
+    """Write markdown content to a file, creating parent directories as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
 def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
+    """Persist an investigation package as JSON and rendered markdown files."""
     run_dir_name = _sanitize_path_component(
         package.run_summary.run_id,
         field_name="run_id",
@@ -44,6 +47,7 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
 
 
 def read_package(run_dir: Path) -> InvestigationPackage:
+    """Load an InvestigationPackage from a previously written run directory."""
     return InvestigationPackage.model_validate_json(
         (run_dir / "package.json").read_text(encoding="utf-8")
     )

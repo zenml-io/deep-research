@@ -19,6 +19,17 @@ from deep_research.models import (
 )
 
 
+def _as_checkpoint(func):
+    """Add .submit() to a plain function so it behaves like a Kitaru checkpoint."""
+
+    def submit(*args, after=None, id=None, **kwargs):
+        result = func(*args, **kwargs)
+        return types.SimpleNamespace(load=lambda: result)
+
+    func.submit = submit
+    return func
+
+
 @contextmanager
 def _preserve_modules(*names: str):
     sentinel = object()
@@ -44,9 +55,12 @@ def _load_research_flow_module():
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
-            func.submit = lambda *args, **kwargs: types.SimpleNamespace(
-                load=lambda: func(*args, **kwargs)
-            )
+
+            def submit(*args, after=None, id=None, **kwargs):
+                result = func(*args, **kwargs)
+                return types.SimpleNamespace(load=lambda: result)
+
+            func.submit = submit
             return func
 
         return decorator
@@ -110,20 +124,32 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "build_plan",
-        lambda brief, classification, tier: _sample_plan(),
+        _as_checkpoint(lambda brief, classification, tier: _sample_plan()),
     )
-    monkeypatch.setattr(module, "normalize_evidence", lambda raw_results: [])
+    monkeypatch.setattr(
+        module,
+        "normalize_evidence",
+        _as_checkpoint(lambda raw_results: []),
+    )
     monkeypatch.setattr(
         module,
         "score_relevance",
-        lambda candidates, plan, config: RelevanceCheckpointResult(
-            candidates=[],
-            budget=IterationBudget(),
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[],
+                budget=IterationBudget(),
+            )
         ),
     )
-    monkeypatch.setattr(module, "merge_evidence", lambda scored, ledger: ledger)
     monkeypatch.setattr(
-        module, "evaluate_coverage", lambda ledger, plan: _sample_coverage()
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(lambda ledger, plan: _sample_coverage()),
     )
     monkeypatch.setattr(
         module,
@@ -136,19 +162,25 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "build_selection_graph",
-        lambda ledger, plan: SelectionGraph(items=[]),
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(
         module,
         "render_reading_path",
-        lambda selection: RenderPayload(name="reading_path", content_markdown="# RP\n"),
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path", content_markdown="# RP\n"
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
         "render_backing_report",
-        lambda selection, ledger, plan: RenderPayload(
-            name="backing_report",
-            content_markdown="# BR\n",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report",
+                content_markdown="# BR\n",
+            )
         ),
     )
 
@@ -176,17 +208,21 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda *args, **kwargs: RequestClassification(
-            audience_mode="technical",
-            freshness_mode="current",
-            recommended_tier=Tier.STANDARD,
-            needs_clarification=False,
-            clarification_question=None,
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
         ),
     )
     _patch_success_path(module, monkeypatch)
     monkeypatch.setattr(
-        module, "run_supervisor", lambda *args, **kwargs: _sample_supervisor_result()
+        module,
+        "run_supervisor",
+        _as_checkpoint(lambda *args, **kwargs: _sample_supervisor_result()),
     )
 
     handle = module.research_flow.run(
@@ -211,12 +247,14 @@ def test_council_flow_aggregates_multiple_generator_results(monkeypatch) -> None
     monkeypatch.setattr(
         module,
         "classify_request",
-        lambda *args, **kwargs: RequestClassification(
-            audience_mode="technical",
-            freshness_mode="current",
-            recommended_tier=Tier.DEEP,
-            needs_clarification=False,
-            clarification_question=None,
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=Tier.DEEP,
+                needs_clarification=False,
+                clarification_question=None,
+            )
         ),
     )
     _patch_success_path(module, monkeypatch)

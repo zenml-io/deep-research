@@ -6,6 +6,7 @@ from deep_research.prompts.loader import load_prompt
 
 
 def build_relevance_scorer_agent(model_name: str):
+    """Create a Kitaru-wrapped PydanticAI agent for scoring evidence relevance."""
     return kp.wrap(
         Agent(
             model_name,

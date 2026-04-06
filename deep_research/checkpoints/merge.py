@@ -8,4 +8,5 @@ from deep_research.models import EvidenceCandidate, EvidenceLedger
 def merge_evidence(
     scored: list[EvidenceCandidate], ledger: EvidenceLedger
 ) -> EvidenceLedger:
+    """Checkpoint: merge newly scored candidates into the existing evidence ledger."""
     return merge_candidates(ledger.entries, scored)

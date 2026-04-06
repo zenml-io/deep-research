@@ -21,6 +21,7 @@ def check_convergence(
     budget_limit_usd: float,
     time_limit_seconds: int,
 ) -> StopDecision:
+    """Decide whether the research loop should stop based on budget, time, and coverage."""
     if spent_usd >= budget_limit_usd:
         return StopDecision(should_stop=True, reason=StopReason.BUDGET_EXHAUSTED)
     if elapsed_seconds >= time_limit_seconds:

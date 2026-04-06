@@ -8,6 +8,7 @@ from deep_research.prompts.loader import load_prompt
 def build_supervisor_agent(
     model_name: str, toolsets: list[object], tools: list[object]
 ):
+    """Create a Kitaru-wrapped PydanticAI supervisor agent with tool capture."""
     return kp.wrap(
         Agent(
             model_name,

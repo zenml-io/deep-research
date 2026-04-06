@@ -1,6 +1,6 @@
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, model_validator
 
-from deep_research.enums import StopReason, Tier
+from deep_research.enums import SourceKind, StopReason, Tier
 
 
 class StrictBaseModel(BaseModel):
@@ -27,7 +27,7 @@ class EvidenceCandidate(StrictBaseModel):
     url: AnyUrl
     snippets: list[EvidenceSnippet] = Field(default_factory=list)
     provider: str
-    source_kind: str
+    source_kind: SourceKind
     quality_score: float = 0.0
     relevance_score: float = 0.0
     selected: bool = False

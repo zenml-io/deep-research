@@ -15,6 +15,7 @@ def score_relevance(
     plan: ResearchPlan,
     config: ResearchConfig,
 ) -> RelevanceCheckpointResult:
+    """Checkpoint: score each candidate's relevance to the research plan via LLM."""
     agent = build_relevance_scorer_agent(config.relevance_scorer_model)
     prompt = {
         "plan": plan.model_dump(mode="json"),

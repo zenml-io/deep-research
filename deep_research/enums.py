@@ -16,3 +16,10 @@ class Tier(str, Enum):
     STANDARD = "standard"
     DEEP = "deep"
     CUSTOM = "custom"
+
+
+class SourceKind(str, Enum):
+    PAPER = "paper"
+    DOCS = "docs"
+    WEB = "web"
+    DATASET = "dataset"

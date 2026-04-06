@@ -10,6 +10,7 @@ from deep_research.models import RequestClassification
 def classify_request(
     brief: str, config: ResearchConfig | None = None
 ) -> RequestClassification:
+    """Checkpoint: classify a research brief into audience, freshness, and tier."""
     model_name = (
         config.classifier_model
         if config is not None

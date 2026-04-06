@@ -16,6 +16,7 @@ def _execute_supervisor_turn(
     config: ResearchConfig,
     model_name: str | None = None,
 ) -> SupervisorCheckpointResult:
+    """Build and run the supervisor agent for one search iteration."""
     agent = build_supervisor_agent(
         model_name or config.supervisor_model,
         toolsets=[],
@@ -37,4 +38,5 @@ def run_supervisor(
     iteration: int,
     config: ResearchConfig,
 ) -> SupervisorCheckpointResult:
+    """Checkpoint: execute a single supervisor search turn and capture tool results."""
     return _execute_supervisor_turn(plan, ledger, iteration, config)
