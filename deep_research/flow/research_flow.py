@@ -23,10 +23,11 @@ from deep_research.models import (
     InvestigationPackage,
     IterationRecord,
     IterationTrace,
-    RenderPayload,
     RunSummary,
 )
 from deep_research.package.assembly import assemble_package
+from deep_research.renderers.backing_report import render_backing_report
+from deep_research.renderers.reading_path import render_reading_path
 
 
 def _resolve_council_models(config: ResearchConfig) -> list[str]:
@@ -145,13 +146,8 @@ def research_flow(
             break
 
     selection = build_selection_graph(ledger, plan)
-    reading_path = RenderPayload(
-        name="reading_path", content_markdown="# Reading Path\n"
-    )
-    backing_report = RenderPayload(
-        name="backing_report",
-        content_markdown=f"# Backing Report\n\nGoal: {plan.goal}\n",
-    )
+    reading_path = render_reading_path(selection)
+    backing_report = render_backing_report(selection, ledger, plan)
     return assemble_package(
         run_summary=RunSummary(
             run_id=f"run-{uuid4()}",
