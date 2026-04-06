@@ -29,6 +29,13 @@ from deep_research.package.assembly import assemble_package
 from deep_research.renderers.backing_report import render_backing_report
 from deep_research.renderers.reading_path import render_reading_path
 
+CLASSIFY_CHECKPOINT_NAME = "classify_request"
+PLAN_CHECKPOINT_NAME = "build_plan"
+SUPERVISOR_CHECKPOINT_NAME = "run_supervisor"
+COUNCIL_GENERATOR_CHECKPOINT_NAME = "run_council_generator"
+APPROVE_PLAN_WAIT_NAME = "approve_plan"
+CLARIFY_BRIEF_WAIT_NAME = "clarify_brief"
+
 
 def _resolve_council_models(config: ResearchConfig) -> list[str]:
     return [config.supervisor_model] * config.council_size
@@ -81,7 +88,7 @@ def research_flow(
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
-            name="clarify_brief",
+            name=CLARIFY_BRIEF_WAIT_NAME,
             schema=str,
             question=classification.clarification_question,
         )
@@ -94,7 +101,7 @@ def research_flow(
     plan = build_plan(brief, classification, config.tier)
     if config.require_plan_approval:
         approved = wait(
-            name="approve_plan",
+            name=APPROVE_PLAN_WAIT_NAME,
             schema=bool,
             question=f"Approve plan for: {plan.goal}?",
         )
