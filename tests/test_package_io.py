@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from deep_research.models import (
     EvidenceLedger,
     InvestigationPackage,
@@ -13,18 +15,14 @@ from deep_research.package.assembly import assemble_package
 from deep_research.package.io import read_package, write_markdown, write_package
 
 
-def test_write_markdown_creates_file(tmp_path: Path) -> None:
-    path = tmp_path / "note.md"
+def make_package(
+    *, run_id: str = "run-1", render_names: list[str] | None = None
+) -> InvestigationPackage:
+    names = render_names or ["reading_path"]
 
-    write_markdown("# Title", path)
-
-    assert path.read_text() == "# Title"
-
-
-def test_write_and_read_package_round_trip(tmp_path: Path) -> None:
-    sample_package = InvestigationPackage(
+    return InvestigationPackage(
         run_summary={
-            "run_id": "run-1",
+            "run_id": run_id,
             "brief": "brief",
             "tier": "standard",
             "stop_reason": "max_iterations",
@@ -43,17 +41,56 @@ def test_write_and_read_package_round_trip(tmp_path: Path) -> None:
         iteration_trace={"iterations": []},
         renders=[
             {
-                "name": "reading_path",
-                "content_markdown": "# Reading Path",
+                "name": name,
+                "content_markdown": f"# {name}",
                 "citation_map": {},
             }
+            for name in names
         ],
     )
+
+
+def test_write_markdown_creates_file(tmp_path: Path) -> None:
+    path = tmp_path / "note.md"
+
+    write_markdown("# Title", path)
+
+    assert path.read_text() == "# Title"
+
+
+def test_write_and_read_package_round_trip(tmp_path: Path) -> None:
+    sample_package = make_package()
 
     run_dir = write_package(sample_package, tmp_path)
     restored = read_package(run_dir)
 
+    assert (run_dir / "renders" / "reading_path.md").read_text(encoding="utf-8") == (
+        "# reading_path"
+    )
     assert restored == sample_package
+
+
+@pytest.mark.parametrize("run_id", ["", ".", "..", "run/1", "run\\1"])
+def test_write_package_rejects_invalid_run_id(tmp_path: Path, run_id: str) -> None:
+    with pytest.raises(ValueError, match="Unsafe path component"):
+        write_package(make_package(run_id=run_id), tmp_path)
+
+
+@pytest.mark.parametrize(
+    "render_name", ["", ".", "..", "notes/part-1", "notes\\part-1"]
+)
+def test_write_package_rejects_invalid_render_name(
+    tmp_path: Path, render_name: str
+) -> None:
+    with pytest.raises(ValueError, match="Unsafe path component"):
+        write_package(make_package(render_names=[render_name]), tmp_path)
+
+
+def test_write_package_rejects_duplicate_render_names(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Duplicate render output filename"):
+        write_package(
+            make_package(render_names=["reading_path", "reading_path"]), tmp_path
+        )
 
 
 def test_assemble_package_builds_investigation_package() -> None:
