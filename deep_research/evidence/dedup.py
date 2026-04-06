@@ -5,7 +5,7 @@ def dedupe_candidates(candidates: list[EvidenceCandidate]) -> list[EvidenceCandi
     seen: dict[str, EvidenceCandidate] = {}
 
     for candidate in candidates:
-        key = str(candidate.url).strip().lower() or candidate.title.strip().lower()
+        key = str(candidate.url).strip() or candidate.title.strip().lower()
         seen.setdefault(key, candidate)
 
     return list(seen.values())

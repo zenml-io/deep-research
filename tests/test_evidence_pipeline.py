@@ -1,7 +1,7 @@
 from deep_research.evidence.dedup import dedupe_candidates
 from deep_research.evidence.ledger import merge_candidates
 from deep_research.evidence.scoring import score_candidate_quality
-from deep_research.models import EvidenceCandidate, EvidenceSnippet
+from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResult
 from deep_research.providers.normalization import normalize_tool_results
 
 
@@ -12,6 +12,68 @@ def test_normalize_tool_results_maps_dict_payloads() -> None:
 
     assert candidates[0].title == "Doc"
     assert candidates[0].snippets[0].text == "Alpha"
+
+
+def test_normalize_tool_results_extracts_nested_raw_tool_result_payloads() -> None:
+    raw_results = [
+        RawToolResult(
+            tool_name="search",
+            provider="brave",
+            payload={
+                "results": [
+                    {
+                        "title": "Nested Doc",
+                        "url": "https://nested.example/doc",
+                        "snippet": "Nested snippet",
+                    }
+                ]
+            },
+        ),
+        RawToolResult(
+            tool_name="search",
+            provider="brave",
+            payload={
+                "items": [
+                    {
+                        "title": "Item Doc",
+                        "url": "https://nested.example/item",
+                        "description": "Item snippet",
+                    }
+                ]
+            },
+        ),
+    ]
+
+    candidates = normalize_tool_results(
+        raw_results, provider="brave", source_kind="web"
+    )
+
+    assert [candidate.title for candidate in candidates] == ["Nested Doc", "Item Doc"]
+    assert [candidate.snippets[0].text for candidate in candidates] == [
+        "Nested snippet",
+        "Item snippet",
+    ]
+
+
+def test_normalize_tool_results_generates_stable_provider_url_keys() -> None:
+    first_batch = normalize_tool_results(
+        [{"title": "One", "url": "https://keys.example/one"}],
+        provider="brave",
+        source_kind="web",
+    )
+    second_batch = normalize_tool_results(
+        [{"title": "Two", "url": "https://keys.example/two"}],
+        provider="brave",
+        source_kind="web",
+    )
+    repeated_batch = normalize_tool_results(
+        [{"title": "One again", "url": "https://keys.example/one"}],
+        provider="brave",
+        source_kind="web",
+    )
+
+    assert first_batch[0].key != second_batch[0].key
+    assert first_batch[0].key == repeated_batch[0].key
 
 
 def test_dedupe_candidates_prefers_url_identity() -> None:
@@ -33,6 +95,27 @@ def test_dedupe_candidates_prefers_url_identity() -> None:
     deduped = dedupe_candidates([first, second])
 
     assert len(deduped) == 1
+
+
+def test_dedupe_candidates_preserves_url_case_identity() -> None:
+    first = EvidenceCandidate(
+        key="1",
+        title="A",
+        url="https://x.example/CaseSensitive",
+        provider="b",
+        source_kind="web",
+    )
+    second = EvidenceCandidate(
+        key="2",
+        title="A2",
+        url="https://x.example/casesensitive",
+        provider="c",
+        source_kind="web",
+    )
+
+    deduped = dedupe_candidates([first, second])
+
+    assert [candidate.key for candidate in deduped] == ["1", "2"]
 
 
 def test_merge_candidates_preserves_existing_and_appends_new() -> None:
