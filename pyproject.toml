@@ -13,5 +13,8 @@ dependencies = [
   "pydantic-settings",
 ]
 
+[tool.setuptools.packages.find]
+include = ["deep_research*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
