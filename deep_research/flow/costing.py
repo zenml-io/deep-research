@@ -7,7 +7,7 @@ def estimate_cost_usd(
 ) -> float:
     input_cost = pricing.input_per_million_usd * input_tokens / 1_000_000
     output_cost = pricing.output_per_million_usd * output_tokens / 1_000_000
-    return round(input_cost + output_cost, 6)
+    return input_cost + output_cost
 
 
 def budget_from_agent_result(result: object, pricing: ModelPricing) -> IterationBudget:
@@ -36,7 +36,7 @@ def merge_usage(left: IterationBudget, right: IterationBudget) -> IterationBudge
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
         total_tokens=left.total_tokens + right.total_tokens,
-        estimated_cost_usd=round(left.estimated_cost_usd + right.estimated_cost_usd, 6),
+        estimated_cost_usd=left.estimated_cost_usd + right.estimated_cost_usd,
     )
 
 
