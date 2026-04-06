@@ -30,6 +30,20 @@ from deep_research.renderers.backing_report import render_backing_report
 from deep_research.renderers.reading_path import render_reading_path
 
 
+class _ImmediateFlowHandle:
+    def __init__(self, value):
+        self._value = value
+
+    def wait(self):
+        return self._value
+
+    def __getattr__(self, name):
+        return getattr(self._value, name)
+
+    def __getitem__(self, key):
+        return self._value[key]
+
+
 def _resolve_council_models(config: ResearchConfig) -> list[str]:
     return [config.supervisor_model] * config.council_size
 
@@ -67,6 +81,12 @@ def _resolve_runtime_config(
     overrides = config.model_dump()
     overrides["tier"] = resolved_tier
     return base_config.model_copy(update=overrides)
+
+
+def _coerce_flow_handle(result):
+    if hasattr(result, "wait"):
+        return result
+    return _ImmediateFlowHandle(result)
 
 
 @flow
@@ -162,3 +182,9 @@ def research_flow(
         iteration_trace=IterationTrace(iterations=iteration_history),
         renders=[reading_path, backing_report],
     )
+
+
+_research_flow_run = research_flow.run
+research_flow.run = lambda *args, **kwargs: _coerce_flow_handle(
+    _research_flow_run(*args, **kwargs)
+)
