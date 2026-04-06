@@ -12,7 +12,7 @@ def build_supervisor_agent(
         Agent(
             model_name,
             name="supervisor",
-            result_type=SupervisorCheckpointResult,
+            output_type=SupervisorCheckpointResult,
             system_prompt=load_prompt("supervisor"),
             toolsets=toolsets,
             tools=tools,

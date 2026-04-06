@@ -10,7 +10,7 @@ def build_writer_agent(model_name: str):
         Agent(
             model_name,
             name="writer",
-            result_type=RenderPayload,
+            output_type=RenderPayload,
             system_prompt=load_prompt("writer"),
         )
     )

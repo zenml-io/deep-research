@@ -10,7 +10,7 @@ def build_classifier_agent(model_name: str):
         Agent(
             model_name,
             name="classifier",
-            result_type=RequestClassification,
+            output_type=RequestClassification,
             system_prompt=load_prompt("classifier"),
         )
     )

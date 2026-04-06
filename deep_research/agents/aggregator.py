@@ -10,7 +10,7 @@ def build_aggregator_agent(model_name: str):
         Agent(
             model_name,
             name="aggregator",
-            result_type=InvestigationPackage,
+            output_type=InvestigationPackage,
             system_prompt=load_prompt("aggregator"),
         )
     )

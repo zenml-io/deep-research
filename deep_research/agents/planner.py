@@ -10,7 +10,7 @@ def build_planner_agent(model_name: str):
         Agent(
             model_name,
             name="planner",
-            result_type=ResearchPlan,
+            output_type=ResearchPlan,
             system_prompt=load_prompt("planner"),
         )
     )

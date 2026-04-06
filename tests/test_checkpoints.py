@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import sys
 import types
 
@@ -9,12 +10,17 @@ from deep_research.models import (
     EvidenceCandidate,
     EvidenceLedger,
     EvidenceSnippet,
+    InvestigationPackage,
     IterationBudget,
+    IterationTrace,
     RawToolResult,
     RequestClassification,
+    RenderPayload,
     ResearchPlan,
     RelevanceCheckpointResult,
+    RunSummary,
     SelectionGraph,
+    StopReason,
     SupervisorCheckpointResult,
 )
 
@@ -34,6 +40,7 @@ def _clear_checkpoint_modules() -> None:
         "deep_research.checkpoints.merge",
         "deep_research.checkpoints.evaluate",
         "deep_research.checkpoints.select",
+        "deep_research.checkpoints.assemble",
     )
 
 
@@ -282,7 +289,7 @@ def test_supervisor_factory_uses_checkpoint_result_contract(monkeypatch) -> None
 
     module.build_supervisor_agent("test-model", toolsets=[], tools=[])
 
-    assert wrap_calls[0]["agent"].kwargs["result_type"] is SupervisorCheckpointResult
+    assert wrap_calls[0]["agent"].kwargs["output_type"] is SupervisorCheckpointResult
 
 
 def test_classify_request_uses_configured_model_and_returns_output(monkeypatch) -> None:
@@ -512,3 +519,48 @@ def test_build_selection_graph_returns_selected_entries(monkeypatch) -> None:
         }
     ]
     assert ("build_selection_graph", "llm_call") in decorated
+
+
+def test_assemble_package_checkpoint_wraps_terminal_package(monkeypatch) -> None:
+    decorated = _install_kitaru_checkpoint_stub(monkeypatch)
+
+    module = _import_checkpoint_module("deep_research.checkpoints.assemble")
+
+    package = module.assemble_package(
+        run_summary=RunSummary(
+            run_id="run-1",
+            brief="brief",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+        ),
+        research_plan=ResearchPlan(
+            goal="goal",
+            key_questions=["q"],
+            subtopics=["topic"],
+            queries=["query"],
+            sections=["Overview"],
+            success_criteria=["done"],
+        ),
+        evidence_ledger=EvidenceLedger(entries=[]),
+        selection_graph=SelectionGraph(items=[]),
+        iteration_trace=IterationTrace(iterations=[]),
+        renders=[RenderPayload(name="reading_path", content_markdown="# Reading Path")],
+    )
+
+    assert isinstance(package, InvestigationPackage)
+    assert package.run_summary.run_id == "run-1"
+    assert ("assemble_package", "tool_call") in decorated
+
+
+def test_assemble_package_checkpoint_avoids_keyword_only_args(monkeypatch) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+
+    module = _import_checkpoint_module("deep_research.checkpoints.assemble")
+
+    parameter_kinds = [
+        parameter.kind
+        for parameter in inspect.signature(module.assemble_package).parameters.values()
+    ]
+
+    assert inspect.Parameter.KEYWORD_ONLY not in parameter_kinds

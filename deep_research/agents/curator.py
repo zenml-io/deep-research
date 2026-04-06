@@ -10,7 +10,7 @@ def build_curator_agent(model_name: str):
         Agent(
             model_name,
             name="curator",
-            result_type=SelectionGraph,
+            output_type=SelectionGraph,
             system_prompt=load_prompt("curator"),
         )
     )

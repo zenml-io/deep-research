@@ -10,7 +10,7 @@ def build_relevance_scorer_agent(model_name: str):
         Agent(
             model_name,
             name="relevance_scorer",
-            result_type=RelevanceCheckpointResult,
+            output_type=RelevanceCheckpointResult,
             system_prompt=load_prompt("relevance_scorer"),
         )
     )

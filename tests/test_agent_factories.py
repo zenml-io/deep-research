@@ -7,7 +7,7 @@ def _install_agent_stubs(monkeypatch):
     wrap_calls = []
     prompt_calls = []
 
-    allowed_result_types = {
+    allowed_output_types = {
         "RequestClassification",
         "ResearchPlan",
         "SupervisorCheckpointResult",
@@ -21,7 +21,7 @@ def _install_agent_stubs(monkeypatch):
         def __init__(self, model_name, **kwargs):
             allowed_keys = {
                 "name",
-                "result_type",
+                "output_type",
                 "system_prompt",
                 "toolsets",
                 "tools",
@@ -30,8 +30,8 @@ def _install_agent_stubs(monkeypatch):
             assert not unexpected_keys, f"unexpected Agent kwargs: {unexpected_keys}"
             assert "name" in kwargs
             assert "system_prompt" in kwargs
-            if "result_type" in kwargs:
-                assert kwargs["result_type"].__name__ in allowed_result_types
+            if "output_type" in kwargs:
+                assert kwargs["output_type"].__name__ in allowed_output_types
             self.model_name = model_name
             self.kwargs = kwargs
 
@@ -87,7 +87,7 @@ def test_build_classifier_agent_returns_wrapped_agent(monkeypatch) -> None:
     assert prompt_calls == ["classifier"]
     assert wrap_calls[0]["agent"].kwargs == {
         "name": "classifier",
-        "result_type": module.RequestClassification,
+        "output_type": module.RequestClassification,
         "system_prompt": "prompt:classifier",
     }
 
@@ -152,7 +152,7 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
     for wrapped, (
         prompt_name,
         agent_name,
-        result_type_name,
+        output_type_name,
         tool_capture_config,
     ) in zip(wrapped_agents, expected, strict=True):
         agent = wrapped["agent"]
@@ -160,7 +160,7 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         assert agent.model_name == "test-model"
         assert agent.kwargs["name"] == agent_name
         assert agent.kwargs["system_prompt"] == f"prompt:{prompt_name}"
-        assert agent.kwargs["result_type"].__name__ == result_type_name
+        assert agent.kwargs["output_type"].__name__ == output_type_name
 
     supervisor_agent = wrapped_agents[2]["agent"]
     assert len(supervisor_agent.kwargs["toolsets"]) == 1
