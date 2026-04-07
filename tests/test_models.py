@@ -40,6 +40,203 @@ def test_research_plan_round_trip() -> None:
     assert restored == plan
 
 
+def test_research_plan_phase_one_defaults_preserve_existing_payloads() -> None:
+    plan = ResearchPlan(
+        goal="Understand Kitaru",
+        key_questions=["What is replay?"],
+        subtopics=["replay"],
+        queries=["kitaru replay checkpoints"],
+        sections=["Overview"],
+        success_criteria=["Explain replay anchors"],
+    )
+
+    assert plan.query_groups == {}
+    assert plan.allowed_source_groups == []
+    assert plan.approval_status == "not_requested"
+
+
+def test_run_summary_and_render_payload_accept_phase_one_metadata() -> None:
+    summary = RunSummary(
+        run_id="run-1",
+        brief="test",
+        tier=Tier.STANDARD,
+        stop_reason=StopReason.CONVERGED,
+        status="completed",
+        estimated_cost_usd=1.25,
+        elapsed_seconds=42,
+        iteration_count=3,
+        provider_usage_summary={"openai": 2, "perplexity": 1},
+        council_enabled=True,
+        council_size=3,
+        council_models=["gpt-4.1", "sonnet"],
+        started_at="2026-04-07T10:00:00Z",
+        completed_at="2026-04-07T10:00:42Z",
+    )
+    render = RenderPayload(
+        name="final_report",
+        content_markdown="# Report",
+        citation_map={"[1]": "candidate-1"},
+        structured_content={"sections": ["Overview"], "word_count": 1200},
+        generated_at="2026-04-07T10:00:42Z",
+    )
+
+    assert summary.estimated_cost_usd == 1.25
+    assert summary.elapsed_seconds == 42
+    assert summary.iteration_count == 3
+    assert summary.provider_usage_summary == {"openai": 2, "perplexity": 1}
+    assert summary.council_enabled is True
+    assert summary.council_size == 3
+    assert summary.council_models == ["gpt-4.1", "sonnet"]
+    assert summary.started_at == "2026-04-07T10:00:00Z"
+    assert isinstance(summary.started_at, str)
+    assert summary.completed_at == "2026-04-07T10:00:42Z"
+    assert isinstance(summary.completed_at, str)
+    assert render.structured_content == {
+        "sections": ["Overview"],
+        "word_count": 1200,
+    }
+    assert render.generated_at == "2026-04-07T10:00:42Z"
+    assert isinstance(render.generated_at, str)
+
+
+def test_iteration_record_accepts_phase_one_cost_metadata() -> None:
+    record = IterationRecord(
+        iteration=1,
+        new_candidate_count=2,
+        coverage=0.5,
+        estimated_cost_usd=0.75,
+    )
+
+    assert record.estimated_cost_usd == 0.75
+
+
+def test_iteration_record_rejects_negative_phase_one_cost() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, estimated_cost_usd=-1)
+
+
+def test_run_summary_rejects_negative_phase_one_counters() -> None:
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            estimated_cost_usd=-0.1,
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            elapsed_seconds=-1,
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            iteration_count=-1,
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            provider_usage_summary={"openai": -1},
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            council_size=0,
+        )
+
+
+def test_research_plan_rejects_invalid_phase_one_approval_status() -> None:
+    with pytest.raises(ValidationError):
+        ResearchPlan(
+            goal="Understand Kitaru",
+            key_questions=["What is replay?"],
+            subtopics=["replay"],
+            queries=["kitaru replay checkpoints"],
+            sections=["Overview"],
+            success_criteria=["Explain replay anchors"],
+            approval_status="in_review",
+        )
+
+
+def test_phase_one_models_reject_non_finite_costs() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, estimated_cost_usd=float("nan"))
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, estimated_cost_usd=float("inf"))
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            estimated_cost_usd=float("nan"),
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            estimated_cost_usd=float("inf"),
+        )
+
+
+def test_phase_one_models_reject_invalid_timestamps() -> None:
+    with pytest.raises(ValidationError):
+        RenderPayload(
+            name="final_report",
+            content_markdown="# Report",
+            generated_at="not-a-timestamp",
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            started_at="yesterday",
+        )
+
+    with pytest.raises(ValidationError):
+        RunSummary(
+            run_id="run-1",
+            brief="test",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+            completed_at="not-a-date",
+        )
+
+
 def test_package_minimum_shape() -> None:
     package = InvestigationPackage(
         run_summary={

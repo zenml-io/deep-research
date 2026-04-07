@@ -1,11 +1,16 @@
+from contextlib import contextmanager
+from datetime import datetime
 import importlib
 import sys
 import types
 
 from deep_research.models import (
     EvidenceLedger,
+    InvestigationPackage,
+    IterationTrace,
     RenderPayload,
     ResearchPlan,
+    RunSummary,
     SelectionGraph,
     SelectionItem,
 )
@@ -55,10 +60,73 @@ def _install_kitaru_stub() -> None:
     sys.modules["pydantic_ai"] = types.SimpleNamespace(Agent=object)
 
 
+@contextmanager
+def _preserve_modules(*names: str):
+    sentinel = object()
+    originals = {name: sys.modules.get(name, sentinel) for name in names}
+    try:
+        yield
+    finally:
+        for name, value in originals.items():
+            if value is sentinel:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+
+
 def _load_module(module_name: str):
-    _install_kitaru_stub()
-    sys.modules.pop(module_name, None)
-    return importlib.import_module(module_name)
+    with _preserve_modules("kitaru", "kitaru.adapters", "pydantic_ai"):
+        _install_kitaru_stub()
+        sys.modules.pop(module_name, None)
+        module = importlib.import_module(module_name)
+    return module
+
+
+def _make_package() -> InvestigationPackage:
+    return InvestigationPackage(
+        run_summary=RunSummary(
+            run_id="run-1",
+            brief="Map the package render surface",
+            tier="standard",
+            stop_reason="converged",
+            status="completed",
+        ),
+        research_plan=ResearchPlan(
+            goal="Answer the brief",
+            key_questions=["What matters?"],
+            subtopics=["core"],
+            queries=["example query"],
+            sections=["Overview"],
+            success_criteria=["Produce a summary"],
+        ),
+        evidence_ledger=EvidenceLedger(),
+        selection_graph=SelectionGraph(
+            items=[SelectionItem(candidate_key="source-1", rationale="useful")]
+        ),
+        iteration_trace=IterationTrace(),
+        renders=[],
+    )
+
+
+def _assert_iso8601_timestamp(value: str | None) -> None:
+    assert isinstance(value, str)
+    datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def test_load_module_restores_stubbed_dependencies(monkeypatch) -> None:
+    original_kitaru = types.ModuleType("kitaru")
+    original_kitaru_adapters = types.ModuleType("kitaru.adapters")
+    original_pydantic_ai = types.ModuleType("pydantic_ai")
+
+    monkeypatch.setitem(sys.modules, "kitaru", original_kitaru)
+    monkeypatch.setitem(sys.modules, "kitaru.adapters", original_kitaru_adapters)
+    monkeypatch.setitem(sys.modules, "pydantic_ai", original_pydantic_ai)
+
+    _load_module("deep_research.renderers.reading_path")
+
+    assert sys.modules["kitaru"] is original_kitaru
+    assert sys.modules["kitaru.adapters"] is original_kitaru_adapters
+    assert sys.modules["pydantic_ai"] is original_pydantic_ai
 
 
 def test_render_reading_path_returns_markdown_payload() -> None:
@@ -70,7 +138,18 @@ def test_render_reading_path_returns_markdown_payload() -> None:
     payload = module.render_reading_path(selection)
 
     assert payload.name == "reading_path"
-    assert "useful" in payload.content_markdown
+    assert "[1] a: useful" in payload.content_markdown
+    assert payload.structured_content == {
+        "items": [
+            {
+                "citation": "[1]",
+                "candidate_key": "a",
+                "rationale": "useful",
+            }
+        ]
+    }
+    assert payload.citation_map == {"[1]": "a"}
+    _assert_iso8601_timestamp(payload.generated_at)
     assert module.render_reading_path._checkpoint_type == "llm_call"
 
 
@@ -94,7 +173,35 @@ def test_render_backing_report_returns_goal_and_selected_count() -> None:
     assert payload.name == "backing_report"
     assert "Goal: Answer the brief" in payload.content_markdown
     assert "Selected: 1" in payload.content_markdown
+    assert "[1] a" in payload.content_markdown
+    assert payload.structured_content == {
+        "goal": "Answer the brief",
+        "selected_count": 1,
+        "selection_keys": ["a"],
+    }
+    assert payload.citation_map == {"[1]": "a"}
+    _assert_iso8601_timestamp(payload.generated_at)
     assert module.render_backing_report._checkpoint_type == "llm_call"
+
+
+def test_render_full_report_returns_lazy_package_payload() -> None:
+    module = _load_module("deep_research.renderers.full_report")
+    package = _make_package()
+
+    payload = module.render_full_report(package)
+
+    assert payload.name == "full_report"
+    assert "Brief: Map the package render surface" in payload.content_markdown
+    assert "## Selected Evidence" in payload.content_markdown
+    assert "[1] source-1: useful" in payload.content_markdown
+    assert payload.structured_content == {
+        "run_id": "run-1",
+        "selected_count": 1,
+        "selection_keys": ["source-1"],
+    }
+    assert payload.citation_map == {"[1]": "source-1"}
+    _assert_iso8601_timestamp(payload.generated_at)
+    assert module.render_full_report._checkpoint_type == "llm_call"
 
 
 def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:

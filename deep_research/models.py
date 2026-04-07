@@ -1,10 +1,33 @@
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, model_validator
+from math import isfinite
+from typing import Literal
+
+from pydantic import (
+    AnyUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from deep_research.enums import SourceKind, StopReason, Tier
 
 
 class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def _validate_iso8601_timestamp(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized_value = value.replace("Z", "+00:00")
+    try:
+        __import__("datetime").datetime.fromisoformat(normalized_value)
+    except ValueError as exc:
+        raise ValueError("timestamp must be a parseable ISO-8601 string") from exc
+
+    return value
 
 
 class ResearchPlan(StrictBaseModel):
@@ -14,6 +37,11 @@ class ResearchPlan(StrictBaseModel):
     queries: list[str]
     sections: list[str]
     success_criteria: list[str]
+    query_groups: dict[str, list[str]] = Field(default_factory=dict)
+    allowed_source_groups: list[str] = Field(default_factory=list)
+    approval_status: Literal["not_requested", "pending", "approved", "rejected"] = (
+        "not_requested"
+    )
 
 
 class EvidenceSnippet(StrictBaseModel):
@@ -58,6 +86,7 @@ class IterationRecord(StrictBaseModel):
     iteration: int
     new_candidate_count: int = 0
     coverage: float = 0.0
+    estimated_cost_usd: float = 0.0
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "IterationRecord":
@@ -67,6 +96,10 @@ class IterationRecord(StrictBaseModel):
             raise ValueError("new_candidate_count must be non-negative")
         if not 0.0 <= self.coverage <= 1.0:
             raise ValueError("coverage must be between 0.0 and 1.0")
+        if not isfinite(self.estimated_cost_usd):
+            raise ValueError("estimated_cost_usd must be finite")
+        if self.estimated_cost_usd < 0.0:
+            raise ValueError("estimated_cost_usd must be non-negative")
         return self
 
 
@@ -78,6 +111,13 @@ class RenderPayload(StrictBaseModel):
     name: str
     content_markdown: str
     citation_map: dict[str, str] = Field(default_factory=dict)
+    structured_content: dict[str, object] | None = None
+    generated_at: str | None = None
+
+    @field_validator("generated_at")
+    @classmethod
+    def validate_generated_at(cls, value: str | None) -> str | None:
+        return _validate_iso8601_timestamp(value)
 
 
 class RunSummary(StrictBaseModel):
@@ -86,6 +126,39 @@ class RunSummary(StrictBaseModel):
     tier: Tier
     stop_reason: StopReason
     status: str
+    estimated_cost_usd: float = 0.0
+    elapsed_seconds: int = 0
+    iteration_count: int = 0
+    provider_usage_summary: dict[str, int] = Field(default_factory=dict)
+    council_enabled: bool = False
+    council_size: int = 1
+    council_models: list[str] = Field(default_factory=list)
+    started_at: str | None = None
+    completed_at: str | None = None
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def validate_timestamps(cls, value: str | None) -> str | None:
+        return _validate_iso8601_timestamp(value)
+
+    @model_validator(mode="after")
+    def validate_phase_one_metadata(self) -> "RunSummary":
+        if not isfinite(self.estimated_cost_usd):
+            raise ValueError("estimated_cost_usd must be finite")
+        if self.estimated_cost_usd < 0.0:
+            raise ValueError("estimated_cost_usd must be non-negative")
+        if self.elapsed_seconds < 0:
+            raise ValueError("elapsed_seconds must be non-negative")
+        if self.iteration_count < 0:
+            raise ValueError("iteration_count must be non-negative")
+        if self.council_size < 1:
+            raise ValueError("council_size must be at least 1")
+        for provider, usage_count in self.provider_usage_summary.items():
+            if usage_count < 0:
+                raise ValueError(
+                    f"provider_usage_summary[{provider!r}] must be non-negative"
+                )
+        return self
 
 
 class InvestigationPackage(StrictBaseModel):

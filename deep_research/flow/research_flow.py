@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from time import monotonic
 from uuid import uuid4
 
@@ -42,7 +43,11 @@ def _run_iteration(plan, ledger, iteration, config, council_models):
     if config.council_mode:
         futures = [
             run_council_generator.submit(
-                plan, ledger, iteration, model_name, config,
+                plan,
+                ledger,
+                iteration,
+                model_name,
+                config,
                 id=f"council_{index}",
             )
             for index, model_name in enumerate(council_models)
@@ -54,16 +59,21 @@ def _run_iteration(plan, ledger, iteration, config, council_models):
 def _resolve_runtime_config(
     config: ResearchConfig | None,
     resolved_tier: Tier,
+    preserve_overrides: bool = False,
 ) -> ResearchConfig:
     """Return a ResearchConfig aligned to the resolved tier, merging any overrides."""
     base_config = ResearchConfig.for_tier(resolved_tier)
-    if config is None:
+    if config is None or not preserve_overrides:
         return base_config
     if config.tier == resolved_tier:
         return config
     overrides = config.model_dump()
     overrides["tier"] = resolved_tier
     return base_config.model_copy(update=overrides)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @flow
@@ -73,9 +83,14 @@ def research_flow(
     config: ResearchConfig | None = None,
 ) -> InvestigationPackage:
     """Orchestrate the full research pipeline from brief to investigation package."""
+    user_config = config
     classification = classify_request.submit(brief, config).load()
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
-    config = _resolve_runtime_config(config, resolved_tier)
+    config = _resolve_runtime_config(
+        user_config,
+        resolved_tier,
+        preserve_overrides=user_config is not None,
+    )
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
@@ -87,7 +102,11 @@ def research_flow(
         resolved_tier = (
             classification.recommended_tier if tier == "auto" else Tier(tier)
         )
-        config = _resolve_runtime_config(config, resolved_tier)
+        config = _resolve_runtime_config(
+            user_config,
+            resolved_tier,
+            preserve_overrides=user_config is not None,
+        )
 
     plan = build_plan.submit(brief, classification, config.tier).load()
     if config.require_plan_approval:
@@ -101,27 +120,47 @@ def research_flow(
 
     ledger = EvidenceLedger()
     iteration_history: list[IterationRecord] = []
+    provider_usage_summary: dict[str, int] = {}
     spent_usd = 0.0
-    council_models = [config.supervisor_model] * config.council_size
+    council_models = (
+        [config.supervisor_model] * config.council_size if config.council_mode else []
+    )
     stop_reason = StopReason.MAX_ITERATIONS
     start_time = monotonic()
+    elapsed_seconds = 0
+    started_at = _utc_now_iso()
 
     for iteration in range(config.max_iterations):
         supervisor_result = _run_iteration(
-            plan, ledger, iteration, config, council_models,
+            plan,
+            ledger,
+            iteration,
+            config,
+            council_models,
         )
-        spent_usd += supervisor_result.budget.estimated_cost_usd
+        supervisor_cost = supervisor_result.budget.estimated_cost_usd
+        spent_usd += supervisor_cost
+        for raw_result in supervisor_result.raw_results:
+            provider = raw_result.provider
+            provider_usage_summary[provider] = (
+                provider_usage_summary.get(provider, 0) + 1
+            )
 
         candidates = normalize_evidence.submit(
             supervisor_result.raw_results,
         ).load()
         relevance_result = score_relevance.submit(
-            candidates, plan, config,
+            candidates,
+            plan,
+            config,
         ).load()
-        spent_usd += relevance_result.budget.estimated_cost_usd
+        relevance_cost = relevance_result.budget.estimated_cost_usd
+        iteration_cost = supervisor_cost + relevance_cost
+        spent_usd += relevance_cost
 
         ledger = merge_evidence.submit(
-            relevance_result.candidates, ledger,
+            relevance_result.candidates,
+            ledger,
         ).load()
         coverage = evaluate_coverage.submit(ledger, plan).load()
         iteration_history.append(
@@ -129,14 +168,16 @@ def research_flow(
                 iteration=iteration,
                 new_candidate_count=len(candidates),
                 coverage=coverage.total,
+                estimated_cost_usd=iteration_cost,
             )
         )
 
+        elapsed_seconds = int(monotonic() - start_time)
         decision = check_convergence(
             coverage,
             iteration_history[:-1],
             spent_usd=spent_usd,
-            elapsed_seconds=int(monotonic() - start_time),
+            elapsed_seconds=elapsed_seconds,
             max_iterations=config.max_iterations,
             epsilon=config.convergence_epsilon,
             min_coverage=config.convergence_min_coverage,
@@ -151,6 +192,10 @@ def research_flow(
     selection = build_selection_graph.submit(ledger, plan, config).load()
     reading_future = render_reading_path.submit(selection)
     backing_future = render_backing_report.submit(selection, ledger, plan)
+    reading_render = reading_future.load()
+    backing_render = backing_future.load()
+    completed_at = _utc_now_iso()
+    elapsed_seconds = int(monotonic() - start_time)
     return assemble_package(
         run_summary=RunSummary(
             run_id=f"run-{uuid4()}",
@@ -158,10 +203,19 @@ def research_flow(
             tier=config.tier,
             stop_reason=stop_reason,
             status="completed",
+            estimated_cost_usd=spent_usd,
+            elapsed_seconds=elapsed_seconds,
+            iteration_count=len(iteration_history),
+            provider_usage_summary=provider_usage_summary,
+            council_enabled=config.council_mode,
+            council_size=config.council_size if config.council_mode else 1,
+            council_models=council_models,
+            started_at=started_at,
+            completed_at=completed_at,
         ),
         research_plan=plan,
         evidence_ledger=ledger,
         selection_graph=selection,
         iteration_trace=IterationTrace(iterations=iteration_history),
-        renders=[reading_future.load(), backing_future.load()],
+        renders=[reading_render, backing_render],
     )
