@@ -1,6 +1,6 @@
 from kitaru import checkpoint
 
-from deep_research.checkpoints.supervisor import _execute_supervisor_turn
+from deep_research.checkpoints.supervisor import run_supervisor
 from deep_research.config import ResearchConfig
 from deep_research.flow.costing import merge_usage
 from deep_research.models import (
@@ -11,6 +11,7 @@ from deep_research.models import (
     SupervisorCheckpointResult,
 )
 
+
 @checkpoint(type="llm_call")
 def run_council_generator(
     plan: ResearchPlan,
@@ -20,13 +21,8 @@ def run_council_generator(
     config: ResearchConfig,
 ) -> SupervisorCheckpointResult:
     """Checkpoint: run one council member's supervisor turn for parallel evidence gathering."""
-    return _execute_supervisor_turn(
-        plan,
-        ledger,
-        iteration,
-        config,
-        model_name=model_name,
-    )
+    override_config = config.model_copy(update={"supervisor_model": model_name})
+    return run_supervisor(plan, ledger, iteration, override_config)
 
 
 def aggregate_council_results(

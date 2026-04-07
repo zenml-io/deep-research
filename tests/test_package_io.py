@@ -6,8 +6,11 @@ from types import ModuleType
 import pytest
 
 from deep_research.models import (
+    CoherenceResult,
+    CritiqueResult,
     EvidenceLedger,
     EvidenceCandidate,
+    GroundingResult,
     InvestigationPackage,
     IterationRecord,
     IterationTrace,
@@ -92,8 +95,21 @@ def make_package(
                 {
                     "iteration": 0,
                     "new_candidate_count": 1,
+                    "accepted_candidate_count": 1,
+                    "rejected_candidate_count": 0,
                     "coverage": 0.5,
+                    "coverage_delta": 0.5,
+                    "uncovered_subtopics": ["follow-up"],
                     "estimated_cost_usd": 1.75,
+                    "tool_calls": [
+                        {
+                            "tool_name": "search",
+                            "status": "ok",
+                            "provider": "example",
+                            "summary": "search via example succeeded",
+                        }
+                    ],
+                    "continue_reason": "remaining uncovered subtopics: follow-up",
                 }
             ]
         },
@@ -223,6 +239,45 @@ def test_write_and_read_package_round_trip(tmp_path: Path) -> None:
     restored = read_package(run_dir)
 
     assert restored == sample_package
+    restored_iteration = restored.iteration_trace.iterations[0]
+
+    assert restored_iteration.accepted_candidate_count == 1
+    assert restored_iteration.rejected_candidate_count == 0
+    assert restored_iteration.coverage_delta == 0.5
+    assert restored_iteration.uncovered_subtopics == ["follow-up"]
+    assert restored_iteration.tool_calls[0].summary == "search via example succeeded"
+    assert (
+        restored_iteration.continue_reason == "remaining uncovered subtopics: follow-up"
+    )
+
+
+def test_write_and_read_package_round_trip_preserves_critique_and_judges(
+    tmp_path: Path,
+) -> None:
+    sample_package = make_package().model_copy(
+        update={
+            "critique_result": CritiqueResult(
+                dimensions=[],
+                summary="critique",
+                revision_suggestions=["tighten"],
+                revision_recommended=True,
+            ),
+            "grounding_result": GroundingResult(score=1.0, verdicts=[]),
+            "coherence_result": CoherenceResult(
+                relevance=1.0,
+                logical_flow=0.9,
+                completeness=0.95,
+                consistency=1.0,
+                summary="coherent",
+            ),
+        }
+    )
+
+    restored = read_package(write_package(sample_package, tmp_path))
+
+    assert restored.critique_result.summary == "critique"
+    assert restored.grounding_result.score == 1.0
+    assert restored.coherence_result.summary == "coherent"
 
 
 @pytest.mark.parametrize("run_id", ["", ".", "..", "run/1", "run\\1"])

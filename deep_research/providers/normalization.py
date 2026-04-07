@@ -1,8 +1,89 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from hashlib import sha256
 from typing import Any
 
+from pydantic import ValidationError
+
+from deep_research.evidence.url import canonicalize_url
 from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResult
+
+
+def _clean_string(value: object) -> str | None:
+    """Normalize a scalar value into a stripped string, rejecting container inputs."""
+    if value is None:
+        return None
+    if isinstance(value, Mapping) or (
+        isinstance(value, Iterable) and not isinstance(value, str)
+    ):
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _as_score(value: object) -> float:
+    """Coerce a missing or scalar score value into a float."""
+    if value is None:
+        return 0.0
+    return float(value)
+
+
+def _matched_subtopics(value: object) -> list[str]:
+    """Normalize matched_subtopics into a clean list of non-empty strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    elif not isinstance(value, Iterable):
+        return []
+    normalized: list[str] = []
+    for subtopic in value:
+        if subtopic is None:
+            continue
+        cleaned = str(subtopic).strip()
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
+def _candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
+    """Choose the strongest semantic identity for a raw result item."""
+    doi = _clean_string(item.get("doi"))
+    if doi is not None:
+        return f"doi:{doi.lower()}"
+
+    arxiv_id = _clean_string(item.get("arxiv_id"))
+    if arxiv_id is not None:
+        return f"arxiv:{arxiv_id.lower()}"
+
+    return f"url:{canonical_url}"
+
+
+def _candidate_key(item: Mapping[str, Any], canonical_url: str) -> str:
+    """Generate a deterministic short hash key from semantic source identity."""
+    identity = _candidate_identity(item, canonical_url).encode("utf-8")
+    return f"evidence-{sha256(identity).hexdigest()[:16]}"
+
+
+def _raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
+    """Copy non-core fields from a raw item into raw_metadata."""
+    excluded = {
+        "title",
+        "url",
+        "snippet",
+        "description",
+        "quality_score",
+        "relevance_score",
+        "authority_score",
+        "freshness_score",
+        "matched_subtopics",
+        "doi",
+        "arxiv_id",
+    }
+    return {
+        str(key): value
+        for key, value in item.items()
+        if key not in excluded and value is not None
+    }
 
 
 def _iter_result_items(
@@ -21,15 +102,10 @@ def _iter_result_items(
             items.append(payload)
             continue
 
-        items.append(raw_result)
+        if isinstance(raw_result, Mapping):
+            items.append(raw_result)
 
     return items
-
-
-def _candidate_key(provider: str, url: str) -> str:
-    """Generate a deterministic short hash key from provider and URL."""
-    identity = f"{provider}:{url}".encode("utf-8")
-    return f"{provider}-{sha256(identity).hexdigest()[:16]}"
 
 
 def normalize_tool_results(
@@ -43,6 +119,9 @@ def normalize_tool_results(
     for idx, item in enumerate(_iter_result_items(raw_results)):
         url = str(item.get("url") or "").strip()
         if not url:
+            continue
+        canonical_url = canonicalize_url(url)
+        if canonical_url is None:
             continue
 
         snippet_text = str(item.get("snippet") or item.get("description") or "").strip()
@@ -58,18 +137,25 @@ def normalize_tool_results(
                 )
             )
 
-        candidate = EvidenceCandidate(
-            key="pending",
-            title=str(item.get("title") or url or f"result-{idx}").strip(),
-            url=url,
-            snippets=snippets,
-            provider=provider,
-            source_kind=source_kind,
-        )
-        normalized.append(
-            candidate.model_copy(
-                update={"key": _candidate_key(provider, str(candidate.url))}
+        try:
+            candidate = EvidenceCandidate(
+                key=_candidate_key(item, canonical_url),
+                title=str(item.get("title") or url or f"result-{idx}").strip(),
+                url=url,
+                snippets=snippets,
+                provider=provider,
+                source_kind=source_kind,
+                quality_score=_as_score(item.get("quality_score")),
+                relevance_score=_as_score(item.get("relevance_score")),
+                authority_score=_as_score(item.get("authority_score")),
+                freshness_score=_as_score(item.get("freshness_score")),
+                matched_subtopics=_matched_subtopics(item.get("matched_subtopics")),
+                doi=_clean_string(item.get("doi")),
+                arxiv_id=_clean_string(item.get("arxiv_id")),
+                raw_metadata=_raw_metadata(item),
             )
-        )
+        except (ValidationError, ValueError, TypeError):
+            continue
+        normalized.append(candidate)
 
     return normalized

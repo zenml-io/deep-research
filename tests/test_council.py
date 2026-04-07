@@ -14,15 +14,18 @@ from deep_research.models import (
 
 
 def _clear_modules(*names: str) -> None:
+    """Remove modules from sys.modules so tests can force a clean import."""
     for name in names:
         sys.modules.pop(name, None)
 
 
 def _clear_council_module() -> None:
+    """Clear the council checkpoint module before re-importing it in tests."""
     _clear_modules("deep_research.checkpoints.council")
 
 
 def _install_kitaru_checkpoint_stub(monkeypatch):
+    """Install a minimal Kitaru checkpoint decorator and capture decorated names."""
     decorated = []
 
     def checkpoint(*, type):
@@ -40,17 +43,20 @@ def _install_kitaru_checkpoint_stub(monkeypatch):
 
 
 def _install_supervisor_checkpoint_stub(monkeypatch) -> None:
-    def fake_execute(plan, ledger, iteration, config, model_name=None):
+    """Stub the supervisor checkpoint module so council tests stay isolated."""
+
+    def fake_execute(plan, ledger, iteration, config):
         return SupervisorCheckpointResult(raw_results=[])
 
     monkeypatch.setitem(
         sys.modules,
         "deep_research.checkpoints.supervisor",
-        types.SimpleNamespace(_execute_supervisor_turn=fake_execute),
+        types.SimpleNamespace(run_supervisor=fake_execute),
     )
 
 
 def _sample_plan() -> ResearchPlan:
+    """Return a representative research plan fixture for council tests."""
     return ResearchPlan(
         goal="Answer the brief",
         key_questions=["What changed?", "Why does it matter?"],
@@ -62,6 +68,7 @@ def _sample_plan() -> ResearchPlan:
 
 
 def _import_council_module():
+    """Import the council checkpoint module after clearing any cached copy."""
     _clear_council_module()
     return importlib.import_module("deep_research.checkpoints.council")
 
@@ -111,19 +118,18 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
     ledger = EvidenceLedger(entries=[])
     captured = []
 
-    def fake_execute(plan_arg, ledger_arg, iteration_arg, config_arg, model_name=None):
+    def fake_execute(plan_arg, ledger_arg, iteration_arg, config_arg):
         captured.append(
             {
                 "plan": plan_arg,
                 "ledger": ledger_arg,
                 "iteration": iteration_arg,
                 "config": config_arg,
-                "model_name": model_name,
             }
         )
         return SupervisorCheckpointResult(raw_results=[])
 
-    monkeypatch.setattr(module, "_execute_supervisor_turn", fake_execute)
+    monkeypatch.setattr(module, "run_supervisor", fake_execute)
 
     result = module.run_council_generator(
         plan,
@@ -139,8 +145,9 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
             "plan": plan,
             "ledger": ledger,
             "iteration": 2,
-            "config": config,
-            "model_name": "override-supervisor-model",
+            "config": config.model_copy(
+                update={"supervisor_model": "override-supervisor-model"}
+            ),
         }
     ]
     assert ("run_council_generator", "llm_call") in decorated

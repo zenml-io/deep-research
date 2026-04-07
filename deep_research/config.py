@@ -40,6 +40,8 @@ class ResearchSettings(BaseSettings):
     curator_model: str = "gemini/gemini-2.0-flash-lite"
     writer_model: str = "gemini/gemini-2.5-flash"
     aggregator_model: str = "openai/gpt-4o-mini"
+    review_model: str = "anthropic/claude-sonnet-4-20250514"
+    judge_model: str = "openai/gpt-4o-mini"
 
 
 class ResearchConfig(BaseModel):
@@ -54,6 +56,9 @@ class ResearchConfig(BaseModel):
     require_plan_approval: bool = True
     convergence_epsilon: float = 0.05
     convergence_min_coverage: float = 0.60
+    source_quality_floor: float = 0.30
+    max_tool_calls_per_cycle: int
+    tool_timeout_sec: int
     classifier_model: str
     planner_model: str
     supervisor_model: str
@@ -61,6 +66,8 @@ class ResearchConfig(BaseModel):
     curator_model: str
     writer_model: str
     aggregator_model: str
+    review_model: str
+    judge_model: str
 
     @classmethod
     def for_tier(
@@ -107,6 +114,9 @@ class ResearchConfig(BaseModel):
             require_plan_approval=base.requires_plan_approval,
             convergence_epsilon=settings.convergence_epsilon,
             convergence_min_coverage=settings.convergence_min_coverage,
+            source_quality_floor=settings.source_quality_floor,
+            max_tool_calls_per_cycle=settings.max_tool_calls_per_cycle,
+            tool_timeout_sec=settings.tool_timeout_sec,
             classifier_model=settings.classifier_model,
             planner_model=settings.planner_model,
             supervisor_model=settings.supervisor_model,
@@ -114,4 +124,6 @@ class ResearchConfig(BaseModel):
             curator_model=settings.curator_model,
             writer_model=settings.writer_model,
             aggregator_model=settings.aggregator_model,
+            review_model=settings.review_model,
+            judge_model=settings.judge_model,
         )

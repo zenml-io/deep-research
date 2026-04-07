@@ -4,10 +4,14 @@ import types
 
 
 def _install_agent_stubs(monkeypatch):
+    """Install fake Agent and prompt-loader stubs for factory tests."""
     wrap_calls = []
     prompt_calls = []
 
     allowed_output_types = {
+        "CoherenceResult",
+        "CritiqueResult",
+        "GroundingResult",
         "RequestClassification",
         "ResearchPlan",
         "SupervisorCheckpointResult",
@@ -72,6 +76,7 @@ def _install_agent_stubs(monkeypatch):
 
 
 def _load_module(name: str):
+    """Import a module after clearing its cached copy from sys.modules."""
     sys.modules.pop(name, None)
     return importlib.import_module(name)
 
@@ -165,3 +170,20 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
     supervisor_agent = wrapped_agents[2]["agent"]
     assert len(supervisor_agent.kwargs["toolsets"]) == 1
     assert len(supervisor_agent.kwargs["tools"]) == 1
+
+
+def test_agent_factories_build_reviewer_and_judges(monkeypatch) -> None:
+    wrap_calls, prompt_calls = _install_agent_stubs(monkeypatch)
+
+    reviewer = _load_module("deep_research.agents.reviewer")
+    judge = _load_module("deep_research.agents.judge")
+
+    reviewer_agent = reviewer.build_reviewer_agent(model_name="review-model")
+    grounding_agent = judge.build_grounding_judge_agent(model_name="judge-model")
+    coherence_agent = judge.build_coherence_judge_agent(model_name="judge-model")
+
+    assert len([reviewer_agent, grounding_agent, coherence_agent]) == 3
+    assert prompt_calls == ["reviewer", "judge_grounding", "judge_coherence"]
+    assert wrap_calls[0]["agent"].kwargs["output_type"].__name__ == "CritiqueResult"
+    assert wrap_calls[1]["agent"].kwargs["output_type"].__name__ == "GroundingResult"
+    assert wrap_calls[2]["agent"].kwargs["output_type"].__name__ == "CoherenceResult"

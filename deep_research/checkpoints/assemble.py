@@ -1,7 +1,10 @@
 from kitaru import checkpoint
 
 from deep_research.models import (
+    CoherenceResult,
+    CritiqueResult,
     EvidenceLedger,
+    GroundingResult,
     InvestigationPackage,
     IterationTrace,
     RenderPayload,
@@ -20,6 +23,9 @@ def assemble_package(
     selection_graph: SelectionGraph,
     iteration_trace: IterationTrace,
     renders: list[RenderPayload],
+    critique_result: CritiqueResult | None = None,
+    grounding_result: GroundingResult | None = None,
+    coherence_result: CoherenceResult | None = None,
 ) -> InvestigationPackage:
     """Checkpoint: combine all research artifacts into the final investigation package."""
     return _assemble_package(
@@ -29,4 +35,7 @@ def assemble_package(
         selection_graph=selection_graph,
         iteration_trace=iteration_trace,
         renders=renders,
+        critique_result=critique_result,
+        grounding_result=grounding_result,
+        coherence_result=coherence_result,
     )

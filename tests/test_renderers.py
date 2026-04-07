@@ -28,6 +28,8 @@ def _as_checkpoint(func):
 
 
 def _install_kitaru_stub() -> None:
+    """Install lightweight Kitaru and PydanticAI stubs for renderer tests."""
+
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
@@ -62,6 +64,7 @@ def _install_kitaru_stub() -> None:
 
 @contextmanager
 def _preserve_modules(*names: str):
+    """Temporarily preserve selected modules while import-time stubs are installed."""
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -75,6 +78,7 @@ def _preserve_modules(*names: str):
 
 
 def _load_module(module_name: str):
+    """Import a module under temporary Kitaru stubs and then restore globals."""
     with _preserve_modules("kitaru", "kitaru.adapters", "pydantic_ai"):
         _install_kitaru_stub()
         sys.modules.pop(module_name, None)
@@ -83,6 +87,7 @@ def _load_module(module_name: str):
 
 
 def _make_package() -> InvestigationPackage:
+    """Build a minimal package fixture for renderer-level tests."""
     return InvestigationPackage(
         run_summary=RunSummary(
             run_id="run-1",
@@ -109,6 +114,7 @@ def _make_package() -> InvestigationPackage:
 
 
 def _assert_iso8601_timestamp(value: str | None) -> None:
+    """Assert that a render timestamp is present and ISO-8601 parseable."""
     assert isinstance(value, str)
     datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -145,12 +151,43 @@ def test_render_reading_path_returns_markdown_payload() -> None:
                 "citation": "[1]",
                 "candidate_key": "a",
                 "rationale": "useful",
+                "bridge_note": None,
+                "matched_subtopics": [],
+                "reading_time_minutes": None,
+                "ordering_rationale": None,
             }
-        ]
+        ],
+        "gap_coverage_summary": [],
     }
     assert payload.citation_map == {"[1]": "a"}
     _assert_iso8601_timestamp(payload.generated_at)
     assert module.render_reading_path._checkpoint_type == "llm_call"
+
+
+def test_render_reading_path_handles_richer_selection_items() -> None:
+    module = _load_module("deep_research.renderers.reading_path")
+    selection = SelectionGraph(
+        items=[
+            SelectionItem(
+                candidate_key="candidate-1",
+                rationale="Foundational source.",
+                bridge_note="Read before the operational guide.",
+                matched_subtopics=["replay"],
+                reading_time_minutes=12,
+                ordering_rationale="Most authoritative first.",
+            )
+        ],
+        gap_coverage_summary=["operations"],
+    )
+
+    payload = module.render_reading_path(selection)
+
+    assert "Foundational source." in payload.content_markdown
+    assert "Bridge: Read before the operational guide." in payload.content_markdown
+    assert "Subtopics: replay" in payload.content_markdown
+    assert "Uncovered subtopics: operations" in payload.content_markdown
+    assert payload.structured_content["items"][0]["candidate_key"] == "candidate-1"
+    assert payload.structured_content["gap_coverage_summary"] == ["operations"]
 
 
 def test_render_backing_report_returns_goal_and_selected_count() -> None:
@@ -239,10 +276,12 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -263,12 +302,16 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "merge_evidence",
-        _as_checkpoint(lambda scored, ledger: ledger),
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -321,3 +364,119 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         "reading_path",
         "backing_report",
     ]
+
+
+def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
+    module = _load_module("deep_research.flow.research_flow")
+    merge_calls = []
+
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda brief, config: types.SimpleNamespace(
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda brief, classification, tier: ResearchPlan(
+                goal="Answer the brief",
+                key_questions=["What matters?"],
+                subtopics=["core"],
+                queries=["example query"],
+                sections=["Overview"],
+                success_criteria=["Produce a summary"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: types.SimpleNamespace(
+                candidates=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(
+            lambda scored, ledger, *, config=None: (
+                merge_calls.append((scored, ledger, config)) or ledger
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True,
+            reason=module.StopReason.CONVERGED,
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_reading_path",
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path", content_markdown="# Reading Path\n"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_backing_report",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report", content_markdown="# Backing Report\n"
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+
+    module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.STANDARD).model_copy(
+            update={"source_quality_floor": 0.45}
+        ),
+    )
+
+    assert len(merge_calls) == 1
+    _, _, received_config = merge_calls[0]
+    assert received_config is not None
+    assert received_config.source_quality_floor == 0.45

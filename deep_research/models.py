@@ -1,11 +1,16 @@
+import json
+from datetime import datetime as _datetime
 from math import isfinite
 from typing import Literal
 
 from pydantic import (
     AnyUrl,
     BaseModel,
+    computed_field,
     ConfigDict,
     Field,
+    StrictFloat,
+    StrictInt,
     field_validator,
     model_validator,
 )
@@ -18,16 +23,31 @@ class StrictBaseModel(BaseModel):
 
 
 def _validate_iso8601_timestamp(value: str | None) -> str | None:
+    """Return a timestamp only if it parses as an ISO-8601 string."""
     if value is None:
         return None
 
     normalized_value = value.replace("Z", "+00:00")
     try:
-        __import__("datetime").datetime.fromisoformat(normalized_value)
+        _datetime.fromisoformat(normalized_value)
     except ValueError as exc:
         raise ValueError("timestamp must be a parseable ISO-8601 string") from exc
 
     return value
+
+
+def _validate_json_mapping_keys(value: object) -> None:
+    """Recursively require string keys in nested raw_metadata mappings."""
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if not isinstance(key, str):
+                raise ValueError("raw_metadata mapping keys must be strings")
+            _validate_json_mapping_keys(nested_value)
+        return
+
+    if isinstance(value, list | tuple):
+        for item in value:
+            _validate_json_mapping_keys(item)
 
 
 class ResearchPlan(StrictBaseModel):
@@ -58,6 +78,12 @@ class EvidenceCandidate(StrictBaseModel):
     source_kind: SourceKind
     quality_score: float = 0.0
     relevance_score: float = 0.0
+    authority_score: float = 0.0
+    freshness_score: float = 0.0
+    matched_subtopics: list[str] = Field(default_factory=list)
+    doi: str | None = None
+    arxiv_id: str | None = None
+    raw_metadata: dict[str, object] = Field(default_factory=dict)
     selected: bool = False
 
     @model_validator(mode="after")
@@ -66,27 +92,90 @@ class EvidenceCandidate(StrictBaseModel):
             raise ValueError("quality_score must be between 0.0 and 1.0")
         if not 0.0 <= self.relevance_score <= 1.0:
             raise ValueError("relevance_score must be between 0.0 and 1.0")
+        if not 0.0 <= self.authority_score <= 1.0:
+            raise ValueError("authority_score must be between 0.0 and 1.0")
+        if not 0.0 <= self.freshness_score <= 1.0:
+            raise ValueError("freshness_score must be between 0.0 and 1.0")
+        try:
+            _validate_json_mapping_keys(self.raw_metadata)
+            json.dumps(self.raw_metadata, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("raw_metadata must be JSON-serializable") from exc
         return self
 
 
+class DedupeEvent(StrictBaseModel):
+    duplicate_key: str
+    canonical_key: str
+    match_basis: Literal["doi", "arxiv_id", "canonical_url", "title"]
+
+
 class EvidenceLedger(StrictBaseModel):
-    entries: list[EvidenceCandidate] = Field(default_factory=list)
+    considered: list[EvidenceCandidate] = Field(default_factory=list)
+    selected: list[EvidenceCandidate] = Field(default_factory=list)
+    rejected: list[EvidenceCandidate] = Field(default_factory=list)
+    dedupe_log: list[DedupeEvent] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_considered_from_entries(cls, data: object) -> object:
+        if isinstance(data, dict) and "entries" in data:
+            data = dict(data)
+            entries = data.pop("entries")
+            if "considered" not in data:
+                data["considered"] = entries
+            else:
+                normalized_considered = [
+                    EvidenceCandidate.model_validate(candidate)
+                    for candidate in data["considered"]
+                ]
+                normalized_entries = [
+                    EvidenceCandidate.model_validate(candidate) for candidate in entries
+                ]
+                if normalized_considered != normalized_entries:
+                    raise ValueError(
+                        "entries must match considered when both are provided"
+                    )
+        return data
+
+    @computed_field
+    @property
+    def entries(self) -> list[EvidenceCandidate]:
+        return self.considered
 
 
 class SelectionItem(StrictBaseModel):
     candidate_key: str
     rationale: str
+    bridge_note: str | None = None
+    matched_subtopics: list[str] = Field(default_factory=list)
+    reading_time_minutes: StrictInt | None = None
+    ordering_rationale: str | None = None
+
+    @model_validator(mode="after")
+    def validate_reading_time(self) -> "SelectionItem":
+        if self.reading_time_minutes is not None and self.reading_time_minutes < 0:
+            raise ValueError("reading_time_minutes must be non-negative")
+        return self
 
 
 class SelectionGraph(StrictBaseModel):
     items: list[SelectionItem] = Field(default_factory=list)
+    gap_coverage_summary: list[str] = Field(default_factory=list)
 
 
 class IterationRecord(StrictBaseModel):
-    iteration: int
-    new_candidate_count: int = 0
-    coverage: float = 0.0
-    estimated_cost_usd: float = 0.0
+    iteration: StrictInt
+    new_candidate_count: StrictInt = 0
+    accepted_candidate_count: StrictInt = 0
+    rejected_candidate_count: StrictInt = 0
+    coverage: StrictFloat = 0.0
+    coverage_delta: StrictFloat = 0.0
+    uncovered_subtopics: list[str] = Field(default_factory=list)
+    estimated_cost_usd: StrictFloat = 0.0
+    tool_calls: list["ToolCallRecord"] = Field(default_factory=list)
+    continue_reason: str | None = None
+    stop_reason: StopReason | None = None
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "IterationRecord":
@@ -94,8 +183,14 @@ class IterationRecord(StrictBaseModel):
             raise ValueError("iteration must be non-negative")
         if self.new_candidate_count < 0:
             raise ValueError("new_candidate_count must be non-negative")
+        if self.accepted_candidate_count < 0:
+            raise ValueError("accepted_candidate_count must be non-negative")
+        if self.rejected_candidate_count < 0:
+            raise ValueError("rejected_candidate_count must be non-negative")
         if not 0.0 <= self.coverage <= 1.0:
             raise ValueError("coverage must be between 0.0 and 1.0")
+        if not isfinite(self.coverage_delta):
+            raise ValueError("coverage_delta must be finite")
         if not isfinite(self.estimated_cost_usd):
             raise ValueError("estimated_cost_usd must be finite")
         if self.estimated_cost_usd < 0.0:
@@ -105,6 +200,64 @@ class IterationRecord(StrictBaseModel):
 
 class IterationTrace(StrictBaseModel):
     iterations: list[IterationRecord] = Field(default_factory=list)
+
+
+class CritiqueDimensionScore(StrictBaseModel):
+    name: str
+    score: StrictFloat
+    rationale: str
+
+    @model_validator(mode="after")
+    def validate_score(self) -> "CritiqueDimensionScore":
+        if not 0.0 <= self.score <= 1.0:
+            raise ValueError("score must be between 0.0 and 1.0")
+        return self
+
+
+class CritiqueResult(StrictBaseModel):
+    dimensions: list[CritiqueDimensionScore] = Field(default_factory=list)
+    summary: str
+    revision_suggestions: list[str] = Field(default_factory=list)
+    revision_recommended: bool = False
+
+
+class GroundingVerdict(StrictBaseModel):
+    citation: str
+    candidate_key: str | None = None
+    supported: bool
+    rationale: str
+
+
+class GroundingResult(StrictBaseModel):
+    score: StrictFloat
+    verdicts: list[GroundingVerdict] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_score(self) -> "GroundingResult":
+        if not 0.0 <= self.score <= 1.0:
+            raise ValueError("score must be between 0.0 and 1.0")
+        return self
+
+
+class CoherenceResult(StrictBaseModel):
+    relevance: StrictFloat
+    logical_flow: StrictFloat
+    completeness: StrictFloat
+    consistency: StrictFloat
+    summary: str
+
+    @model_validator(mode="after")
+    def validate_scores(self) -> "CoherenceResult":
+        for field_name in (
+            "relevance",
+            "logical_flow",
+            "completeness",
+            "consistency",
+        ):
+            value = getattr(self, field_name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{field_name} must be between 0.0 and 1.0")
+        return self
 
 
 class RenderPayload(StrictBaseModel):
@@ -168,13 +321,17 @@ class InvestigationPackage(StrictBaseModel):
     selection_graph: SelectionGraph
     iteration_trace: IterationTrace
     renders: list[RenderPayload]
+    critique_result: CritiqueResult | None = None
+    grounding_result: GroundingResult | None = None
+    coherence_result: CoherenceResult | None = None
 
 
 class CoverageScore(StrictBaseModel):
-    subtopic_coverage: float
-    source_diversity: float
-    evidence_density: float
-    total: float
+    subtopic_coverage: StrictFloat
+    source_diversity: StrictFloat
+    evidence_density: StrictFloat
+    total: StrictFloat
+    uncovered_subtopics: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_bounds(self) -> "CoverageScore":

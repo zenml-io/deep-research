@@ -10,11 +10,15 @@ from deep_research.checkpoints.council import (
     run_council_generator,
 )
 from deep_research.checkpoints.assemble import assemble_package
+from deep_research.checkpoints.coherence import judge_coherence
 from deep_research.checkpoints.evaluate import evaluate_coverage
+from deep_research.checkpoints.grounding import judge_grounding
 from deep_research.checkpoints.merge import merge_evidence
 from deep_research.checkpoints.normalize import normalize_evidence
 from deep_research.checkpoints.plan import build_plan
+from deep_research.checkpoints.review import review_renders
 from deep_research.checkpoints.relevance import score_relevance
+from deep_research.checkpoints.revise import revise_renders
 from deep_research.checkpoints.select import build_selection_graph
 from deep_research.checkpoints.supervisor import run_supervisor
 from deep_research.config import ResearchConfig
@@ -26,9 +30,14 @@ from deep_research.models import (
     IterationRecord,
     IterationTrace,
     RunSummary,
+    ToolCallRecord,
+    CoherenceResult,
+    CritiqueResult,
+    GroundingResult,
 )
 from deep_research.renderers.backing_report import render_backing_report
 from deep_research.renderers.reading_path import render_reading_path
+
 
 CLASSIFY_CHECKPOINT_NAME = "classify_request"
 PLAN_CHECKPOINT_NAME = "build_plan"
@@ -36,44 +45,6 @@ SUPERVISOR_CHECKPOINT_NAME = "run_supervisor"
 COUNCIL_GENERATOR_CHECKPOINT_NAME = "run_council_generator"
 APPROVE_PLAN_WAIT_NAME = "approve_plan"
 CLARIFY_BRIEF_WAIT_NAME = "clarify_brief"
-
-
-def _run_iteration(plan, ledger, iteration, config, council_models):
-    """Execute one research iteration via council mode or single supervisor."""
-    if config.council_mode:
-        futures = [
-            run_council_generator.submit(
-                plan,
-                ledger,
-                iteration,
-                model_name,
-                config,
-                id=f"council_{index}",
-            )
-            for index, model_name in enumerate(council_models)
-        ]
-        return aggregate_council_results([f.load() for f in futures])
-    return run_supervisor.submit(plan, ledger, iteration, config).load()
-
-
-def _resolve_runtime_config(
-    config: ResearchConfig | None,
-    resolved_tier: Tier,
-    preserve_overrides: bool = False,
-) -> ResearchConfig:
-    """Return a ResearchConfig aligned to the resolved tier, merging any overrides."""
-    base_config = ResearchConfig.for_tier(resolved_tier)
-    if config is None or not preserve_overrides:
-        return base_config
-    if config.tier == resolved_tier:
-        return config
-    overrides = config.model_dump()
-    overrides["tier"] = resolved_tier
-    return base_config.model_copy(update=overrides)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @flow
@@ -86,11 +57,14 @@ def research_flow(
     user_config = config
     classification = classify_request.submit(brief, config).load()
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
-    config = _resolve_runtime_config(
-        user_config,
-        resolved_tier,
-        preserve_overrides=user_config is not None,
-    )
+    config = ResearchConfig.for_tier(resolved_tier)
+    if user_config is not None:
+        if user_config.tier == resolved_tier:
+            config = user_config
+        else:
+            overrides = user_config.model_dump()
+            overrides["tier"] = resolved_tier
+            config = config.model_copy(update=overrides)
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
@@ -102,11 +76,14 @@ def research_flow(
         resolved_tier = (
             classification.recommended_tier if tier == "auto" else Tier(tier)
         )
-        config = _resolve_runtime_config(
-            user_config,
-            resolved_tier,
-            preserve_overrides=user_config is not None,
-        )
+        config = ResearchConfig.for_tier(resolved_tier)
+        if user_config is not None:
+            if user_config.tier == resolved_tier:
+                config = user_config
+            else:
+                overrides = user_config.model_dump()
+                overrides["tier"] = resolved_tier
+                config = config.model_copy(update=overrides)
 
     plan = build_plan.submit(brief, classification, config.tier).load()
     if config.require_plan_approval:
@@ -128,16 +105,29 @@ def research_flow(
     stop_reason = StopReason.MAX_ITERATIONS
     start_time = monotonic()
     elapsed_seconds = 0
-    started_at = _utc_now_iso()
+    started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     for iteration in range(config.max_iterations):
-        supervisor_result = _run_iteration(
-            plan,
-            ledger,
-            iteration,
-            config,
-            council_models,
-        )
+        if config.council_mode:
+            futures = [
+                run_council_generator.submit(
+                    plan,
+                    ledger,
+                    iteration,
+                    model_name,
+                    config,
+                    id=f"council_{index}",
+                )
+                for index, model_name in enumerate(council_models)
+            ]
+            supervisor_result = aggregate_council_results([f.load() for f in futures])
+        else:
+            supervisor_result = run_supervisor.submit(
+                plan,
+                ledger,
+                iteration,
+                config,
+            ).load()
         supervisor_cost = supervisor_result.budget.estimated_cost_usd
         spent_usd += supervisor_cost
         for raw_result in supervisor_result.raw_results:
@@ -161,21 +151,48 @@ def research_flow(
         ledger = merge_evidence.submit(
             relevance_result.candidates,
             ledger,
+            config=config,
         ).load()
         coverage = evaluate_coverage.submit(ledger, plan).load()
-        iteration_history.append(
-            IterationRecord(
-                iteration=iteration,
-                new_candidate_count=len(candidates),
-                coverage=coverage.total,
-                estimated_cost_usd=iteration_cost,
+        previous_coverage = iteration_history[-1].coverage if iteration_history else 0.0
+        coverage_delta = round(coverage.total - previous_coverage, 6)
+        uncovered_subtopics = list(coverage.uncovered_subtopics)
+        tool_calls: list[ToolCallRecord] = []
+        for raw_result in supervisor_result.raw_results:
+            provider_label = (
+                f" via {raw_result.provider}" if raw_result.provider else ""
             )
+            if raw_result.ok:
+                summary = f"{raw_result.tool_name}{provider_label} succeeded"
+                status = "ok"
+            else:
+                detail = f": {raw_result.error}" if raw_result.error else ""
+                summary = f"{raw_result.tool_name}{provider_label} failed{detail}"
+                status = "error"
+            tool_calls.append(
+                ToolCallRecord(
+                    tool_name=raw_result.tool_name,
+                    status=status,
+                    provider=raw_result.provider,
+                    summary=summary,
+                )
+            )
+        iteration_record = IterationRecord(
+            iteration=iteration,
+            new_candidate_count=len(candidates),
+            accepted_candidate_count=len(ledger.selected),
+            rejected_candidate_count=len(ledger.rejected),
+            coverage=coverage.total,
+            coverage_delta=coverage_delta,
+            uncovered_subtopics=uncovered_subtopics,
+            estimated_cost_usd=iteration_cost,
+            tool_calls=tool_calls,
         )
 
         elapsed_seconds = int(monotonic() - start_time)
         decision = check_convergence(
             coverage,
-            iteration_history[:-1],
+            iteration_history,
             spent_usd=spent_usd,
             elapsed_seconds=elapsed_seconds,
             max_iterations=config.max_iterations,
@@ -183,8 +200,37 @@ def research_flow(
             min_coverage=config.convergence_min_coverage,
             budget_limit_usd=config.cost_budget_usd,
             time_limit_seconds=config.time_box_seconds,
+            new_candidate_count=iteration_record.new_candidate_count,
         )
-        log(iteration=iteration, coverage=coverage.total, spent_usd=spent_usd)
+        continue_reason = (
+            None
+            if decision.should_stop
+            else (
+                "remaining uncovered subtopics: " + ", ".join(uncovered_subtopics)
+                if uncovered_subtopics
+                else f"coverage improved by {coverage_delta:.2f}; continue exploring"
+            )
+        )
+        iteration_record = iteration_record.model_copy(
+            update={
+                "continue_reason": continue_reason,
+                "stop_reason": decision.reason if decision.should_stop else None,
+            }
+        )
+        iteration_history.append(iteration_record)
+        log(
+            iteration=iteration,
+            coverage=coverage.total,
+            coverage_delta=coverage_delta,
+            uncovered_subtopics=uncovered_subtopics,
+            new_candidate_count=iteration_record.new_candidate_count,
+            accepted_candidate_count=iteration_record.accepted_candidate_count,
+            rejected_candidate_count=iteration_record.rejected_candidate_count,
+            tool_summaries=[tool_call.summary for tool_call in tool_calls],
+            stop_reason=iteration_record.stop_reason,
+            continue_reason=continue_reason,
+            spent_usd=round(spent_usd, 6),
+        )
         if decision.should_stop:
             stop_reason = decision.reason or StopReason.MAX_ITERATIONS
             break
@@ -194,7 +240,28 @@ def research_flow(
     backing_future = render_backing_report.submit(selection, ledger, plan)
     reading_render = reading_future.load()
     backing_render = backing_future.load()
-    completed_at = _utc_now_iso()
+    critique_result: CritiqueResult | None = None
+    grounding_result: GroundingResult | None = None
+    coherence_result: CoherenceResult | None = None
+    renders = [reading_render, backing_render]
+
+    if config.critique_enabled:
+        critique_result = review_renders.submit(
+            renders,
+            plan,
+            selection,
+            ledger,
+            config,
+        ).load()
+        renders = revise_renders.submit(renders, critique_result, plan).load()
+
+    if config.judge_enabled:
+        grounding_future = judge_grounding.submit(renders, ledger, config)
+        coherence_future = judge_coherence.submit(renders, plan, config)
+        grounding_result = grounding_future.load()
+        coherence_result = coherence_future.load()
+
+    completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     elapsed_seconds = int(monotonic() - start_time)
     return assemble_package(
         run_summary=RunSummary(
@@ -217,5 +284,8 @@ def research_flow(
         evidence_ledger=ledger,
         selection_graph=selection,
         iteration_trace=IterationTrace(iterations=iteration_history),
-        renders=[reading_render, backing_render],
+        renders=renders,
+        critique_result=critique_result,
+        grounding_result=grounding_result,
+        coherence_result=coherence_result,
     )

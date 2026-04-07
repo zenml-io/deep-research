@@ -13,4 +13,5 @@ _DEFAULT_QUALITY = 0.4
 
 def score_candidate_quality(candidate: EvidenceCandidate) -> float:
     """Return a quality score based on the candidate's source kind."""
-    return _QUALITY_BY_SOURCE_KIND.get(candidate.source_kind, _DEFAULT_QUALITY)
+    base_score = _QUALITY_BY_SOURCE_KIND.get(candidate.source_kind, _DEFAULT_QUALITY)
+    return round(max(base_score, candidate.authority_score), 4)

@@ -32,6 +32,7 @@ def _as_checkpoint(func):
 
 @contextmanager
 def _preserve_modules(*names: str):
+    """Temporarily preserve selected modules while integration stubs are active."""
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -45,6 +46,8 @@ def _preserve_modules(*names: str):
 
 
 def _load_research_flow_module():
+    """Import the flow module under lightweight integration-time stubs."""
+
     class FakeHandle:
         def __init__(self, value):
             self._value = value
@@ -88,6 +91,7 @@ def _load_research_flow_module():
 
 
 def _sample_plan() -> ResearchPlan:
+    """Return a representative research plan fixture for integration tests."""
     return ResearchPlan(
         goal="Learn Kitaru",
         key_questions=["What is it?"],
@@ -99,6 +103,7 @@ def _sample_plan() -> ResearchPlan:
 
 
 def _sample_supervisor_result() -> SupervisorCheckpointResult:
+    """Return a minimal supervisor result fixture for integration tests."""
     return SupervisorCheckpointResult(
         raw_results=[
             RawToolResult(
@@ -112,6 +117,7 @@ def _sample_supervisor_result() -> SupervisorCheckpointResult:
 
 
 def _sample_coverage() -> CoverageScore:
+    """Return a full-coverage fixture used by integration happy paths."""
     return CoverageScore(
         subtopic_coverage=1.0,
         source_diversity=1.0,
@@ -121,6 +127,7 @@ def _sample_coverage() -> CoverageScore:
 
 
 def _patch_success_path(module, monkeypatch) -> None:
+    """Patch the research flow module into a single-iteration happy path."""
     monkeypatch.setattr(
         module,
         "build_plan",
@@ -144,7 +151,7 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "merge_evidence",
-        _as_checkpoint(lambda scored, ledger: ledger),
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
@@ -180,6 +187,43 @@ def _patch_success_path(module, monkeypatch) -> None:
             lambda selection, ledger, plan: RenderPayload(
                 name="backing_report",
                 content_markdown="# BR\n",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CritiqueResult(
+                dimensions=[],
+                summary="critique",
+                revision_suggestions=[],
+                revision_recommended=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CoherenceResult(
+                relevance=1.0,
+                logical_flow=1.0,
+                completeness=1.0,
+                consistency=1.0,
+                summary="coherent",
             )
         ),
     )
@@ -224,13 +268,71 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         "run_supervisor",
         _as_checkpoint(lambda *args, **kwargs: _sample_supervisor_result()),
     )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CritiqueResult(
+                dimensions=[],
+                summary="critique",
+                revision_suggestions=["tighten"],
+                revision_recommended=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CoherenceResult(
+                relevance=1.0,
+                logical_flow=1.0,
+                completeness=1.0,
+                consistency=1.0,
+                summary="coherent",
+            )
+        ),
+    )
 
     handle = module.research_flow.run(
-        "learn kitaru", config=ResearchConfig.for_tier(Tier.STANDARD)
+        "learn kitaru", config=ResearchConfig.for_tier(Tier.DEEP)
     )
     result = handle.wait()
 
     assert result is not None
+    record = result.iteration_trace.iterations[0]
+
+    assert record.new_candidate_count == 0
+    assert record.accepted_candidate_count == 0
+    assert record.rejected_candidate_count == 0
+    assert record.coverage == 1.0
+    assert record.coverage_delta == 1.0
+    assert record.uncovered_subtopics == []
+    assert record.tool_calls == [
+        module.ToolCallRecord(
+            tool_name="search",
+            status="ok",
+            provider="test",
+            summary="search via test succeeded",
+        )
+    ]
+    assert record.continue_reason is None
+    assert record.stop_reason is StopReason.CONVERGED
+    assert result.critique_result.summary == "critique"
+    assert result.grounding_result.score == 1.0
+    assert result.coherence_result.summary == "coherent"
 
 
 def test_council_flow_aggregates_multiple_generator_results(monkeypatch) -> None:

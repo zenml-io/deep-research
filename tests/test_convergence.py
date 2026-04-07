@@ -1,9 +1,36 @@
 from deep_research.enums import StopReason
 from deep_research.flow.convergence import check_convergence
 from deep_research.models import CoverageScore, IterationRecord
+import pytest
 
 
 def test_check_convergence_stops_on_coverage_target() -> None:
+    current = CoverageScore(
+        subtopic_coverage=0.8,
+        source_diversity=0.7,
+        evidence_density=0.7,
+        total=0.733,
+        uncovered_subtopics=[],
+    )
+    history = [IterationRecord(iteration=0, new_candidate_count=4, coverage=0.68)]
+
+    decision = check_convergence(
+        current,
+        history,
+        spent_usd=0.01,
+        elapsed_seconds=30,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=60,
+    )
+
+    assert decision.should_stop is True
+    assert decision.reason is StopReason.CONVERGED
+
+
+def test_check_convergence_preserves_legacy_total_threshold_when_gaps_omitted() -> None:
     current = CoverageScore(
         subtopic_coverage=0.8,
         source_diversity=0.7,
@@ -227,3 +254,155 @@ def test_check_convergence_does_not_stop_before_max_iterations_boundary() -> Non
 
     assert decision.should_stop is False
     assert decision.reason is None
+
+
+def test_check_convergence_stops_on_zero_novelty_stall() -> None:
+    current = CoverageScore(
+        subtopic_coverage=0.7,
+        source_diversity=0.62,
+        evidence_density=0.6,
+        total=0.64,
+    )
+    history = [IterationRecord(iteration=0, new_candidate_count=5, coverage=0.62)]
+
+    decision = check_convergence(
+        current,
+        history,
+        spent_usd=0.40,
+        elapsed_seconds=180,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=600,
+        new_candidate_count=0,
+    )
+
+    assert decision.should_stop is True
+    assert decision.reason is StopReason.LOOP_STALL
+
+
+def test_check_convergence_does_not_converge_on_full_subtopic_coverage_alone() -> None:
+    current = CoverageScore(
+        subtopic_coverage=1.0,
+        source_diversity=0.45,
+        evidence_density=0.5,
+        total=0.65,
+        uncovered_subtopics=[],
+    )
+
+    decision = check_convergence(
+        current,
+        [],
+        spent_usd=0.35,
+        elapsed_seconds=240,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=600,
+    )
+
+    assert decision.should_stop is False
+    assert decision.reason is None
+
+
+def test_check_convergence_does_not_converge_with_uncovered_subtopics_remaining() -> (
+    None
+):
+    current = CoverageScore(
+        subtopic_coverage=0.95,
+        source_diversity=0.72,
+        evidence_density=0.74,
+        total=0.72,
+        uncovered_subtopics=["regulatory-risks"],
+    )
+
+    decision = check_convergence(
+        current,
+        [],
+        spent_usd=0.20,
+        elapsed_seconds=120,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=600,
+    )
+
+    assert decision.should_stop is False
+    assert decision.reason is None
+
+
+def test_check_convergence_continues_on_low_gain_when_resources_remain() -> None:
+    current = CoverageScore(
+        subtopic_coverage=0.62,
+        source_diversity=0.55,
+        evidence_density=0.58,
+        total=0.57,
+    )
+    history = [IterationRecord(iteration=0, new_candidate_count=2, coverage=0.55)]
+
+    decision = check_convergence(
+        current,
+        history,
+        spent_usd=0.01,
+        elapsed_seconds=5,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=600,
+    )
+
+    assert decision.should_stop is False
+    assert decision.reason is None
+
+
+def test_check_convergence_does_not_stop_at_exact_epsilon_gain_boundary() -> None:
+    current = CoverageScore(
+        subtopic_coverage=0.62,
+        source_diversity=0.55,
+        evidence_density=0.58,
+        total=0.6,
+    )
+    history = [IterationRecord(iteration=0, new_candidate_count=2, coverage=0.55)]
+
+    decision = check_convergence(
+        current,
+        history,
+        spent_usd=0.60,
+        elapsed_seconds=400,
+        max_iterations=5,
+        epsilon=0.05,
+        min_coverage=0.70,
+        budget_limit_usd=1.0,
+        time_limit_seconds=600,
+    )
+
+    assert decision.should_stop is False
+    assert decision.reason is None
+
+
+def test_check_convergence_rejects_uncovered_subtopics_override_argument() -> None:
+    current = CoverageScore(
+        subtopic_coverage=0.8,
+        source_diversity=0.7,
+        evidence_density=0.7,
+        total=0.733,
+        uncovered_subtopics=[],
+    )
+
+    with pytest.raises(TypeError, match="uncovered_subtopics"):
+        check_convergence(
+            current,
+            [],
+            spent_usd=0.01,
+            elapsed_seconds=30,
+            max_iterations=5,
+            epsilon=0.05,
+            min_coverage=0.70,
+            budget_limit_usd=1.0,
+            time_limit_seconds=60,
+            uncovered_subtopics=(),
+        )

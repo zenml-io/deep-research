@@ -3,7 +3,19 @@ import sys
 import types
 from datetime import datetime
 
-from deep_research.models import SelectionGraph
+from deep_research.models import (
+    CoherenceResult,
+    CoverageScore,
+    CritiqueResult,
+    GroundingResult,
+    IterationBudget,
+    RenderPayload,
+    RequestClassification,
+    ResearchPlan,
+    RelevanceCheckpointResult,
+    SelectionGraph,
+    SupervisorCheckpointResult,
+)
 
 
 def _as_checkpoint(func):
@@ -18,6 +30,8 @@ def _as_checkpoint(func):
 
 
 def _load_research_flow_module():
+    """Import the flow module with lightweight Kitaru and PydanticAI test stubs."""
+
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
@@ -52,96 +66,290 @@ def _load_research_flow_module():
     return importlib.import_module("deep_research.flow.research_flow")
 
 
-def test_run_iteration_uses_council_when_enabled(monkeypatch) -> None:
+def test_research_flow_uses_council_path_when_enabled(monkeypatch) -> None:
     module = _load_research_flow_module()
-    called = {"council": False}
+    council_calls = []
 
-    result_obj = type(
-        "SupervisorCheckpointResult",
-        (),
-        {
-            "raw_results": [],
-            "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
-        },
-    )()
-
-    def fake_council_generator(*args, **kwargs):
-        called["council"] = True
-        return result_obj
-
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
-        module, "run_council_generator", _as_checkpoint(fake_council_generator)
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.DEEP,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
     )
-    monkeypatch.setattr(module, "aggregate_council_results", lambda results: result_obj)
-
-    module._run_iteration(
-        plan=None,
-        ledger=None,
-        iteration=0,
-        config=type("C", (), {"council_mode": True})(),
-        council_models=["m1", "m2", "m3"],
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda *args, **kwargs: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
     )
-
-    assert called["council"] is True
-
-
-def test_run_iteration_uses_supervisor_when_council_disabled(monkeypatch) -> None:
-    module = _load_research_flow_module()
-    called = {"supervisor": False}
-
-    result_obj = type(
-        "SupervisorCheckpointResult",
-        (),
-        {
-            "raw_results": [],
-            "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
-        },
-    )()
-
-    def fake_supervisor(*args, **kwargs):
-        called["supervisor"] = True
-        return result_obj
-
-    monkeypatch.setattr(module, "run_supervisor", _as_checkpoint(fake_supervisor))
-
-    result = module._run_iteration(
-        plan=None,
-        ledger=None,
-        iteration=0,
-        config=type("C", (), {"council_mode": False})(),
-        council_models=["m1"],
+    monkeypatch.setattr(
+        module,
+        "run_council_generator",
+        type(
+            "CouncilGenerator",
+            (),
+            {
+                "submit": staticmethod(
+                    lambda *args, **kwargs: types.SimpleNamespace(
+                        load=lambda: (
+                            council_calls.append((args, kwargs))
+                            or SupervisorCheckpointResult(
+                                raw_results=[],
+                                budget=IterationBudget(),
+                            )
+                        )
+                    )
+                )
+            },
+        )(),
     )
-
-    assert called["supervisor"] is True
-    assert result is result_obj
-
-
-def test_run_iteration_returns_supervisor_result(monkeypatch) -> None:
-    module = _load_research_flow_module()
-    payload = type(
-        "SupervisorCheckpointResult",
-        (),
-        {
-            "raw_results": [],
-            "budget": type("Budget", (), {"estimated_cost_usd": 0.0})(),
-        },
-    )()
-
+    monkeypatch.setattr(
+        module,
+        "aggregate_council_results",
+        lambda results: SupervisorCheckpointResult(
+            raw_results=[],
+            budget=IterationBudget(),
+        ),
+    )
     monkeypatch.setattr(
         module,
         "run_supervisor",
-        _as_checkpoint(lambda *args, **kwargs: payload),
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[], budget=IterationBudget()
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(
+            lambda ledger, plan: CoverageScore(
+                subtopic_coverage=1.0,
+                source_diversity=1.0,
+                evidence_density=1.0,
+                total=1.0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True, reason=module.StopReason.CONVERGED
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_reading_path",
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path", content_markdown="# RP"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_backing_report",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report", content_markdown="# BR"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CritiqueResult(dimensions=[], summary="skip")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CoherenceResult(
+                relevance=1.0,
+                logical_flow=1.0,
+                completeness=1.0,
+                consistency=1.0,
+                summary="coherent",
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.DEEP).model_copy(
+            update={"council_mode": True, "council_size": 3}
+        ),
     )
 
-    result = module._run_iteration(
-        plan=None,
-        ledger=None,
-        iteration=0,
-        config=type("C", (), {"council_mode": False})(),
-        council_models=["m1"],
+    assert len(council_calls) == 3
+
+
+def test_research_flow_uses_supervisor_path_when_council_disabled(monkeypatch) -> None:
+    module = _load_research_flow_module()
+    supervisor_calls = []
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda *args, **kwargs: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: (
+                supervisor_calls.append((args, kwargs))
+                or SupervisorCheckpointResult(raw_results=[], budget=IterationBudget())
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[], budget=IterationBudget()
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(
+            lambda ledger, plan: CoverageScore(
+                subtopic_coverage=1.0,
+                source_diversity=1.0,
+                evidence_density=1.0,
+                total=1.0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True, reason=module.StopReason.CONVERGED
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_reading_path",
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path", content_markdown="# RP"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_backing_report",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report", content_markdown="# BR"
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.STANDARD),
     )
 
-    assert result is payload
+    assert len(supervisor_calls) == 1
 
 
 def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
@@ -184,10 +392,12 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -204,12 +414,18 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -224,6 +440,40 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
         module,
         "build_selection_graph",
         _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CritiqueResult(
+                dimensions=[], summary="skipped"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CoherenceResult(
+                relevance=1.0,
+                logical_flow=1.0,
+                completeness=1.0,
+                consistency=1.0,
+                summary="coherent",
+            )
+        ),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -272,14 +522,14 @@ def test_research_flow_rebuilds_default_config_after_clarification_tier_change(
         ),
     )
 
-    def fake_run_iteration(plan, ledger, iteration, config, council_models, **kwargs):
+    def fake_run_supervisor(plan, ledger, iteration, config, **kwargs):
         observed_configs.append(config)
         return types.SimpleNamespace(
             raw_results=[],
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         )
 
-    monkeypatch.setattr(module, "_run_iteration", fake_run_iteration)
+    monkeypatch.setattr(module, "run_supervisor", _as_checkpoint(fake_run_supervisor))
     monkeypatch.setattr(
         module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
     )
@@ -294,12 +544,18 @@ def test_research_flow_rebuilds_default_config_after_clarification_tier_change(
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -314,6 +570,40 @@ def test_research_flow_rebuilds_default_config_after_clarification_tier_change(
         module,
         "build_selection_graph",
         _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CritiqueResult(
+                dimensions=[], summary="skipped"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: module.CoherenceResult(
+                relevance=1.0,
+                logical_flow=1.0,
+                completeness=1.0,
+                consistency=1.0,
+                summary="coherent",
+            )
+        ),
     )
     monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
 
@@ -354,10 +644,12 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -374,12 +666,18 @@ def test_research_flow_passes_elapsed_seconds_to_convergence(monkeypatch) -> Non
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=0.1)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=0.1, uncovered_subtopics=[]
+            )
+        ),
     )
 
     def fake_check_convergence(*args, **kwargs):
@@ -412,16 +710,76 @@ def test_research_flow_populates_phase_one_run_summary_metadata(monkeypatch) -> 
         [
             types.SimpleNamespace(
                 raw_results=[
-                    types.SimpleNamespace(provider="openai"),
-                    types.SimpleNamespace(provider="openai"),
-                    types.SimpleNamespace(provider="tavily"),
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="tavily", tool_name="search", ok=True, error=None
+                    ),
                 ],
                 budget=types.SimpleNamespace(estimated_cost_usd=1.25),
             ),
             types.SimpleNamespace(
                 raw_results=[
-                    types.SimpleNamespace(provider="openai"),
-                    types.SimpleNamespace(provider="serpapi"),
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="tavily", tool_name="search", ok=True, error=None
+                    ),
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=1.25),
+            ),
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="tavily", tool_name="search", ok=True, error=None
+                    ),
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=1.25),
+            ),
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="serpapi", tool_name="search", ok=True, error=None
+                    ),
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=2.0),
+            ),
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="serpapi", tool_name="search", ok=True, error=None
+                    ),
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=2.0),
+            ),
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        provider="openai", tool_name="search", ok=True, error=None
+                    ),
+                    types.SimpleNamespace(
+                        provider="serpapi", tool_name="search", ok=True, error=None
+                    ),
                 ],
                 budget=types.SimpleNamespace(estimated_cost_usd=2.0),
             ),
@@ -461,8 +819,23 @@ def test_research_flow_populates_phase_one_run_summary_metadata(monkeypatch) -> 
     )
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: next(supervisor_results),
+        "run_council_generator",
+        type(
+            "CouncilGenerator",
+            (),
+            {
+                "submit": staticmethod(
+                    lambda *args, **kwargs: types.SimpleNamespace(
+                        load=lambda: next(supervisor_results)
+                    )
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        module,
+        "aggregate_council_results",
+        lambda results: results[0],
     )
     monkeypatch.setattr(
         module,
@@ -475,13 +848,17 @@ def test_research_flow_populates_phase_one_run_summary_metadata(monkeypatch) -> 
         _as_checkpoint(lambda candidates, plan, config: next(relevance_results)),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
         _as_checkpoint(
-            lambda ledger, plan: types.SimpleNamespace(total=next(coverages))
+            lambda ledger, plan: types.SimpleNamespace(
+                total=next(coverages), uncovered_subtopics=[]
+            )
         ),
     )
     monkeypatch.setattr(
@@ -547,6 +924,211 @@ def test_research_flow_populates_phase_one_run_summary_metadata(monkeypatch) -> 
     ]
 
 
+def test_research_flow_records_richer_iteration_trace_and_logs_stop_metadata(
+    monkeypatch,
+) -> None:
+    module = _load_research_flow_module()
+    supervisor_results = iter(
+        [
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        tool_name="search",
+                        provider="openai",
+                        ok=True,
+                    ),
+                    types.SimpleNamespace(
+                        tool_name="browse",
+                        provider="tavily",
+                        ok=False,
+                        error="timeout",
+                    ),
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.6),
+            ),
+            types.SimpleNamespace(
+                raw_results=[
+                    types.SimpleNamespace(
+                        tool_name="search",
+                        provider="openai",
+                        ok=True,
+                    )
+                ],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.4),
+            ),
+        ]
+    )
+    relevance_results = iter(
+        [
+            types.SimpleNamespace(
+                candidates=[types.SimpleNamespace(key="accepted-1")],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.2),
+            ),
+            types.SimpleNamespace(
+                candidates=[types.SimpleNamespace(key="accepted-2")],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.3),
+            ),
+        ]
+    )
+    merged_ledgers = iter(
+        [
+            types.SimpleNamespace(
+                selected=[types.SimpleNamespace(key="accepted-1")],
+                rejected=[types.SimpleNamespace(key="rejected-1")],
+            ),
+            types.SimpleNamespace(
+                selected=[
+                    types.SimpleNamespace(key="accepted-1"),
+                    types.SimpleNamespace(key="accepted-2"),
+                ],
+                rejected=[types.SimpleNamespace(key="rejected-1")],
+            ),
+        ]
+    )
+    coverages = iter(
+        [
+            types.SimpleNamespace(total=0.35, uncovered_subtopics=["gaps-a", "gaps-b"]),
+            types.SimpleNamespace(total=0.8, uncovered_subtopics=[]),
+        ]
+    )
+    decisions = iter(
+        [
+            types.SimpleNamespace(should_stop=False, reason=None),
+            types.SimpleNamespace(
+                should_stop=True,
+                reason=module.StopReason.CONVERGED,
+            ),
+        ]
+    )
+    convergence_calls = []
+    log_calls = []
+
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda brief, config: types.SimpleNamespace(
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda brief, classification, tier: types.SimpleNamespace(goal="goal")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(lambda *args, **kwargs: next(supervisor_results)),
+    )
+    monkeypatch.setattr(
+        module,
+        "normalize_evidence",
+        _as_checkpoint(lambda raw_results: list(raw_results)),
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(lambda candidates, plan, config: next(relevance_results)),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: next(merged_ledgers)),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(lambda ledger, plan: next(coverages)),
+    )
+
+    def fake_check_convergence(*args, **kwargs):
+        kwargs["history_snapshot"] = list(args[1])
+        convergence_calls.append(kwargs)
+        return next(decisions)
+
+    monkeypatch.setattr(module, "check_convergence", fake_check_convergence)
+    monkeypatch.setattr(module, "log", lambda **kwargs: log_calls.append(kwargs))
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    package = module.research_flow.run("brief")
+
+    records = package["iteration_trace"].iterations
+
+    assert convergence_calls[0]["history_snapshot"] == []
+    assert len(convergence_calls[1]["history_snapshot"]) == 1
+    assert convergence_calls[1]["history_snapshot"][0].iteration == 0
+    assert convergence_calls[1]["history_snapshot"][0].coverage == 0.35
+    assert [call["new_candidate_count"] for call in convergence_calls] == [2, 1]
+    assert records[0].accepted_candidate_count == 1
+    assert records[0].rejected_candidate_count == 1
+    assert records[0].coverage_delta == 0.35
+    assert records[0].uncovered_subtopics == ["gaps-a", "gaps-b"]
+    assert records[0].tool_calls == [
+        module.ToolCallRecord(
+            tool_name="search",
+            status="ok",
+            provider="openai",
+            summary="search via openai succeeded",
+        ),
+        module.ToolCallRecord(
+            tool_name="browse",
+            status="error",
+            provider="tavily",
+            summary="browse via tavily failed: timeout",
+        ),
+    ]
+    assert records[0].stop_reason is None
+    assert records[0].continue_reason == "remaining uncovered subtopics: gaps-a, gaps-b"
+    assert records[1].accepted_candidate_count == 2
+    assert records[1].rejected_candidate_count == 1
+    assert records[1].coverage_delta == 0.45
+    assert records[1].uncovered_subtopics == []
+    assert records[1].stop_reason is module.StopReason.CONVERGED
+    assert records[1].continue_reason is None
+    assert log_calls == [
+        {
+            "iteration": 0,
+            "coverage": 0.35,
+            "coverage_delta": 0.35,
+            "uncovered_subtopics": ["gaps-a", "gaps-b"],
+            "new_candidate_count": 2,
+            "accepted_candidate_count": 1,
+            "rejected_candidate_count": 1,
+            "tool_summaries": [
+                "search via openai succeeded",
+                "browse via tavily failed: timeout",
+            ],
+            "stop_reason": None,
+            "continue_reason": "remaining uncovered subtopics: gaps-a, gaps-b",
+            "spent_usd": 0.8,
+        },
+        {
+            "iteration": 1,
+            "coverage": 0.8,
+            "coverage_delta": 0.45,
+            "uncovered_subtopics": [],
+            "new_candidate_count": 1,
+            "accepted_candidate_count": 2,
+            "rejected_candidate_count": 1,
+            "tool_summaries": ["search via openai succeeded"],
+            "stop_reason": module.StopReason.CONVERGED,
+            "continue_reason": None,
+            "spent_usd": 1.5,
+        },
+    ]
+
+
 def test_research_flow_records_completion_after_eager_render_loads(
     monkeypatch,
 ) -> None:
@@ -588,10 +1170,12 @@ def test_research_flow_records_completion_after_eager_render_loads(
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -608,12 +1192,18 @@ def test_research_flow_records_completion_after_eager_render_loads(
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -654,6 +1244,297 @@ def test_research_flow_records_completion_after_eager_render_loads(
     package = module.research_flow.run("brief")
 
     assert package["run_summary"].elapsed_seconds == 8
+
+
+def test_research_flow_preserves_disabled_critique_and_judges(monkeypatch) -> None:
+    module = _load_research_flow_module()
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda brief, classification, tier: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
+                raw_results=[],
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[],
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(
+            lambda ledger, plan: CoverageScore(
+                subtopic_coverage=1.0,
+                source_diversity=1.0,
+                evidence_density=1.0,
+                total=1.0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True,
+            reason=module.StopReason.CONVERGED,
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_reading_path",
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path",
+                content_markdown="# RP",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_backing_report",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report",
+                content_markdown="# BR",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "review_renders",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    package = module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.STANDARD),
+    )
+
+    assert package["critique_result"] is None
+    assert package["grounding_result"] is None
+    assert package["coherence_result"] is None
+
+
+def test_research_flow_runs_critique_and_judges_when_enabled(monkeypatch) -> None:
+    module = _load_research_flow_module()
+
+    critique = CritiqueResult(
+        dimensions=[],
+        summary="critique",
+        revision_suggestions=["tighten"],
+        revision_recommended=True,
+    )
+    coherence = CoherenceResult(
+        relevance=1.0,
+        logical_flow=1.0,
+        completeness=1.0,
+        consistency=1.0,
+        summary="coherent",
+    )
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.DEEP,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda brief, classification, tier: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
+                raw_results=[],
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[],
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_coverage",
+        _as_checkpoint(
+            lambda ledger, plan: CoverageScore(
+                subtopic_coverage=1.0,
+                source_diversity=1.0,
+                evidence_density=1.0,
+                total=1.0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True,
+            reason=module.StopReason.CONVERGED,
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "build_selection_graph",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_reading_path",
+        _as_checkpoint(
+            lambda selection: RenderPayload(
+                name="reading_path",
+                content_markdown="# RP",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_backing_report",
+        _as_checkpoint(
+            lambda selection, ledger, plan: RenderPayload(
+                name="backing_report",
+                content_markdown="# BR",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "review_renders", _as_checkpoint(lambda *args, **kwargs: critique)
+    )
+    monkeypatch.setattr(
+        module,
+        "revise_renders",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "judge_grounding",
+        _as_checkpoint(lambda *args, **kwargs: GroundingResult(score=1.0, verdicts=[])),
+    )
+    monkeypatch.setattr(
+        module, "judge_coherence", _as_checkpoint(lambda *args, **kwargs: coherence)
+    )
+    monkeypatch.setattr(module, "assemble_package", lambda **kwargs: kwargs)
+
+    package = module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.DEEP),
+    )
+
+    assert package["critique_result"].summary == "critique"
+    assert package["grounding_result"].score == 1.0
+    assert package["coherence_result"].summary == "coherent"
 
 
 def test_research_flow_preserves_overrides_when_clarification_changes_tier(
@@ -704,14 +1585,35 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
         ),
     )
 
-    def fake_run_iteration(plan, ledger, iteration, config, council_models, **kwargs):
+    def fake_run_council_generator(
+        plan, ledger, iteration, model_name, config, **kwargs
+    ):
         observed_configs.append(config)
         return types.SimpleNamespace(
             raw_results=[],
             budget=types.SimpleNamespace(estimated_cost_usd=0.0),
         )
 
-    monkeypatch.setattr(module, "_run_iteration", fake_run_iteration)
+    monkeypatch.setattr(
+        module,
+        "run_council_generator",
+        type(
+            "CouncilGenerator",
+            (),
+            {
+                "submit": staticmethod(
+                    lambda *args, **kwargs: types.SimpleNamespace(
+                        load=lambda: fake_run_council_generator(*args, **kwargs)
+                    )
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        module,
+        "aggregate_council_results",
+        lambda results: results[-1],
+    )
     monkeypatch.setattr(
         module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
     )
@@ -726,12 +1628,18 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -785,10 +1693,12 @@ def test_research_flow_calls_all_checkpoints(monkeypatch) -> None:
     monkeypatch.setattr(module, "build_plan", track("plan", plan))
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(module, "normalize_evidence", track("normalize", []))
@@ -809,7 +1719,7 @@ def test_research_flow_calls_all_checkpoints(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        track("coverage", types.SimpleNamespace(total=1.0)),
+        track("coverage", types.SimpleNamespace(total=1.0, uncovered_subtopics=[])),
     )
     monkeypatch.setattr(
         module,
@@ -893,10 +1803,12 @@ def test_research_flow_passes_loaded_values_to_terminal_checkpoints(
     monkeypatch.setattr(module, "wait", lambda **kwargs: True)
     monkeypatch.setattr(
         module,
-        "_run_iteration",
-        lambda *args, **kwargs: types.SimpleNamespace(
-            raw_results=[],
-            budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: types.SimpleNamespace(
+                raw_results=[],
+                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -913,12 +1825,18 @@ def test_research_flow_passes_loaded_values_to_terminal_checkpoints(
         ),
     )
     monkeypatch.setattr(
-        module, "merge_evidence", _as_checkpoint(lambda scored, ledger: ledger)
+        module,
+        "merge_evidence",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
         "evaluate_coverage",
-        _as_checkpoint(lambda ledger, plan: types.SimpleNamespace(total=1.0)),
+        _as_checkpoint(
+            lambda ledger, plan: types.SimpleNamespace(
+                total=1.0, uncovered_subtopics=[]
+            )
+        ),
     )
     monkeypatch.setattr(
         module,

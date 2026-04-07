@@ -3,10 +3,16 @@ from pydantic import ValidationError
 
 from deep_research.enums import StopReason, Tier
 from deep_research.models import (
+    CoherenceResult,
+    CritiqueDimensionScore,
+    CritiqueResult,
     CoverageScore,
+    DedupeEvent,
     EvidenceCandidate,
     EvidenceLedger,
     EvidenceSnippet,
+    GroundingResult,
+    GroundingVerdict,
     InvestigationPackage,
     IterationBudget,
     IterationRecord,
@@ -108,6 +114,117 @@ def test_iteration_record_accepts_phase_one_cost_metadata() -> None:
     )
 
     assert record.estimated_cost_usd == 0.75
+
+
+def test_investigation_package_accepts_critique_and_judge_artifacts() -> None:
+    package = InvestigationPackage(
+        run_summary=RunSummary(
+            run_id="run-1",
+            brief="brief",
+            tier=Tier.STANDARD,
+            stop_reason=StopReason.CONVERGED,
+            status="completed",
+        ),
+        research_plan=ResearchPlan(
+            goal="goal",
+            key_questions=["k"],
+            subtopics=["status"],
+            queries=["q"],
+            sections=["Summary"],
+            success_criteria=["c"],
+        ),
+        evidence_ledger=EvidenceLedger(entries=[]),
+        selection_graph=SelectionGraph(items=[]),
+        iteration_trace=IterationTrace(iterations=[]),
+        renders=[RenderPayload(name="reading_path", content_markdown="# RP")],
+        critique_result=CritiqueResult(
+            dimensions=[
+                CritiqueDimensionScore(
+                    name="coverage",
+                    score=0.8,
+                    rationale="Good coverage.",
+                )
+            ],
+            summary="Good overall.",
+            revision_suggestions=["Clarify the lead."],
+            revision_recommended=True,
+        ),
+        grounding_result=GroundingResult(
+            score=1.0,
+            verdicts=[
+                GroundingVerdict(
+                    citation="[1]",
+                    candidate_key="source-1",
+                    supported=True,
+                    rationale="Citation is supported.",
+                )
+            ],
+        ),
+        coherence_result=CoherenceResult(
+            relevance=0.9,
+            logical_flow=0.8,
+            completeness=0.85,
+            consistency=0.95,
+            summary="Coherent overall.",
+        ),
+    )
+
+    assert package.critique_result.revision_recommended is True
+    assert package.grounding_result.verdicts[0].supported is True
+    assert package.coherence_result.summary == "Coherent overall."
+
+
+def test_critique_and_judge_models_reject_invalid_scores() -> None:
+    with pytest.raises(ValidationError):
+        CritiqueDimensionScore(name="coverage", score=1.5, rationale="bad")
+
+    with pytest.raises(ValidationError):
+        GroundingResult(score=-0.1, verdicts=[])
+
+    with pytest.raises(ValidationError):
+        CoherenceResult(
+            relevance=1.1,
+            logical_flow=0.8,
+            completeness=0.8,
+            consistency=0.8,
+            summary="bad",
+        )
+
+
+def test_iteration_record_accepts_richer_iteration_metadata() -> None:
+    record = IterationRecord(
+        iteration=2,
+        new_candidate_count=5,
+        accepted_candidate_count=3,
+        rejected_candidate_count=2,
+        coverage=0.8,
+        coverage_delta=0.15,
+        uncovered_subtopics=["operational controls", "failure recovery"],
+        estimated_cost_usd=1.25,
+        tool_calls=[
+            ToolCallRecord(
+                tool_name="search",
+                status="ok",
+                provider="perplexity",
+                summary="Found two new sources for the remaining gap.",
+            )
+        ],
+        continue_reason="Two subtopics remain uncovered, so the loop should continue.",
+        stop_reason=StopReason.CONVERGED,
+    )
+
+    assert record.accepted_candidate_count == 3
+    assert record.rejected_candidate_count == 2
+    assert record.coverage_delta == 0.15
+    assert record.uncovered_subtopics == ["operational controls", "failure recovery"]
+    assert (
+        record.tool_calls[0].summary == "Found two new sources for the remaining gap."
+    )
+    assert (
+        record.continue_reason
+        == "Two subtopics remain uncovered, so the loop should continue."
+    )
+    assert record.stop_reason is StopReason.CONVERGED
 
 
 def test_iteration_record_rejects_negative_phase_one_cost() -> None:
@@ -361,6 +478,55 @@ def test_coverage_score_rejects_out_of_range_values() -> None:
         )
 
 
+def test_coverage_score_accepts_uncovered_subtopics() -> None:
+    score = CoverageScore(
+        subtopic_coverage=0.6,
+        source_diversity=0.7,
+        evidence_density=0.8,
+        total=0.7,
+        uncovered_subtopics=["operational controls", "failure recovery"],
+    )
+
+    assert score.uncovered_subtopics == [
+        "operational controls",
+        "failure recovery",
+    ]
+
+
+def test_coverage_score_rejects_bool_values() -> None:
+    with pytest.raises(ValidationError):
+        CoverageScore(
+            subtopic_coverage=True,
+            source_diversity=0.7,
+            evidence_density=0.8,
+            total=0.7,
+        )
+
+    with pytest.raises(ValidationError):
+        CoverageScore(
+            subtopic_coverage=0.6,
+            source_diversity=True,
+            evidence_density=0.8,
+            total=0.7,
+        )
+
+    with pytest.raises(ValidationError):
+        CoverageScore(
+            subtopic_coverage=0.6,
+            source_diversity=0.7,
+            evidence_density=True,
+            total=0.7,
+        )
+
+    with pytest.raises(ValidationError):
+        CoverageScore(
+            subtopic_coverage=0.6,
+            source_diversity=0.7,
+            evidence_density=0.8,
+            total=True,
+        )
+
+
 def test_iteration_budget_rejects_negative_values() -> None:
     with pytest.raises(ValidationError):
         IterationBudget(input_tokens=-1)
@@ -379,7 +545,40 @@ def test_iteration_record_rejects_invalid_ranges() -> None:
         IterationRecord(iteration=1, new_candidate_count=-1)
 
     with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, accepted_candidate_count=-1)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, rejected_candidate_count=-1)
+
+    with pytest.raises(ValidationError):
         IterationRecord(iteration=1, coverage=1.1)
+
+
+def test_iteration_record_rejects_bool_candidate_counts() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, new_candidate_count=True)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, accepted_candidate_count=True)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, rejected_candidate_count=True)
+
+
+def test_iteration_record_rejects_bool_iteration() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=True)
+
+
+def test_iteration_record_rejects_bool_numeric_fields() -> None:
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, coverage=True)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, coverage_delta=True)
+
+    with pytest.raises(ValidationError):
+        IterationRecord(iteration=1, estimated_cost_usd=True)
 
 
 def test_evidence_candidate_rejects_invalid_url() -> None:
@@ -413,6 +612,204 @@ def test_evidence_candidate_rejects_out_of_range_scores() -> None:
             source_kind="web",
             relevance_score=-0.1,
         )
+
+
+def test_evidence_candidate_rejects_non_json_serializable_raw_metadata() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            raw_metadata={"provider_payload": object()},
+        )
+
+
+def test_evidence_candidate_rejects_non_json_compliant_raw_metadata() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            raw_metadata={"score": float("nan")},
+        )
+
+
+def test_evidence_candidate_rejects_nested_non_string_raw_metadata_keys() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            raw_metadata={"nested": {1: "a"}},
+        )
+
+
+def test_evidence_candidate_rejects_nested_non_string_raw_metadata_keys_in_tuple() -> (
+    None
+):
+    with pytest.raises(ValidationError):
+        EvidenceCandidate(
+            key="candidate-1",
+            title="Replay",
+            url="https://example.com/replay",
+            provider="test",
+            source_kind="web",
+            raw_metadata={"nested": ({1: "a"},)},
+        )
+
+
+def test_phase_two_evidence_and_selection_models_accept_richer_metadata() -> None:
+    candidate = EvidenceCandidate(
+        key="candidate-1",
+        title="Replay Paper",
+        url="https://example.com/replay",
+        provider="arxiv",
+        source_kind="paper",
+        matched_subtopics=["replay", "durability"],
+        authority_score=0.95,
+        freshness_score=0.4,
+        doi="10.1000/replay",
+        raw_metadata={"provider_id": "paper-1"},
+    )
+    dedupe_event = DedupeEvent(
+        duplicate_key="candidate-2",
+        canonical_key="candidate-1",
+        match_basis="canonical_url",
+    )
+    ledger = EvidenceLedger(
+        considered=[candidate],
+        selected=[candidate.model_copy(update={"selected": True})],
+        rejected=[],
+        dedupe_log=[dedupe_event],
+    )
+    selection_item = SelectionItem(
+        candidate_key="candidate-1",
+        rationale="Best authority and relevance balance.",
+        bridge_note="Pairs well with the practical guide.",
+        matched_subtopics=["replay"],
+        reading_time_minutes=12,
+        ordering_rationale="Start with the foundational source.",
+    )
+    selection_graph = SelectionGraph(
+        items=[selection_item],
+        gap_coverage_summary=["operations"],
+    )
+
+    assert candidate.matched_subtopics == ["replay", "durability"]
+    assert candidate.doi == "10.1000/replay"
+    assert ledger.entries == [candidate]
+    assert ledger.dedupe_log == [dedupe_event]
+    assert selection_item.bridge_note == "Pairs well with the practical guide."
+    assert selection_item.reading_time_minutes == 12
+    assert selection_graph.gap_coverage_summary == ["operations"]
+
+
+def test_phase_two_models_reject_invalid_match_basis_and_negative_reading_time() -> (
+    None
+):
+    with pytest.raises(ValidationError):
+        DedupeEvent(
+            duplicate_key="candidate-2",
+            canonical_key="candidate-1",
+            match_basis="hostname",
+        )
+
+    with pytest.raises(ValidationError):
+        SelectionItem(
+            candidate_key="candidate-1",
+            rationale="Best source.",
+            reading_time_minutes=-1,
+        )
+
+
+def test_selection_item_rejects_bool_reading_time_minutes() -> None:
+    with pytest.raises(ValidationError):
+        SelectionItem(
+            candidate_key="candidate-1",
+            rationale="Best source.",
+            reading_time_minutes=True,
+        )
+
+
+def test_evidence_ledger_serialization_preserves_entries_compatibility_view() -> None:
+    candidate = EvidenceCandidate(
+        key="candidate-1",
+        title="Replay Paper",
+        url="https://example.com/replay",
+        provider="arxiv",
+        source_kind="paper",
+        matched_subtopics=["replay"],
+        authority_score=0.95,
+        freshness_score=0.4,
+        doi="10.1000/replay",
+        raw_metadata={"provider_id": "paper-1"},
+    )
+    ledger = EvidenceLedger(entries=[candidate])
+
+    dumped = ledger.model_dump(mode="json")
+    restored = EvidenceLedger.model_validate(dumped)
+
+    assert dumped["entries"] == dumped["considered"]
+    assert dumped["selected"] == []
+    assert dumped["rejected"] == []
+    assert dumped["dedupe_log"] == []
+    assert restored.entries == ledger.entries
+
+
+def test_evidence_ledger_rejects_conflicting_entries_and_considered_inputs() -> None:
+    candidate_payload = {
+        "key": "candidate-1",
+        "title": "Replay Paper",
+        "url": "https://example.com/replay",
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "matched_subtopics": ["replay"],
+        "authority_score": 0.95,
+        "freshness_score": 0.4,
+        "doi": "10.1000/replay",
+        "raw_metadata": {"provider_id": "paper-1"},
+    }
+
+    with pytest.raises(ValidationError):
+        EvidenceLedger.model_validate(
+            {
+                "considered": [candidate_payload],
+                "entries": [],
+            }
+        )
+
+
+def test_evidence_ledger_accepts_semantically_equivalent_entries_and_considered_inputs() -> (
+    None
+):
+    candidate = EvidenceCandidate(
+        key="candidate-1",
+        title="Replay Paper",
+        url="https://example.com/replay",
+        provider="arxiv",
+        source_kind="paper",
+        matched_subtopics=["replay"],
+        authority_score=0.95,
+        freshness_score=0.4,
+        doi="10.1000/replay",
+        raw_metadata={"provider_id": "paper-1"},
+    )
+
+    ledger = EvidenceLedger.model_validate(
+        {
+            "considered": [candidate],
+            "entries": [candidate.model_dump(mode="json")],
+        }
+    )
+
+    assert len(ledger.considered) == 1
+    assert len(ledger.entries) == 1
 
 
 def test_request_classification_rejects_inconsistent_clarification_state() -> None:

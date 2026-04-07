@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 @contextmanager
 def _preserve_modules(*names: str):
+    """Temporarily preserve selected modules while operator stubs are installed."""
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -19,6 +20,8 @@ def _preserve_modules(*names: str):
 
 
 def _load_research_flow_module():
+    """Import the flow module under minimal operator-contract stubs."""
+
     def checkpoint(*, type):
         def decorator(func):
             func._checkpoint_type = type
@@ -55,4 +58,8 @@ def test_stable_operator_names_are_exported() -> None:
     module = _load_research_flow_module()
 
     assert module.APPROVE_PLAN_WAIT_NAME == "approve_plan"
+    assert module.CLARIFY_BRIEF_WAIT_NAME == "clarify_brief"
     assert module.CLASSIFY_CHECKPOINT_NAME == "classify_request"
+    assert module.PLAN_CHECKPOINT_NAME == "build_plan"
+    assert module.SUPERVISOR_CHECKPOINT_NAME == "run_supervisor"
+    assert module.COUNCIL_GENERATOR_CHECKPOINT_NAME == "run_council_generator"

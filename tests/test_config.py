@@ -30,6 +30,43 @@ def test_research_config_builds_deep_tier_flags_and_council() -> None:
     assert config.council_size == 5
 
 
+def test_research_config_carries_source_quality_floor() -> None:
+    settings = ResearchSettings(source_quality_floor=0.55)
+
+    config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
+
+    assert config.source_quality_floor == 0.55
+
+
+def test_research_config_carries_review_and_judge_models() -> None:
+    settings = ResearchSettings(
+        review_model="anthropic/reviewer",
+        judge_model="openai/judge",
+    )
+
+    config = ResearchConfig.for_tier(Tier.DEEP, settings=settings)
+
+    assert config.review_model == "anthropic/reviewer"
+    assert config.judge_model == "openai/judge"
+
+
+def test_research_config_carries_supervisor_tool_settings() -> None:
+    settings = ResearchSettings(max_tool_calls_per_cycle=7, tool_timeout_sec=45)
+
+    config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
+
+    assert config.max_tool_calls_per_cycle == 7
+    assert config.tool_timeout_sec == 45
+
+
+def test_research_config_uses_default_supervisor_tool_settings() -> None:
+    settings = ResearchSettings()
+    config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
+
+    assert config.max_tool_calls_per_cycle == settings.max_tool_calls_per_cycle
+    assert config.tool_timeout_sec == settings.tool_timeout_sec
+
+
 def test_invalid_settings_values_raise_validation_error() -> None:
     with pytest.raises(ValidationError):
         ResearchSettings(default_max_iterations=0)

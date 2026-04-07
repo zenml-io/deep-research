@@ -23,17 +23,20 @@ def write_markdown(content: str, path: Path) -> None:
 
 
 def _write_json(content: str, path: Path) -> None:
+    """Write JSON content to disk, creating parent directories first."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
 def _reset_directory(path: Path) -> None:
+    """Recreate a directory from scratch so generated outputs start clean."""
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
 
 
 def _render_summary_markdown(package: InvestigationPackage) -> str:
+    """Render the top-level run summary markdown file."""
     return (
         "# Summary\n\n"
         f"Run ID: {package.run_summary.run_id}\n\n"
@@ -42,6 +45,7 @@ def _render_summary_markdown(package: InvestigationPackage) -> str:
 
 
 def _render_plan_markdown(package: InvestigationPackage) -> str:
+    """Render the research plan markdown companion file."""
     lines = [
         "# Research Plan",
         "",
@@ -60,6 +64,7 @@ def _render_plan_markdown(package: InvestigationPackage) -> str:
 
 
 def _render_ledger_markdown(package: InvestigationPackage) -> str:
+    """Render a markdown view of the evidence ledger entries."""
     lines = [
         "# Evidence Ledger",
         "",
