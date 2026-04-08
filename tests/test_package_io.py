@@ -1,8 +1,15 @@
+import importlib
+import sys
+import types
 from inspect import signature
 from pathlib import Path
 
 import pytest
 
+import deep_research.package.io as package_io
+
+from deep_research.config import ResearchConfig
+from deep_research.enums import Tier
 from deep_research.models import (
     CoherenceResult,
     CritiqueResult,
@@ -11,8 +18,11 @@ from deep_research.models import (
     GroundingResult,
     InvestigationPackage,
     IterationRecord,
+    IterationBudget,
     IterationTrace,
+    RenderCheckpointResult,
     RenderPayload,
+    RenderSettingsSnapshot,
     ResearchPlan,
     RunSummary,
     SelectionItem,
@@ -173,24 +183,37 @@ def test_write_package_materializes_phase_one_views(tmp_path: Path) -> None:
 def test_write_full_report_materializes_lazy_render_from_package_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sample_package = make_package(render_names=[])
+    sample_package = make_package(render_names=[]).model_copy(
+        update={"render_settings": RenderSettingsSnapshot(writer_model="custom/writer")}
+    )
     run_dir = write_package(sample_package, tmp_path)
 
     assert signature(write_full_report).return_annotation is RenderPayload
 
-    def render_full_report(package: InvestigationPackage) -> RenderPayload:
-        assert package == sample_package
-        return RenderPayload(
-            name="full_report",
-            content_markdown="# Full Report\n\nFrom package state.",
-            citation_map={"source-1": "https://example.com/source-1"},
-            structured_content={"sections": ["summary"]},
-            generated_at="2026-04-01T10:02:00Z",
+    def materialize_render_payload(
+        scaffold: RenderPayload,
+        *,
+        writer_model: str,
+        prompt_name: str,
+        pricing,
+    ) -> RenderCheckpointResult:
+        assert scaffold.name == "full_report"
+        assert scaffold.structured_content is not None
+        assert writer_model == "custom/writer"
+        assert prompt_name == "writer_full_report"
+        return RenderCheckpointResult(
+            render=RenderPayload(
+                name="full_report",
+                content_markdown="# Full Report\n\nFrom package state.",
+                citation_map={"source-1": "https://example.com/source-1"},
+                structured_content={"sections": ["summary"]},
+                generated_at="2026-04-01T10:02:00Z",
+            ),
+            budget=IterationBudget(),
         )
 
     monkeypatch.setattr(
-        "deep_research.package.io.render_full_report",
-        render_full_report,
+        package_io, "materialize_render_payload", materialize_render_payload
     )
 
     render = write_full_report(sample_package, run_dir)
@@ -201,26 +224,147 @@ def test_write_full_report_materializes_lazy_render_from_package_state(
     )
 
 
+def test_package_io_import_does_not_require_kitaru_checkpoint_modules(
+    monkeypatch,
+) -> None:
+    original_kitaru = sys.modules.pop("kitaru", None)
+    original_rendering = sys.modules.pop("deep_research.checkpoints.rendering", None)
+    original_io = sys.modules.pop("deep_research.package.io", None)
+
+    try:
+
+        def checkpoint(*, type):
+            raise AssertionError("package.io should not import checkpoint modules")
+
+        monkeypatch.setitem(
+            sys.modules, "kitaru", types.SimpleNamespace(checkpoint=checkpoint)
+        )
+        module = importlib.import_module("deep_research.package.io")
+        assert hasattr(module, "write_full_report")
+    finally:
+        sys.modules.pop("deep_research.package.io", None)
+        sys.modules.pop("deep_research.checkpoints.rendering", None)
+        if original_io is not None:
+            sys.modules["deep_research.package.io"] = original_io
+        if original_rendering is not None:
+            sys.modules["deep_research.checkpoints.rendering"] = original_rendering
+        if original_kitaru is not None:
+            sys.modules["kitaru"] = original_kitaru
+        else:
+            sys.modules.pop("kitaru", None)
+
+
+def test_package_io_import_does_not_import_writer_agent_stack(monkeypatch) -> None:
+    original_io = sys.modules.pop("deep_research.package.io", None)
+    original_materialization = sys.modules.pop(
+        "deep_research.renderers.materialization", None
+    )
+    original_writer = sys.modules.pop("deep_research.agents.writer", None)
+
+    try:
+        module = importlib.import_module("deep_research.package.io")
+        assert hasattr(module, "write_full_report")
+        assert "deep_research.agents.writer" not in sys.modules
+    finally:
+        sys.modules.pop("deep_research.package.io", None)
+        sys.modules.pop("deep_research.renderers.materialization", None)
+        sys.modules.pop("deep_research.agents.writer", None)
+        if original_io is not None:
+            sys.modules["deep_research.package.io"] = original_io
+        if original_materialization is not None:
+            sys.modules["deep_research.renderers.materialization"] = (
+                original_materialization
+            )
+        if original_writer is not None:
+            sys.modules["deep_research.agents.writer"] = original_writer
+
+
 def test_write_full_report_rejects_unexpected_lazy_render_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sample_package = make_package(render_names=[])
     run_dir = write_package(sample_package, tmp_path)
+    config = ResearchConfig.for_tier(Tier.STANDARD)
 
-    def render_full_report(package: InvestigationPackage) -> RenderPayload:
-        assert package == sample_package
-        return RenderPayload(
-            name="backing_report",
-            content_markdown="# Wrong Report",
-            citation_map={},
+    def materialize_render_payload(
+        scaffold: RenderPayload,
+        *,
+        writer_model: str,
+        prompt_name: str,
+        pricing,
+    ) -> RenderCheckpointResult:
+        assert scaffold.name == "full_report"
+        assert scaffold.structured_content is not None
+        assert writer_model == config.writer_model
+        assert prompt_name == "writer_full_report"
+        return RenderCheckpointResult(
+            render=RenderPayload(
+                name="backing_report",
+                content_markdown="# Wrong Report",
+                citation_map={},
+            ),
+            budget=IterationBudget(),
         )
 
     monkeypatch.setattr(
-        "deep_research.package.io.render_full_report",
-        render_full_report,
+        package_io, "materialize_render_payload", materialize_render_payload
     )
 
     with pytest.raises(ValueError, match="Expected render.name to be 'full_report'"):
+        write_full_report(sample_package, run_dir, config=config)
+
+
+def test_write_full_report_prefers_explicit_config_writer_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_package = make_package(render_names=[]).model_copy(
+        update={
+            "render_settings": RenderSettingsSnapshot(writer_model="snapshot/writer")
+        }
+    )
+    run_dir = write_package(sample_package, tmp_path)
+    config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
+        update={"writer_model": "config/writer"}
+    )
+
+    def materialize_render_payload(
+        scaffold: RenderPayload,
+        *,
+        writer_model: str,
+        prompt_name: str,
+        pricing,
+    ) -> RenderCheckpointResult:
+        assert scaffold.name == "full_report"
+        assert scaffold.structured_content is not None
+        assert writer_model == "config/writer"
+        assert prompt_name == "writer_full_report"
+        return RenderCheckpointResult(
+            render=RenderPayload(
+                name="full_report",
+                content_markdown="# Full Report\n\nExplicit writer model.",
+            ),
+            budget=IterationBudget(),
+        )
+
+    monkeypatch.setattr(
+        package_io, "materialize_render_payload", materialize_render_payload
+    )
+
+    render = write_full_report(sample_package, run_dir, config=config)
+
+    assert render.content_markdown == "# Full Report\n\nExplicit writer model."
+
+
+def test_write_full_report_requires_config_or_package_render_settings(
+    tmp_path: Path,
+) -> None:
+    sample_package = make_package(render_names=[])
+    run_dir = write_package(sample_package, tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="write_full_report requires config or package.render_settings",
+    ):
         write_full_report(sample_package, run_dir)
 
 
@@ -240,6 +384,22 @@ def test_write_and_read_package_round_trip(tmp_path: Path) -> None:
     assert restored_iteration.tool_calls[0].summary == "search via example succeeded"
     assert (
         restored_iteration.continue_reason == "remaining uncovered subtopics: follow-up"
+    )
+
+
+def test_write_and_read_package_round_trip_preserves_render_settings(
+    tmp_path: Path,
+) -> None:
+    sample_package = make_package().model_copy(
+        update={
+            "render_settings": RenderSettingsSnapshot(writer_model="snapshot/writer")
+        }
+    )
+
+    restored = read_package(write_package(sample_package, tmp_path))
+
+    assert restored.render_settings == RenderSettingsSnapshot(
+        writer_model="snapshot/writer"
     )
 
 

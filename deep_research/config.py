@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from deep_research.enums import Tier
@@ -33,15 +33,49 @@ class ResearchSettings(BaseSettings):
     source_quality_floor: float = Field(default=0.30, ge=0.0, le=1.0)
     council_size: int = Field(default=3, gt=0)
     council_cost_budget_usd: float = Field(default=2.0, ge=0.0)
-    classifier_model: str = "gemini/gemini-2.0-flash-lite"
-    planner_model: str = "gemini/gemini-2.5-flash"
-    supervisor_model: str = "gemini/gemini-2.5-flash"
-    relevance_scorer_model: str = "gemini/gemini-2.5-flash"
-    curator_model: str = "gemini/gemini-2.0-flash-lite"
-    writer_model: str = "gemini/gemini-2.5-flash"
-    aggregator_model: str = "openai/gpt-4o-mini"
-    review_model: str = "anthropic/claude-sonnet-4-20250514"
-    judge_model: str = "openai/gpt-4o-mini"
+    classifier_model: str = "google-gla:gemini-2.0-flash-lite"
+    planner_model: str = "google-gla:gemini-2.5-flash"
+    supervisor_model: str = "google-gla:gemini-2.5-flash"
+    relevance_scorer_model: str = "google-gla:gemini-2.5-flash"
+    curator_model: str = "google-gla:gemini-2.0-flash-lite"
+    writer_model: str = "google-gla:gemini-2.5-flash"
+    aggregator_model: str = "openai:gpt-4o-mini"
+    review_model: str = "anthropic:claude-sonnet-4-20250514"
+    judge_model: str = "openai:gpt-4o-mini"
+    brave_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("RESEARCH_BRAVE_API_KEY", "BRAVE_API_KEY"),
+    )
+    exa_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("RESEARCH_EXA_API_KEY", "EXA_API_KEY"),
+    )
+    semantic_scholar_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "RESEARCH_SEMANTIC_SCHOLAR_API_KEY",
+            "SEMANTIC_SCHOLAR_API_KEY",
+        ),
+    )
+    enabled_providers: list[str] = Field(
+        default_factory=lambda: ["arxiv", "semantic_scholar"]
+    )
+    max_results_per_query: int = Field(default=10, gt=0)
+    max_fetch_candidates_per_iteration: int = Field(default=5, gt=0)
+    max_fetched_chars_per_candidate: int = Field(default=4000, gt=0)
+
+    @field_validator("enabled_providers")
+    @classmethod
+    def normalize_enabled_providers(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for provider in value:
+            cleaned = provider.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            normalized.append(cleaned)
+            seen.add(cleaned)
+        return normalized
 
 
 class ResearchConfig(BaseModel):
@@ -68,6 +102,18 @@ class ResearchConfig(BaseModel):
     aggregator_model: str
     review_model: str
     judge_model: str
+    supervisor_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    relevance_scorer_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    writer_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    review_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    judge_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    brave_api_key: str = ""
+    exa_api_key: str = ""
+    semantic_scholar_api_key: str = ""
+    enabled_providers: list[str] = Field(default_factory=list)
+    max_results_per_query: int = 10
+    max_fetch_candidates_per_iteration: int = 5
+    max_fetched_chars_per_candidate: int = 4000
 
     @classmethod
     def for_tier(
@@ -126,4 +172,16 @@ class ResearchConfig(BaseModel):
             aggregator_model=settings.aggregator_model,
             review_model=settings.review_model,
             judge_model=settings.judge_model,
+            supervisor_pricing=ModelPricing(),
+            relevance_scorer_pricing=ModelPricing(),
+            writer_pricing=ModelPricing(),
+            review_pricing=ModelPricing(),
+            judge_pricing=ModelPricing(),
+            brave_api_key=settings.brave_api_key,
+            exa_api_key=settings.exa_api_key,
+            semantic_scholar_api_key=settings.semantic_scholar_api_key,
+            enabled_providers=list(settings.enabled_providers),
+            max_results_per_query=settings.max_results_per_query,
+            max_fetch_candidates_per_iteration=settings.max_fetch_candidates_per_iteration,
+            max_fetched_chars_per_candidate=settings.max_fetched_chars_per_candidate,
         )

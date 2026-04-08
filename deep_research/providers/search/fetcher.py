@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from html.parser import HTMLParser
+
+from deep_research.providers.search._http import build_client
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._chunks: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag in {"script", "style", "noscript"}:
+            self._ignored_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self._ignored_depth > 0:
+            self._ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_depth > 0:
+            return
+        cleaned = " ".join(data.split())
+        if cleaned:
+            self._chunks.append(cleaned)
+
+    def text(self) -> str:
+        return " ".join(self._chunks)
+
+
+def fetch_url_content(url: str, timeout_sec: int, max_chars: int) -> str | None:
+    if url.lower().endswith(".pdf"):
+        return None
+
+    response = build_client(timeout=timeout_sec).get(url)
+    response.raise_for_status()
+
+    content_type = response.headers.get("content-type", "")
+    if "html" not in content_type and "text" not in content_type:
+        return None
+
+    parser = _HTMLTextExtractor()
+    parser.feed(response.text)
+    text = parser.text().strip()
+    if not text:
+        return None
+    return text[:max_chars]

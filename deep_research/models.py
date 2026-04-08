@@ -1,5 +1,5 @@
 import json
-from datetime import datetime as _datetime
+from datetime import datetime
 from math import isfinite
 from typing import Annotated, Literal
 
@@ -25,21 +25,21 @@ class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _validate_iso8601_timestamp(value: str | None) -> str | None:
+def validate_iso8601_timestamp(value: str | None) -> str | None:
     """Return a timestamp only if it parses as an ISO-8601 string."""
     if value is None:
         return None
 
     normalized_value = value.replace("Z", "+00:00")
     try:
-        _datetime.fromisoformat(normalized_value)
+        datetime.fromisoformat(normalized_value)
     except ValueError as exc:
         raise ValueError("timestamp must be a parseable ISO-8601 string") from exc
 
     return value
 
 
-def _validate_json_mapping_keys(value: object) -> None:
+def validate_json_mapping_keys(value: object) -> None:
     """Recursively validate that every nested mapping inside raw metadata uses string keys.
 
     Raw metadata must stay JSON-serializable for package persistence, so nested dict-like
@@ -49,12 +49,12 @@ def _validate_json_mapping_keys(value: object) -> None:
         for key, nested_value in value.items():
             if not isinstance(key, str):
                 raise ValueError("raw_metadata mapping keys must be strings")
-            _validate_json_mapping_keys(nested_value)
+            validate_json_mapping_keys(nested_value)
         return
 
     if isinstance(value, list | tuple):
         for item in value:
-            _validate_json_mapping_keys(item)
+            validate_json_mapping_keys(item)
 
 
 class ResearchPlan(StrictBaseModel):
@@ -96,7 +96,7 @@ class EvidenceCandidate(StrictBaseModel):
     @model_validator(mode="after")
     def validate_raw_metadata(self) -> "EvidenceCandidate":
         try:
-            _validate_json_mapping_keys(self.raw_metadata)
+            validate_json_mapping_keys(self.raw_metadata)
             json.dumps(self.raw_metadata, allow_nan=False)
         except (TypeError, ValueError) as exc:
             raise ValueError("raw_metadata must be JSON-serializable") from exc
@@ -214,6 +214,11 @@ class CritiqueResult(StrictBaseModel):
     revision_recommended: bool = False
 
 
+class CritiqueCheckpointResult(StrictBaseModel):
+    critique: CritiqueResult
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+
+
 class GroundingVerdict(StrictBaseModel):
     citation: str
     candidate_key: str | None = None
@@ -226,12 +231,22 @@ class GroundingResult(StrictBaseModel):
     verdicts: list[GroundingVerdict] = Field(default_factory=list)
 
 
+class GroundingCheckpointResult(StrictBaseModel):
+    grounding: GroundingResult
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+
+
 class CoherenceResult(StrictBaseModel):
     relevance: UnitFloat
     logical_flow: UnitFloat
     completeness: UnitFloat
     consistency: UnitFloat
     summary: str
+
+
+class CoherenceCheckpointResult(StrictBaseModel):
+    coherence: CoherenceResult
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
 
 
 class RenderPayload(StrictBaseModel):
@@ -244,7 +259,20 @@ class RenderPayload(StrictBaseModel):
     @field_validator("generated_at")
     @classmethod
     def validate_generated_at(cls, value: str | None) -> str | None:
-        return _validate_iso8601_timestamp(value)
+        return validate_iso8601_timestamp(value)
+
+
+class RenderProse(StrictBaseModel):
+    content_markdown: str
+
+
+class RenderCheckpointResult(StrictBaseModel):
+    render: RenderPayload
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+
+
+class RenderSettingsSnapshot(StrictBaseModel):
+    writer_model: str
 
 
 class RunSummary(StrictBaseModel):
@@ -266,7 +294,7 @@ class RunSummary(StrictBaseModel):
     @field_validator("started_at", "completed_at")
     @classmethod
     def validate_timestamps(cls, value: str | None) -> str | None:
-        return _validate_iso8601_timestamp(value)
+        return validate_iso8601_timestamp(value)
 
     @model_validator(mode="after")
     def validate_phase_one_metadata(self) -> "RunSummary":
@@ -298,6 +326,7 @@ class InvestigationPackage(StrictBaseModel):
     critique_result: CritiqueResult | None = None
     grounding_result: GroundingResult | None = None
     coherence_result: CoherenceResult | None = None
+    render_settings: RenderSettingsSnapshot | None = None
 
 
 class CoverageScore(StrictBaseModel):
@@ -344,14 +373,43 @@ class RawToolResult(StrictBaseModel):
     error: str | None = None
 
 
+class SearchAction(StrictBaseModel):
+    query: str
+    rationale: str
+    preferred_providers: list[str] = Field(default_factory=list)
+    preferred_source_kinds: list[SourceKind] = Field(default_factory=list)
+    recency_days: StrictInt | None = None
+    max_results: StrictInt | None = None
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> "SearchAction":
+        if self.recency_days is not None and self.recency_days <= 0:
+            raise ValueError("recency_days must be positive when provided")
+        if self.max_results is not None and self.max_results <= 0:
+            raise ValueError("max_results must be positive when provided")
+        return self
+
+
+class SearchExecutionResult(StrictBaseModel):
+    raw_results: list[RawToolResult] = Field(default_factory=list)
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+
+
 class SupervisorDecision(StrictBaseModel):
     rationale: str
-    search_actions: list[str]
+    search_actions: list[SearchAction] = Field(default_factory=list)
 
 
 class SupervisorCheckpointResult(StrictBaseModel):
-    raw_results: list[RawToolResult]
+    decision: SupervisorDecision = Field(
+        default_factory=lambda: SupervisorDecision(rationale="", search_actions=[])
+    )
+    raw_results: list[RawToolResult] = Field(default_factory=list)
     budget: IterationBudget = Field(default_factory=IterationBudget)
+
+
+class RelevanceScorerOutput(StrictBaseModel):
+    candidates: list[EvidenceCandidate]
 
 
 class RelevanceCheckpointResult(StrictBaseModel):

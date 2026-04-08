@@ -9,7 +9,7 @@ from deep_research.models import RawToolResult
 ALLOWED_COMMANDS = {"echo", "ls", "pwd", "true", "false"}
 
 
-def _error_result(error: str, payload: dict | None = None) -> RawToolResult:
+def error_result(error: str, payload: dict | None = None) -> RawToolResult:
     """Construct a failed bash-tool result with a normalized payload and error message.
 
     Centralizing this shape keeps all early-return validation and timeout failures aligned
@@ -29,13 +29,13 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
     try:
         argv = shlex.split(command)
     except ValueError as exc:
-        return _error_result(str(exc))
+        return error_result(str(exc))
 
-    if not argv or not _is_allowed_command(argv[0]):
-        return _error_result("command not allowed")
+    if not argv or not is_allowed_command(argv[0]):
+        return error_result("command not allowed")
 
-    if any(_is_disallowed_path_argument(arg) for arg in argv[1:]):
-        return _error_result("command not allowed")
+    if any(is_disallowed_path_argument(arg) for arg in argv[1:]):
+        return error_result("command not allowed")
 
     with tempfile.TemporaryDirectory(prefix="deep-research-") as temp_dir:
         try:
@@ -48,9 +48,9 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
                 env={},
             )
         except FileNotFoundError as exc:
-            return _error_result(str(exc))
+            return error_result(str(exc))
         except subprocess.TimeoutExpired as exc:
-            return _error_result(
+            return error_result(
                 f"command timed out after {timeout_sec} seconds",
                 payload={"stdout": exc.stdout or "", "stderr": exc.stderr or ""},
             )
@@ -68,7 +68,7 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
     )
 
 
-def _is_allowed_command(command_name: str) -> bool:
+def is_allowed_command(command_name: str) -> bool:
     """Return whether a command name is allowed by the executor allow-list.
 
     Absolute paths are always rejected so callers cannot bypass the curated command set
@@ -80,7 +80,7 @@ def _is_allowed_command(command_name: str) -> bool:
     return command_name in ALLOWED_COMMANDS
 
 
-def _is_disallowed_path_argument(argument: str) -> bool:
+def is_disallowed_path_argument(argument: str) -> bool:
     """Reject path-like arguments that escape the temporary execution directory.
 
     Option flags are ignored, but absolute paths and parent-directory traversal segments

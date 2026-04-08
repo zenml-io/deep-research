@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from deep_research.enums import StopReason, Tier
+from deep_research.enums import SourceKind, StopReason, Tier
 from deep_research.models import (
     CoherenceResult,
     CritiqueDimensionScore,
@@ -19,10 +19,15 @@ from deep_research.models import (
     IterationTrace,
     RawToolResult,
     RequestClassification,
+    RenderCheckpointResult,
     RenderPayload,
+    RenderProse,
+    RenderSettingsSnapshot,
     ResearchPlan,
     RelevanceCheckpointResult,
     RunSummary,
+    SearchAction,
+    SearchExecutionResult,
     SelectionGraph,
     SelectionItem,
     SupervisorCheckpointResult,
@@ -380,6 +385,112 @@ def test_package_minimum_shape() -> None:
     assert package.run_summary.run_id == "run-1"
 
 
+def test_search_action_accepts_provider_preferences_and_limits() -> None:
+    action = SearchAction(
+        query="rlhf alternatives since 2023",
+        rationale="Need current sources for the remaining gap.",
+        preferred_providers=["arxiv", "semantic_scholar"],
+        preferred_source_kinds=[SourceKind.PAPER],
+        recency_days=365,
+        max_results=5,
+    )
+
+    assert action.preferred_providers == ["arxiv", "semantic_scholar"]
+    assert action.preferred_source_kinds == [SourceKind.PAPER]
+    assert action.recency_days == 365
+    assert action.max_results == 5
+
+
+def test_search_action_rejects_non_positive_recency_days() -> None:
+    with pytest.raises(ValidationError):
+        SearchAction(
+            query="rlhf alternatives since 2023",
+            rationale="Need current sources for the remaining gap.",
+            recency_days=0,
+        )
+
+
+def test_search_action_rejects_non_positive_max_results() -> None:
+    with pytest.raises(ValidationError):
+        SearchAction(
+            query="rlhf alternatives since 2023",
+            rationale="Need current sources for the remaining gap.",
+            max_results=0,
+        )
+
+
+def test_supervisor_checkpoint_result_carries_decision_and_tool_results() -> None:
+    result = SupervisorCheckpointResult(
+        decision=SupervisorDecision(
+            rationale="Need paper-first follow-up search.",
+            search_actions=[
+                SearchAction(
+                    query="direct preference optimization survey",
+                    rationale="Find paper sources for the gap.",
+                )
+            ],
+        ),
+        raw_results=[RawToolResult(tool_name="search", provider="mcp", payload={})],
+        budget=IterationBudget(),
+    )
+
+    assert (
+        result.decision.search_actions[0].query
+        == "direct preference optimization survey"
+    )
+    assert result.raw_results[0].provider == "mcp"
+
+
+def test_render_checkpoint_result_wraps_render_and_budget() -> None:
+    checkpoint_result = RenderCheckpointResult(
+        render=RenderPayload(name="reading_path", content_markdown="# Reading Path"),
+        budget=IterationBudget(total_tokens=0, input_tokens=0, output_tokens=0),
+    )
+
+    assert checkpoint_result.render.name == "reading_path"
+
+
+def test_investigation_package_accepts_render_settings_snapshot() -> None:
+    package = InvestigationPackage.model_validate(
+        {
+            "run_summary": {
+                "run_id": "run-1",
+                "brief": "brief",
+                "tier": "standard",
+                "stop_reason": "converged",
+                "status": "completed",
+            },
+            "research_plan": {
+                "goal": "goal",
+                "key_questions": [],
+                "subtopics": [],
+                "queries": [],
+                "sections": [],
+                "success_criteria": [],
+            },
+            "evidence_ledger": {"entries": []},
+            "selection_graph": {"items": []},
+            "iteration_trace": {"iterations": []},
+            "renders": [],
+            "render_settings": {"writer_model": "gemini/gemini-2.5-flash"},
+        }
+    )
+
+    assert package.render_settings == RenderSettingsSnapshot(
+        writer_model="gemini/gemini-2.5-flash"
+    )
+
+
+def test_render_prose_requires_markdown_content() -> None:
+    prose = RenderProse(content_markdown="# Synthesized report")
+    assert prose.content_markdown == "# Synthesized report"
+
+
+def test_search_execution_result_defaults_to_zero_budget() -> None:
+    result = SearchExecutionResult(raw_results=[])
+    assert result.budget.estimated_cost_usd == 0.0
+
+
 def test_additional_models_are_importable_and_validate() -> None:
     snippet = EvidenceSnippet(
         text="Replay resumes from a checkpoint.",
@@ -416,7 +527,12 @@ def test_additional_models_are_importable_and_validate() -> None:
 
     decision = SupervisorDecision(
         rationale="Need more targeted search.",
-        search_actions=["search replay anchors"],
+        search_actions=[
+            SearchAction(
+                query="search replay anchors",
+                rationale="Need more targeted search.",
+            )
+        ],
     )
 
     tool_record = ToolCallRecord(tool_name="search", status="ok", provider="test")
@@ -436,7 +552,9 @@ def test_additional_models_are_importable_and_validate() -> None:
         recommended_tier=Tier.DEEP,
     )
     supervisor_result = SupervisorCheckpointResult(
-        raw_results=[raw_result], budget=budget
+        decision=decision,
+        raw_results=[raw_result],
+        budget=budget,
     )
     relevance_result = RelevanceCheckpointResult(candidates=[candidate], budget=budget)
 
@@ -446,7 +564,7 @@ def test_additional_models_are_importable_and_validate() -> None:
     assert trace.iterations == [iteration]
     assert render.citation_map == {"[1]": "candidate-1"}
     assert summary.stop_reason is StopReason.CONVERGED
-    assert decision.search_actions == ["search replay anchors"]
+    assert decision.search_actions[0].query == "search replay anchors"
     assert tool_record.provider == "test"
     assert raw_result.ok is True
     assert coverage.total == 0.8

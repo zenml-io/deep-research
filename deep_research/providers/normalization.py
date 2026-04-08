@@ -4,11 +4,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from deep_research.evidence.scoring import score_candidate_quality
 from deep_research.evidence.url import canonicalize_url
 from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResult
 
 
-def _clean_string(value: object) -> str | None:
+def clean_string(value: object) -> str | None:
     """Normalize a scalar raw-result field into a trimmed string or `None`.
 
     Container values are rejected here because downstream identity and metadata fields
@@ -24,7 +25,7 @@ def _clean_string(value: object) -> str | None:
     return cleaned or None
 
 
-def _as_score(value: object) -> float:
+def as_score(value: object) -> float:
     """Coerce an optional raw score field into a float, defaulting missing values to zero.
 
     Normalized evidence candidates treat absent scores as `0.0` so providers can omit
@@ -35,7 +36,7 @@ def _as_score(value: object) -> float:
     return float(value)
 
 
-def _matched_subtopics(value: object) -> list[str]:
+def matched_subtopics(value: object) -> list[str]:
     """Normalize raw matched-subtopic data into a list of non-empty strings.
 
     Providers may emit a single string, a list-like container, or unusable values.
@@ -57,34 +58,34 @@ def _matched_subtopics(value: object) -> list[str]:
     return normalized
 
 
-def _candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
+def candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
     """Choose the strongest stable identity available for a raw result item.
 
     DOI wins over arXiv ID, and both win over canonical URL because those identifiers
     survive URL variants and provider-specific formatting differences more reliably.
     """
-    doi = _clean_string(item.get("doi"))
+    doi = clean_string(item.get("doi"))
     if doi is not None:
         return f"doi:{doi.lower()}"
 
-    arxiv_id = _clean_string(item.get("arxiv_id"))
+    arxiv_id = clean_string(item.get("arxiv_id"))
     if arxiv_id is not None:
         return f"arxiv:{arxiv_id.lower()}"
 
     return f"url:{canonical_url}"
 
 
-def _candidate_key(item: Mapping[str, Any], canonical_url: str) -> str:
+def candidate_key(item: Mapping[str, Any], canonical_url: str) -> str:
     """Generate a deterministic short key from the chosen semantic identity string.
 
     Hashing keeps keys compact while still remaining stable across providers that emit
     the same DOI, arXiv ID, or canonical URL for an evidence candidate.
     """
-    identity = _candidate_identity(item, canonical_url).encode("utf-8")
+    identity = candidate_identity(item, canonical_url).encode("utf-8")
     return f"evidence-{sha256(identity).hexdigest()[:16]}"
 
 
-def _raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
+def raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
     """Copy provider-specific fields that are not promoted into first-class candidate data.
 
     Core fields used for typed model attributes are excluded so `raw_metadata` remains a
@@ -110,7 +111,7 @@ def _raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
-def _iter_result_items(
+def iter_result_items(
     raw_results: list[Mapping[str, Any] | RawToolResult],
 ) -> list[Mapping[str, Any]]:
     """Flatten mixed raw-result payloads into a uniform list of item mappings.
@@ -144,7 +145,7 @@ def normalize_tool_results(
     """Transform raw tool results into typed EvidenceCandidate instances."""
     normalized: list[EvidenceCandidate] = []
 
-    for idx, item in enumerate(_iter_result_items(raw_results)):
+    for idx, item in enumerate(iter_result_items(raw_results)):
         url = str(item.get("url") or "").strip()
         if not url:
             continue
@@ -166,22 +167,27 @@ def normalize_tool_results(
             )
 
         try:
+            raw_quality = item.get("quality_score")
             candidate = EvidenceCandidate(
-                key=_candidate_key(item, canonical_url),
+                key=candidate_key(item, canonical_url),
                 title=str(item.get("title") or url or f"result-{idx}").strip(),
                 url=url,
                 snippets=snippets,
                 provider=provider,
                 source_kind=source_kind,
-                quality_score=_as_score(item.get("quality_score")),
-                relevance_score=_as_score(item.get("relevance_score")),
-                authority_score=_as_score(item.get("authority_score")),
-                freshness_score=_as_score(item.get("freshness_score")),
-                matched_subtopics=_matched_subtopics(item.get("matched_subtopics")),
-                doi=_clean_string(item.get("doi")),
-                arxiv_id=_clean_string(item.get("arxiv_id")),
-                raw_metadata=_raw_metadata(item),
+                quality_score=as_score(raw_quality),
+                relevance_score=as_score(item.get("relevance_score")),
+                authority_score=as_score(item.get("authority_score")),
+                freshness_score=as_score(item.get("freshness_score")),
+                matched_subtopics=matched_subtopics(item.get("matched_subtopics")),
+                doi=clean_string(item.get("doi")),
+                arxiv_id=clean_string(item.get("arxiv_id")),
+                raw_metadata=raw_metadata(item),
             )
+            if raw_quality is None:
+                candidate = candidate.model_copy(
+                    update={"quality_score": score_candidate_quality(candidate)}
+                )
         except (ValidationError, ValueError, TypeError):
             continue
         normalized.append(candidate)

@@ -11,6 +11,8 @@ dependencies = [
   "pydantic>=2",
   "pydantic-ai",
   "pydantic-settings",
+  "httpx>=0.27",
+  "arxiv>=2.1.3",
 ]
 
 [tool.setuptools.packages.find]

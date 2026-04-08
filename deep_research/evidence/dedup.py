@@ -4,7 +4,7 @@ from deep_research.evidence.url import canonicalize_url
 from deep_research.models import DedupeEvent, EvidenceCandidate
 
 
-def _candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]:
+def candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]:
     """Collect every normalized identity that can participate in deduplication matching.
 
     The returned identities intentionally include DOI, arXiv ID, canonical URL, and
@@ -26,13 +26,13 @@ def _candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]
     return identities
 
 
-def _match_precedence_keys(candidate: EvidenceCandidate) -> Iterable[tuple[str, str]]:
+def match_precedence_keys(candidate: EvidenceCandidate) -> Iterable[tuple[str, str]]:
     """Yield deduplication identities in the exact precedence order used for matching.
 
     Consumers rely on this order to prefer DOI matches first, then arXiv IDs, then
     canonical URLs, and only fall back to title matching as the weakest signal.
     """
-    identities = dict(_candidate_identities(candidate))
+    identities = dict(candidate_identities(candidate))
     for basis in ("doi", "arxiv_id", "canonical_url", "title"):
         identity = identities.get(basis)
         if identity:
@@ -50,14 +50,14 @@ def dedupe_candidates(
     for candidate in candidates:
         canonical = None
         match_basis = None
-        for key in _match_precedence_keys(candidate):
+        for key in match_precedence_keys(candidate):
             canonical = seen.get(key)
             if canonical is not None:
                 match_basis = key[0]
                 break
         if canonical is None:
             deduped.append(candidate)
-            for key in _match_precedence_keys(candidate):
+            for key in match_precedence_keys(candidate):
                 seen[key] = candidate
             continue
         dedupe_log.append(
@@ -67,7 +67,7 @@ def dedupe_candidates(
                 match_basis=match_basis,
             )
         )
-        for key in _match_precedence_keys(candidate):
+        for key in match_precedence_keys(candidate):
             seen.setdefault(key, canonical)
 
     return deduped, dedupe_log

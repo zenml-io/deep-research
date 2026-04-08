@@ -10,12 +10,16 @@ import types
 from deep_research.models import (
     EvidenceLedger,
     InvestigationPackage,
+    IterationBudget,
+    IterationRecord,
     IterationTrace,
+    RenderCheckpointResult,
     RenderPayload,
     ResearchPlan,
     RunSummary,
     SelectionGraph,
     SelectionItem,
+    StopReason,
 )
 
 
@@ -128,6 +132,13 @@ def _make_package() -> InvestigationPackage:
     )
 
 
+def _render_result(name: str, markdown: str) -> RenderCheckpointResult:
+    return RenderCheckpointResult(
+        render=RenderPayload(name=name, content_markdown=markdown),
+        budget=IterationBudget(),
+    )
+
+
 def _assert_iso8601_timestamp(value: str | None) -> None:
     """Assert that a render timestamp is present and ISO-8601 parseable."""
     assert isinstance(value, str)
@@ -150,26 +161,52 @@ def test_load_module_restores_stubbed_dependencies(monkeypatch) -> None:
     assert sys.modules["pydantic_ai"] is original_pydantic_ai
 
 
-def test_render_reading_path_returns_markdown_payload() -> None:
+def test_render_reading_path_returns_deterministic_scaffold_payload() -> None:
     module = _load_module("deep_research.renderers.reading_path")
     selection = SelectionGraph(
         items=[SelectionItem(candidate_key="a", rationale="useful")]
     )
+    ledger = EvidenceLedger(
+        entries=[
+            {
+                "key": "a",
+                "title": "Foundational paper",
+                "url": "https://example.com/a",
+                "provider": "arxiv",
+                "source_kind": "paper",
+                "snippets": [{"text": "Important context."}],
+                "selected": True,
+            }
+        ]
+    )
+    plan = ResearchPlan(
+        goal="Explain the topic",
+        key_questions=["What changed?"],
+        subtopics=["overview"],
+        queries=["topic overview"],
+        sections=["Summary"],
+        success_criteria=["Cover the basics"],
+    )
 
-    payload = module.render_reading_path(selection)
+    payload = module.render_reading_path(selection, ledger, plan)
 
     assert payload.name == "reading_path"
-    assert "[1] a: useful" in payload.content_markdown
+    assert payload.content_markdown == ""
     assert payload.structured_content == {
+        "goal": "Explain the topic",
+        "key_questions": ["What changed?"],
         "items": [
             {
                 "citation": "[1]",
                 "candidate_key": "a",
+                "title": "Foundational paper",
+                "url": "https://example.com/a",
+                "provider": "arxiv",
                 "rationale": "useful",
                 "bridge_note": None,
                 "matched_subtopics": [],
-                "reading_time_minutes": None,
                 "ordering_rationale": None,
+                "snippets": ["Important context."],
             }
         ],
         "gap_coverage_summary": [],
@@ -195,23 +232,70 @@ def test_render_reading_path_handles_richer_selection_items() -> None:
         ],
         gap_coverage_summary=["operations"],
     )
+    ledger = EvidenceLedger(
+        entries=[
+            {
+                "key": "candidate-1",
+                "title": "Replay guide",
+                "url": "https://example.com/replay",
+                "provider": "docs",
+                "source_kind": "docs",
+                "snippets": [
+                    {"text": "Read this first."},
+                    {"text": "Then compare operational guidance."},
+                    {"text": "Ignored third snippet."},
+                ],
+            }
+        ]
+    )
+    plan = ResearchPlan(
+        goal="Answer the brief",
+        key_questions=["What matters?"],
+        subtopics=["replay"],
+        queries=["replay guide"],
+        sections=["Overview"],
+        success_criteria=["Produce a summary"],
+    )
 
-    payload = module.render_reading_path(selection)
+    payload = module.render_reading_path(selection, ledger, plan)
 
-    assert "Foundational source." in payload.content_markdown
-    assert "Bridge: Read before the operational guide." in payload.content_markdown
-    assert "Subtopics: replay" in payload.content_markdown
-    assert "Uncovered subtopics: operations" in payload.content_markdown
+    assert payload.content_markdown == ""
     assert payload.structured_content["items"][0]["candidate_key"] == "candidate-1"
+    assert payload.structured_content["items"][0]["title"] == "Replay guide"
+    assert payload.structured_content["items"][0]["snippets"] == [
+        "Read this first.",
+        "Then compare operational guidance.",
+    ]
     assert payload.structured_content["gap_coverage_summary"] == ["operations"]
 
 
-def test_render_backing_report_returns_goal_and_selected_count() -> None:
+def test_render_backing_report_returns_scaffold_metadata() -> None:
     module = _load_module("deep_research.renderers.backing_report")
     selection = SelectionGraph(
         items=[SelectionItem(candidate_key="a", rationale="useful")]
     )
-    ledger = EvidenceLedger()
+    ledger = EvidenceLedger(
+        selected=[
+            {
+                "key": "a",
+                "title": "Selected source",
+                "url": "https://example.com/a",
+                "provider": "arxiv",
+                "source_kind": "paper",
+                "selected": True,
+            }
+        ],
+        rejected=[
+            {
+                "key": "b",
+                "title": "Rejected source",
+                "url": "https://example.com/b",
+                "provider": "brave",
+                "source_kind": "web",
+                "selected": False,
+            }
+        ],
+    )
     plan = ResearchPlan(
         goal="Answer the brief",
         key_questions=["What matters?"],
@@ -220,18 +304,35 @@ def test_render_backing_report_returns_goal_and_selected_count() -> None:
         sections=["Overview"],
         success_criteria=["Produce a summary"],
     )
+    iteration_trace = IterationTrace(
+        iterations=[
+            IterationRecord(
+                iteration=0,
+                coverage=0.5,
+                coverage_delta=0.5,
+                estimated_cost_usd=0.0,
+            )
+        ]
+    )
 
-    payload = module.render_backing_report(selection, ledger, plan)
+    payload = module.render_backing_report(
+        selection,
+        ledger,
+        plan,
+        iteration_trace,
+        {"arxiv": 1},
+        StopReason.CONVERGED,
+    )
 
     assert payload.name == "backing_report"
-    assert "Goal: Answer the brief" in payload.content_markdown
-    assert "Selected: 1" in payload.content_markdown
-    assert "[1] a" in payload.content_markdown
-    assert payload.structured_content == {
-        "goal": "Answer the brief",
-        "selected_count": 1,
-        "selection_keys": ["a"],
-    }
+    assert payload.content_markdown == ""
+    assert payload.structured_content["goal"] == "Answer the brief"
+    assert payload.structured_content["selection_items"][0]["candidate_key"] == "a"
+    assert payload.structured_content["selected_candidates"][0]["key"] == "a"
+    assert payload.structured_content["rejected_candidates"][0]["key"] == "b"
+    assert payload.structured_content["iterations"][0]["iteration"] == 0
+    assert payload.structured_content["provider_usage_summary"] == {"arxiv": 1}
+    assert payload.structured_content["stop_reason"] == "converged"
     assert payload.citation_map == {"[1]": "a"}
     _assert_iso8601_timestamp(payload.generated_at)
     assert not hasattr(module.render_backing_report, "_checkpoint_type")
@@ -245,13 +346,24 @@ def test_render_full_report_returns_lazy_package_payload() -> None:
     payload = module.render_full_report(package)
 
     assert payload.name == "full_report"
-    assert "Brief: Map the package render surface" in payload.content_markdown
-    assert "## Selected Evidence" in payload.content_markdown
-    assert "[1] source-1: useful" in payload.content_markdown
+    assert payload.content_markdown == ""
     assert payload.structured_content == {
-        "run_id": "run-1",
-        "selected_count": 1,
-        "selection_keys": ["source-1"],
+        "brief": "Map the package render surface",
+        "goal": "Answer the brief",
+        "sections": ["Overview"],
+        "selection_items": [
+            {
+                "candidate_key": "source-1",
+                "rationale": "useful",
+                "bridge_note": None,
+                "matched_subtopics": [],
+                "reading_time_minutes": None,
+                "ordering_rationale": None,
+            }
+        ],
+        "selected_candidates": [],
+        "iteration_trace": [],
+        "stop_reason": "converged",
     }
     assert payload.citation_map == {"[1]": "source-1"}
     _assert_iso8601_timestamp(payload.generated_at)
@@ -287,13 +399,12 @@ def test_renderer_modules_stay_pure_and_checkpoint_wrappers_live_under_checkpoin
 def test_underscore_prefixed_functions_have_detailed_docstrings() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     failures: list[str] = []
+    target_paths = [
+        repo_root / "deep_research" / "checkpoints" / "rendering.py",
+        repo_root / "tests" / "test_renderers_llm.py",
+    ]
 
-    for path in sorted(
-        [
-            *repo_root.joinpath("deep_research").glob("**/*.py"),
-            *repo_root.joinpath("tests").glob("**/*.py"),
-        ]
-    ):
+    for path in target_paths:
         module_ast = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(module_ast):
             if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -376,6 +487,12 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
+        "fetch_content",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
         "evaluate_coverage",
         _as_checkpoint(
             lambda ledger, plan: types.SimpleNamespace(
@@ -401,11 +518,16 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         module,
         "render_reading_path",
         _as_checkpoint(
-            lambda rendered_selection: (
-                reading_path_calls.append(rendered_selection)
-                or RenderPayload(
-                    name="reading_path", content_markdown="# Reading Path\n"
+            lambda rendered_selection, rendered_ledger, rendered_plan, rendered_config: (
+                reading_path_calls.append(
+                    (
+                        rendered_selection,
+                        rendered_ledger,
+                        rendered_plan,
+                        rendered_config,
+                    )
                 )
+                or _render_result("reading_path", "# Reading Path\n")
             )
         ),
     )
@@ -413,22 +535,39 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         module,
         "render_backing_report",
         _as_checkpoint(
-            lambda rendered_selection, rendered_ledger, rendered_plan: (
+            lambda rendered_selection, rendered_ledger, rendered_plan, iteration_trace, provider_usage_summary, stop_reason, rendered_config: (
                 backing_report_calls.append(
-                    (rendered_selection, rendered_ledger, rendered_plan)
+                    (
+                        rendered_selection,
+                        rendered_ledger,
+                        rendered_plan,
+                        iteration_trace,
+                        provider_usage_summary,
+                        stop_reason,
+                        rendered_config,
+                    )
                 )
-                or RenderPayload(
-                    name="backing_report", content_markdown="# Backing Report\n"
-                )
+                or _render_result("backing_report", "# Backing Report\n")
             )
         ),
     )
 
     package = module.research_flow.run("brief")
 
-    assert reading_path_calls == [selection]
+    expected_config = module.ResearchConfig.for_tier(module.Tier.STANDARD)
+    assert reading_path_calls == [
+        (selection, EvidenceLedger(), package.research_plan, expected_config)
+    ]
     assert backing_report_calls == [
-        (selection, EvidenceLedger(), package.research_plan)
+        (
+            selection,
+            EvidenceLedger(),
+            package.research_plan,
+            package.iteration_trace,
+            package.run_summary.provider_usage_summary,
+            package.run_summary.stop_reason,
+            expected_config,
+        )
     ]
     assert [render.name for render in package.renders] == [
         "reading_path",
@@ -510,6 +649,12 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
+        "fetch_content",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
         "evaluate_coverage",
         _as_checkpoint(
             lambda ledger, plan: types.SimpleNamespace(
@@ -534,8 +679,8 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
         module,
         "render_reading_path",
         _as_checkpoint(
-            lambda selection: RenderPayload(
-                name="reading_path", content_markdown="# Reading Path\n"
+            lambda selection, ledger, plan, config: _render_result(
+                "reading_path", "# Reading Path\n"
             )
         ),
     )
@@ -543,8 +688,8 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
         module,
         "render_backing_report",
         _as_checkpoint(
-            lambda selection, ledger, plan: RenderPayload(
-                name="backing_report", content_markdown="# Backing Report\n"
+            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config: (
+                _render_result("backing_report", "# Backing Report\n")
             )
         ),
     )

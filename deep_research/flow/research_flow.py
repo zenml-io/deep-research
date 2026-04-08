@@ -12,6 +12,7 @@ from deep_research.checkpoints.council import (
 from deep_research.checkpoints.assemble import assemble_package
 from deep_research.checkpoints.coherence import judge_coherence
 from deep_research.checkpoints.evaluate import evaluate_coverage
+from deep_research.checkpoints.fetch import fetch_content
 from deep_research.checkpoints.grounding import judge_grounding
 from deep_research.checkpoints.merge import merge_evidence
 from deep_research.checkpoints.normalize import normalize_evidence
@@ -19,6 +20,7 @@ from deep_research.checkpoints.plan import build_plan
 from deep_research.checkpoints.review import review_renders
 from deep_research.checkpoints.relevance import score_relevance
 from deep_research.checkpoints.revise import revise_renders
+from deep_research.checkpoints.search import execute_searches
 from deep_research.checkpoints.select import build_selection_graph
 from deep_research.checkpoints.supervisor import run_supervisor
 from deep_research.config import ResearchConfig
@@ -29,7 +31,10 @@ from deep_research.models import (
     InvestigationPackage,
     IterationRecord,
     IterationTrace,
+    RenderSettingsSnapshot,
     RunSummary,
+    SearchExecutionResult,
+    SupervisorDecision,
     ToolCallRecord,
     CoherenceResult,
     CritiqueResult,
@@ -49,21 +54,6 @@ APPROVE_PLAN_WAIT_NAME = "approve_plan"
 CLARIFY_BRIEF_WAIT_NAME = "clarify_brief"
 
 
-def _resolve_config(
-    resolved_tier: Tier,
-    user_config: ResearchConfig | None,
-) -> ResearchConfig:
-    """Build a ResearchConfig for the resolved tier, preserving user overrides."""
-    config = ResearchConfig.for_tier(resolved_tier)
-    if user_config is None:
-        return config
-    if user_config.tier == resolved_tier:
-        return user_config
-    overrides = user_config.model_dump()
-    overrides["tier"] = resolved_tier
-    return config.model_copy(update=overrides)
-
-
 @flow
 def research_flow(
     brief: str,
@@ -74,7 +64,14 @@ def research_flow(
     user_config = config
     classification = classify_request.submit(brief, config).load()
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
-    config = _resolve_config(resolved_tier, user_config)
+    config = ResearchConfig.for_tier(resolved_tier)
+    if user_config is not None:
+        if user_config.tier == resolved_tier:
+            config = user_config
+        else:
+            config = config.model_copy(
+                update={**user_config.model_dump(), "tier": resolved_tier}
+            )
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
@@ -86,7 +83,14 @@ def research_flow(
         resolved_tier = (
             classification.recommended_tier if tier == "auto" else Tier(tier)
         )
-        config = _resolve_config(resolved_tier, user_config)
+        config = ResearchConfig.for_tier(resolved_tier)
+        if user_config is not None:
+            if user_config.tier == resolved_tier:
+                config = user_config
+            else:
+                config = config.model_copy(
+                    update={**user_config.model_dump(), "tier": resolved_tier}
+                )
 
     plan = build_plan.submit(brief, classification, config.tier).load()
     if config.require_plan_approval:
@@ -121,7 +125,7 @@ def research_flow(
                     model_name,
                     config,
                     uncovered_subtopics,
-                    id=f"council_{index}",
+                    id=f"council_{iteration}_{index}",
                 )
                 for index, model_name in enumerate(council_models)
             ]
@@ -134,16 +138,31 @@ def research_flow(
                 config,
                 uncovered_subtopics,
             ).load()
+        decision = getattr(supervisor_result, "decision", None)
+        if decision is None:
+            decision = SupervisorDecision(rationale="", search_actions=[])
+        if decision.search_actions:
+            search_result = execute_searches.submit(
+                decision,
+                config,
+            ).load()
+        else:
+            search_result = SearchExecutionResult()
+        combined_raw_results = [
+            *supervisor_result.raw_results,
+            *search_result.raw_results,
+        ]
         supervisor_cost = supervisor_result.budget.estimated_cost_usd
-        spent_usd += supervisor_cost
-        for raw_result in supervisor_result.raw_results:
+        search_cost = search_result.budget.estimated_cost_usd
+        spent_usd += supervisor_cost + search_cost
+        for raw_result in combined_raw_results:
             provider = raw_result.provider
             provider_usage_summary[provider] = (
                 provider_usage_summary.get(provider, 0) + 1
             )
 
         candidates = normalize_evidence.submit(
-            supervisor_result.raw_results,
+            combined_raw_results,
         ).load()
         relevance_result = score_relevance.submit(
             candidates,
@@ -151,7 +170,7 @@ def research_flow(
             config,
         ).load()
         relevance_cost = relevance_result.budget.estimated_cost_usd
-        iteration_cost = supervisor_cost + relevance_cost
+        iteration_cost = supervisor_cost + search_cost + relevance_cost
         spent_usd += relevance_cost
 
         ledger = merge_evidence.submit(
@@ -159,12 +178,13 @@ def research_flow(
             ledger,
             config=config,
         ).load()
+        ledger = fetch_content.submit(ledger, config).load()
         coverage = evaluate_coverage.submit(ledger, plan).load()
         previous_coverage = iteration_history[-1].coverage if iteration_history else 0.0
         coverage_delta = round(coverage.total - previous_coverage, 6)
         uncovered_subtopics = list(coverage.uncovered_subtopics)
         tool_calls: list[ToolCallRecord] = []
-        for raw_result in supervisor_result.raw_results:
+        for raw_result in combined_raw_results:
             provider_label = (
                 f" via {raw_result.provider}" if raw_result.provider else ""
             )
@@ -242,30 +262,46 @@ def research_flow(
             break
 
     selection = build_selection_graph.submit(ledger, plan, config).load()
-    reading_future = render_reading_path.submit(selection)
-    backing_future = render_backing_report.submit(selection, ledger, plan)
-    reading_render = reading_future.load()
-    backing_render = backing_future.load()
+    reading_future = render_reading_path.submit(selection, ledger, plan, config)
+    backing_future = render_backing_report.submit(
+        selection,
+        ledger,
+        plan,
+        IterationTrace(iterations=iteration_history),
+        provider_usage_summary,
+        stop_reason,
+        config,
+    )
+    reading_result = reading_future.load()
+    backing_result = backing_future.load()
+    spent_usd += reading_result.budget.estimated_cost_usd
+    spent_usd += backing_result.budget.estimated_cost_usd
     critique_result: CritiqueResult | None = None
     grounding_result: GroundingResult | None = None
     coherence_result: CoherenceResult | None = None
-    renders = [reading_render, backing_render]
+    renders = [reading_result.render, backing_result.render]
 
     if config.critique_enabled:
-        critique_result = review_renders.submit(
+        critique_checkpoint = review_renders.submit(
             renders,
             plan,
             selection,
             ledger,
             config,
         ).load()
+        critique_result = critique_checkpoint.critique
+        spent_usd += critique_checkpoint.budget.estimated_cost_usd
         renders = revise_renders.submit(renders, critique_result, plan).load()
 
     if config.judge_enabled:
         grounding_future = judge_grounding.submit(renders, ledger, config)
         coherence_future = judge_coherence.submit(renders, plan, config)
-        grounding_result = grounding_future.load()
-        coherence_result = coherence_future.load()
+        grounding_checkpoint = grounding_future.load()
+        coherence_checkpoint = coherence_future.load()
+        grounding_result = grounding_checkpoint.grounding
+        coherence_result = coherence_checkpoint.coherence
+        spent_usd += grounding_checkpoint.budget.estimated_cost_usd
+        spent_usd += coherence_checkpoint.budget.estimated_cost_usd
 
     completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     elapsed_seconds = int(monotonic() - start_time)
@@ -276,7 +312,7 @@ def research_flow(
             tier=config.tier,
             stop_reason=stop_reason,
             status="completed",
-            estimated_cost_usd=spent_usd,
+            estimated_cost_usd=round(spent_usd, 6),
             elapsed_seconds=elapsed_seconds,
             iteration_count=len(iteration_history),
             provider_usage_summary=provider_usage_summary,
@@ -291,6 +327,7 @@ def research_flow(
         selection_graph=selection,
         iteration_trace=IterationTrace(iterations=iteration_history),
         renders=renders,
+        render_settings=RenderSettingsSnapshot(writer_model=config.writer_model),
         critique_result=critique_result,
         grounding_result=grounding_result,
         coherence_result=coherence_result,

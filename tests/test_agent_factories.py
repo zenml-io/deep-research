@@ -18,9 +18,11 @@ def _install_agent_stubs(monkeypatch):
         "GroundingResult",
         "RequestClassification",
         "ResearchPlan",
+        "SupervisorDecision",
         "SupervisorCheckpointResult",
-        "RelevanceCheckpointResult",
+        "RelevanceScorerOutput",
         "SelectionGraph",
+        "RenderProse",
         "RenderPayload",
         "InvestigationPackage",
     }
@@ -145,17 +147,17 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         (
             "supervisor",
             "supervisor",
-            "SupervisorCheckpointResult",
+            "SupervisorDecision",
             {"mode": "full"},
         ),
         (
             "relevance_scorer",
             "relevance_scorer",
-            "RelevanceCheckpointResult",
+            "RelevanceScorerOutput",
             None,
         ),
         ("curator", "curator", "SelectionGraph", None),
-        ("writer", "writer", "RenderPayload", None),
+        ("writer", "writer", "RenderProse", None),
         ("aggregator", "aggregator", "InvestigationPackage", None),
     ]
 
@@ -192,3 +194,44 @@ def test_agent_factories_build_reviewer_and_judges(monkeypatch) -> None:
     assert wrap_calls[0]["agent"].kwargs["output_type"].__name__ == "CritiqueResult"
     assert wrap_calls[1]["agent"].kwargs["output_type"].__name__ == "GroundingResult"
     assert wrap_calls[2]["agent"].kwargs["output_type"].__name__ == "CoherenceResult"
+
+
+def test_agent_factories_fall_back_when_kitaru_adapter_import_is_unavailable(
+    monkeypatch,
+) -> None:
+    prompt_calls = []
+
+    class FakeAgent:
+        def __init__(self, model_name, **kwargs):
+            self.model_name = model_name
+            self.kwargs = kwargs
+
+    def load_prompt(name: str) -> str:
+        prompt_calls.append(name)
+        return f"prompt:{name}"
+
+    monkeypatch.setitem(
+        sys.modules, "pydantic_ai", types.SimpleNamespace(Agent=FakeAgent)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.prompts.loader",
+        types.SimpleNamespace(load_prompt=load_prompt),
+    )
+    monkeypatch.delitem(sys.modules, "kitaru.adapters", raising=False)
+    monkeypatch.delitem(sys.modules, "kitaru", raising=False)
+    monkeypatch.delitem(sys.modules, "deep_research.agents._kitaru", raising=False)
+    monkeypatch.delitem(sys.modules, "deep_research.agents.classifier", raising=False)
+
+    module = _load_module("deep_research.agents.classifier")
+
+    agent = module.build_classifier_agent(model_name="fallback-model")
+
+    assert isinstance(agent, FakeAgent)
+    assert agent.model_name == "fallback-model"
+    assert agent.kwargs == {
+        "name": "classifier",
+        "output_type": module.RequestClassification,
+        "instructions": "prompt:classifier",
+    }
+    assert prompt_calls == ["classifier"]

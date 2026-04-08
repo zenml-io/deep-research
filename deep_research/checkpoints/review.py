@@ -3,8 +3,10 @@ import json
 from kitaru import checkpoint
 
 from deep_research.agents.reviewer import build_reviewer_agent
-from deep_research.config import ResearchConfig
+from deep_research.config import ModelPricing, ResearchConfig
+from deep_research.flow.costing import budget_from_agent_result
 from deep_research.models import (
+    CritiqueCheckpointResult,
     CritiqueResult,
     EvidenceLedger,
     RenderPayload,
@@ -20,7 +22,7 @@ def review_renders(
     selection: SelectionGraph,
     ledger: EvidenceLedger,
     config: ResearchConfig,
-) -> CritiqueResult:
+) -> CritiqueCheckpointResult:
     """Checkpoint: critique eager renders against the current package context."""
     agent = build_reviewer_agent(config.review_model)
     prompt = {
@@ -29,4 +31,11 @@ def review_renders(
         "selection": selection.model_dump(mode="json"),
         "ledger": ledger.model_dump(mode="json"),
     }
-    return agent.run_sync(json.dumps(prompt, indent=2)).output
+    result = agent.run_sync(json.dumps(prompt, indent=2))
+    return CritiqueCheckpointResult(
+        critique=CritiqueResult.model_validate(result.output),
+        budget=budget_from_agent_result(
+            result,
+            ModelPricing.model_validate(config.review_pricing),
+        ),
+    )

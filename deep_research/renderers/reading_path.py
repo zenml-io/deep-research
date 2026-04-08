@@ -1,47 +1,51 @@
 from datetime import UTC, datetime
 
-from deep_research.models import RenderPayload, SelectionGraph
+from deep_research.models import (
+    EvidenceLedger,
+    RenderPayload,
+    ResearchPlan,
+    SelectionGraph,
+)
 
 
-def render_reading_path(selection: SelectionGraph) -> RenderPayload:
-    """Build the reading-path markdown and structured payload from a selection graph."""
-    lines = ["# Reading Path", ""]
+def render_reading_path(
+    selection: SelectionGraph,
+    ledger: EvidenceLedger,
+    plan: ResearchPlan,
+) -> RenderPayload:
+    """Build a deterministic reading-path scaffold from selection and ledger data."""
     items: list[dict[str, object]] = []
     citation_map: dict[str, str] = {}
+    candidates_by_key = {candidate.key: candidate for candidate in ledger.entries}
+
     for index, item in enumerate(selection.items, start=1):
         citation = f"[{index}]"
-        lines.append(f"- {citation} {item.candidate_key}: {item.rationale}")
-        if item.bridge_note:
-            lines.append(f"  Bridge: {item.bridge_note}")
-        if item.matched_subtopics:
-            lines.append(f"  Subtopics: {', '.join(item.matched_subtopics)}")
-        if item.ordering_rationale:
-            lines.append(f"  Why here: {item.ordering_rationale}")
-        if item.reading_time_minutes is not None:
-            lines.append(f"  Reading time: {item.reading_time_minutes} minutes")
+        candidate = candidates_by_key.get(item.candidate_key)
         items.append(
             {
                 "citation": citation,
                 "candidate_key": item.candidate_key,
+                "title": candidate.title if candidate else item.candidate_key,
+                "url": str(candidate.url) if candidate else None,
+                "provider": candidate.provider if candidate else None,
                 "rationale": item.rationale,
                 "bridge_note": item.bridge_note,
                 "matched_subtopics": item.matched_subtopics,
-                "reading_time_minutes": item.reading_time_minutes,
                 "ordering_rationale": item.ordering_rationale,
+                "snippets": [
+                    snippet.text
+                    for snippet in (candidate.snippets[:2] if candidate else [])
+                ],
             }
         )
         citation_map[citation] = item.candidate_key
-    if selection.gap_coverage_summary:
-        lines.extend(
-            [
-                "",
-                f"Uncovered subtopics: {', '.join(selection.gap_coverage_summary)}",
-            ]
-        )
+
     return RenderPayload(
         name="reading_path",
-        content_markdown="\n".join(lines),
+        content_markdown="",
         structured_content={
+            "goal": plan.goal,
+            "key_questions": plan.key_questions,
             "items": items,
             "gap_coverage_summary": selection.gap_coverage_summary,
         },

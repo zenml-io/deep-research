@@ -6,19 +6,6 @@ from deep_research.evidence.ledger import merge_candidates
 from deep_research.models import DedupeEvent, EvidenceCandidate, EvidenceLedger
 
 
-def _merge_dedupe_history(events: list[DedupeEvent]) -> list[DedupeEvent]:
-    """Merge dedupe events while preserving first-seen order and removing repeats."""
-    merged: list[DedupeEvent] = []
-    seen: set[tuple[str, str, str]] = set()
-    for event in events:
-        identity = (event.duplicate_key, event.canonical_key, event.match_basis)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        merged.append(event)
-    return merged
-
-
 @checkpoint(type="tool_call")
 def merge_evidence(
     scored: list[EvidenceCandidate],
@@ -32,10 +19,16 @@ def merge_evidence(
         else ResearchConfig.for_tier(Tier.STANDARD).source_quality_floor
     )
     merged = merge_candidates(ledger.entries, scored, quality_floor=quality_floor)
+    dedupe_log: list[DedupeEvent] = []
+    seen_events: set[tuple[str, str, str]] = set()
+    for event in [*ledger.dedupe_log, *merged.dedupe_log]:
+        identity = (event.duplicate_key, event.canonical_key, event.match_basis)
+        if identity in seen_events:
+            continue
+        seen_events.add(identity)
+        dedupe_log.append(event)
     return merged.model_copy(
         update={
-            "dedupe_log": _merge_dedupe_history(
-                [*ledger.dedupe_log, *merged.dedupe_log]
-            )
+            "dedupe_log": dedupe_log
         }
     )

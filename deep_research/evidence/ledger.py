@@ -1,4 +1,4 @@
-from deep_research.evidence.dedup import _match_precedence_keys
+from deep_research.evidence.dedup import match_precedence_keys
 from deep_research.models import (
     DedupeEvent,
     EvidenceCandidate,
@@ -7,7 +7,7 @@ from deep_research.models import (
 )
 
 
-def _dedupe_snippets(snippets: list[EvidenceSnippet]) -> list[EvidenceSnippet]:
+def dedupe_snippets(snippets: list[EvidenceSnippet]) -> list[EvidenceSnippet]:
     """Keep snippet order while removing duplicates by text and locator."""
     seen: set[tuple[str, str | None]] = set()
     deduped: list[EvidenceSnippet] = []
@@ -20,7 +20,7 @@ def _dedupe_snippets(snippets: list[EvidenceSnippet]) -> list[EvidenceSnippet]:
     return deduped
 
 
-def _ratchet_merge(
+def ratchet_merge(
     existing: EvidenceCandidate, incoming: EvidenceCandidate
 ) -> EvidenceCandidate:
     """Merge duplicate candidates by keeping the strongest known fields from both."""
@@ -35,7 +35,7 @@ def _ratchet_merge(
                     [*existing.matched_subtopics, *incoming.matched_subtopics]
                 )
             ),
-            "snippets": _dedupe_snippets([*existing.snippets, *incoming.snippets]),
+            "snippets": dedupe_snippets([*existing.snippets, *incoming.snippets]),
             "doi": existing.doi or incoming.doi,
             "arxiv_id": existing.arxiv_id or incoming.arxiv_id,
             "raw_metadata": {**existing.raw_metadata, **incoming.raw_metadata},
@@ -44,7 +44,7 @@ def _ratchet_merge(
     )
 
 
-def _canonicalize_candidates(
+def canonicalize_candidates(
     candidates: list[EvidenceCandidate],
 ) -> tuple[list[EvidenceCandidate], list[DedupeEvent]]:
     """Deduplicate candidates, merge duplicate records, and emit the dedupe event log.
@@ -59,7 +59,7 @@ def _canonicalize_candidates(
     for candidate in candidates:
         existing = None
         match_basis = None
-        for key in _match_precedence_keys(candidate):
+        for key in match_precedence_keys(candidate):
             existing = seen.get(key)
             if existing is not None:
                 match_basis = key[0]
@@ -67,13 +67,13 @@ def _canonicalize_candidates(
 
         if existing is None:
             canonical.append(candidate)
-            for key in _match_precedence_keys(candidate):
+            for key in match_precedence_keys(candidate):
                 seen[key] = candidate
             continue
 
-        merged = _ratchet_merge(existing, candidate)
+        merged = ratchet_merge(existing, candidate)
         canonical = [merged if item.key == existing.key else item for item in canonical]
-        for key in _match_precedence_keys(merged):
+        for key in match_precedence_keys(merged):
             seen[key] = merged
         dedupe_log.append(
             DedupeEvent(
@@ -93,7 +93,7 @@ def merge_candidates(
     quality_floor: float = 0.3,
 ) -> EvidenceLedger:
     """Combine candidates into a deduplicated ledger with ratcheted scores."""
-    canonical, dedupe_log = _canonicalize_candidates([*existing, *incoming])
+    canonical, dedupe_log = canonicalize_candidates([*existing, *incoming])
 
     considered = [
         candidate.model_copy(

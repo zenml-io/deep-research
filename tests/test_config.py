@@ -59,6 +59,49 @@ def test_research_config_carries_supervisor_tool_settings() -> None:
     assert config.tool_timeout_sec == 45
 
 
+def test_research_config_carries_provider_and_fetch_settings() -> None:
+    settings = ResearchSettings(
+        enabled_providers=["arxiv", "semantic_scholar"],
+        max_results_per_query=12,
+        max_fetch_candidates_per_iteration=4,
+        max_fetched_chars_per_candidate=3500,
+    )
+
+    config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
+
+    assert config.enabled_providers == ["arxiv", "semantic_scholar"]
+    assert config.max_results_per_query == 12
+    assert config.max_fetch_candidates_per_iteration == 4
+    assert config.max_fetched_chars_per_candidate == 3500
+
+
+def test_research_config_normalizes_enabled_providers() -> None:
+    settings = ResearchSettings(
+        enabled_providers=[" arxiv ", "semantic_scholar", "", "arxiv", "  "],
+    )
+
+    config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
+
+    assert config.enabled_providers == ["arxiv", "semantic_scholar"]
+
+
+def test_settings_accept_provider_api_keys_from_prefixed_or_naked_env_vars(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("RESEARCH_BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("RESEARCH_EXA_API_KEY", raising=False)
+    monkeypatch.delenv("RESEARCH_SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-secret")
+    monkeypatch.setenv("EXA_API_KEY", "exa-secret")
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "semantic-secret")
+
+    settings = ResearchSettings()
+
+    assert settings.brave_api_key == "brave-secret"
+    assert settings.exa_api_key == "exa-secret"
+    assert settings.semantic_scholar_api_key == "semantic-secret"
+
+
 def test_research_config_uses_default_supervisor_tool_settings() -> None:
     settings = ResearchSettings()
     config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)

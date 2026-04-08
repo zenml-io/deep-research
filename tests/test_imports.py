@@ -4,6 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import zipfile
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 MODULES = [
@@ -38,35 +42,22 @@ def test_package_builds_wheel() -> None:
 
         subprocess.run(
             [
-                sys.executable,
-                "-m",
-                "pip",
-                "wheel",
-                ".",
-                "--no-deps",
-                "--wheel-dir",
+                "uv",
+                "build",
+                "--wheel",
+                "--out-dir",
                 str(wheel_dir),
             ],
             check=True,
+            cwd=REPO_ROOT,
         )
 
         wheels = list(wheel_dir.glob("*.whl"))
 
         assert wheels
 
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-deps",
-                "--target",
-                str(install_dir),
-                str(wheels[0]),
-            ],
-            check=True,
-        )
+        with zipfile.ZipFile(wheels[0]) as wheel_zip:
+            wheel_zip.extractall(install_dir)
 
         subprocess.run(
             [

@@ -1,7 +1,8 @@
 from typing import Any
 
-from deep_research.models import EvidenceLedger, ResearchPlan
+from deep_research.models import EvidenceLedger, RawToolResult, ResearchPlan
 from deep_research.providers.mcp_config import MCPServerConfig, build_mcp_toolsets
+from deep_research.providers.search import ProviderRegistry, SearchProvider
 from deep_research.tools.bash_executor import run_bash
 from deep_research.tools.state_reader import read_gaps, read_plan
 
@@ -17,7 +18,7 @@ def build_supervisor_surface(
     """Build the direct provider surface for supervisor execution."""
     toolsets = build_mcp_toolsets(mcp_servers or [])
 
-    def read_plan_tool() -> dict:
+    def read_plan_tool() -> dict[str, object]:
         """Return the current research plan as a dictionary."""
         return read_plan(plan)
 
@@ -27,7 +28,7 @@ def build_supervisor_surface(
             return list(uncovered_subtopics)
         return read_gaps(plan, ledger)
 
-    def run_bash_tool(command: str):
+    def run_bash_tool(command: str) -> RawToolResult:
         """Execute an allow-listed shell command and return stdout/stderr."""
         return run_bash(command, timeout_sec=tool_timeout_sec)
 
@@ -37,6 +38,8 @@ def build_supervisor_surface(
 
 __all__ = [
     "MCPServerConfig",
+    "ProviderRegistry",
+    "SearchProvider",
     "build_mcp_toolsets",
     "build_supervisor_surface",
 ]

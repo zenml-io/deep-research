@@ -8,11 +8,12 @@ from deep_research.models import (
     InvestigationPackage,
     IterationTrace,
     RenderPayload,
+    RenderSettingsSnapshot,
     ResearchPlan,
     RunSummary,
     SelectionGraph,
 )
-from deep_research.package.assembly import assemble_package as _assemble_package
+from deep_research.package import assembly as package_assembly
 
 
 @checkpoint(type="tool_call")
@@ -23,18 +24,20 @@ def assemble_package(
     selection_graph: SelectionGraph,
     iteration_trace: IterationTrace,
     renders: list[RenderPayload],
+    render_settings: RenderSettingsSnapshot | None = None,
     critique_result: CritiqueResult | None = None,
     grounding_result: GroundingResult | None = None,
     coherence_result: CoherenceResult | None = None,
 ) -> InvestigationPackage:
     """Checkpoint: combine all research artifacts into the final investigation package."""
-    return _assemble_package(
+    return package_assembly.assemble_package(
         run_summary=run_summary,
         research_plan=research_plan,
         evidence_ledger=evidence_ledger,
         selection_graph=selection_graph,
         iteration_trace=iteration_trace,
         renders=renders,
+        render_settings=render_settings,
         critique_result=critique_result,
         grounding_result=grounding_result,
         coherence_result=coherence_result,

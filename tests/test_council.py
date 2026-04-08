@@ -9,6 +9,8 @@ from deep_research.models import (
     IterationBudget,
     RawToolResult,
     ResearchPlan,
+    SearchAction,
+    SupervisorDecision,
     SupervisorCheckpointResult,
 )
 
@@ -46,12 +48,18 @@ def _install_supervisor_checkpoint_stub(monkeypatch) -> None:
     """Stub the supervisor checkpoint module so council tests stay isolated."""
 
     def fake_execute(plan, ledger, iteration, config, uncovered_subtopics=None):
-        return SupervisorCheckpointResult(raw_results=[])
+        return SupervisorCheckpointResult(
+            decision=SupervisorDecision(rationale="stub"),
+            raw_results=[],
+        )
 
     monkeypatch.setitem(
         sys.modules,
         "deep_research.checkpoints.supervisor",
-        types.SimpleNamespace(run_supervisor=fake_execute),
+        types.SimpleNamespace(
+            execute_supervisor_turn=fake_execute,
+            run_supervisor=fake_execute,
+        ),
     )
 
 
@@ -84,6 +92,7 @@ def test_aggregate_council_results_flattens_all_generators(monkeypatch) -> None:
 
     grouped = [
         SupervisorCheckpointResult(
+            decision=SupervisorDecision(rationale="first"),
             raw_results=[RawToolResult(tool_name="a", provider="m1", payload={})],
             budget=IterationBudget(
                 input_tokens=6,
@@ -93,6 +102,7 @@ def test_aggregate_council_results_flattens_all_generators(monkeypatch) -> None:
             ),
         ),
         SupervisorCheckpointResult(
+            decision=SupervisorDecision(rationale="second"),
             raw_results=[RawToolResult(tool_name="b", provider="m2", payload={})],
             budget=IterationBudget(
                 input_tokens=12,
@@ -112,6 +122,53 @@ def test_aggregate_council_results_flattens_all_generators(monkeypatch) -> None:
     assert merged.budget.estimated_cost_usd == 0.03
 
 
+def test_aggregate_council_results_merges_decisions_before_search_execution(
+    monkeypatch,
+) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    _install_supervisor_checkpoint_stub(monkeypatch)
+    module = _import_council_module()
+
+    grouped = [
+        SupervisorCheckpointResult(
+            decision=SupervisorDecision(
+                rationale="first",
+                search_actions=[
+                    SearchAction(
+                        query="q1", rationale="r1", preferred_providers=["arxiv"]
+                    )
+                ],
+            ),
+            raw_results=[],
+            budget=IterationBudget(estimated_cost_usd=0.01),
+        ),
+        SupervisorCheckpointResult(
+            decision=SupervisorDecision(
+                rationale="second",
+                search_actions=[
+                    SearchAction(
+                        query="q1",
+                        rationale="duplicate",
+                        preferred_providers=["arxiv"],
+                    ),
+                    SearchAction(
+                        query="q2",
+                        rationale="r2",
+                        preferred_providers=["semantic_scholar"],
+                    ),
+                ],
+            ),
+            raw_results=[],
+            budget=IterationBudget(estimated_cost_usd=0.02),
+        ),
+    ]
+
+    merged = module.aggregate_council_results(grouped)
+
+    assert [action.query for action in merged.decision.search_actions] == ["q1", "q2"]
+    assert merged.budget.estimated_cost_usd == 0.03
+
+
 def test_run_council_generator_uses_override_model_when_provided(monkeypatch) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
     _install_supervisor_checkpoint_stub(monkeypatch)
@@ -122,7 +179,14 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
     ledger = EvidenceLedger(entries=[])
     captured = []
 
-    def fake_execute(plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None):
+    expected = SupervisorCheckpointResult(
+        decision=SupervisorDecision(rationale="generator"),
+        raw_results=[],
+    )
+
+    def fake_execute(
+        plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None
+    ):
         captured.append(
             {
                 "plan": plan_arg,
@@ -132,9 +196,9 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
                 "uncovered_subtopics": uncovered_subtopics,
             }
         )
-        return SupervisorCheckpointResult(raw_results=[])
+        return expected
 
-    monkeypatch.setattr(module, "run_supervisor", fake_execute)
+    monkeypatch.setattr(module, "execute_supervisor_turn", fake_execute)
 
     result = module.run_council_generator(
         plan,
@@ -144,7 +208,7 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
         config=config,
     )
 
-    assert result == SupervisorCheckpointResult(raw_results=[])
+    assert result == expected
     assert captured == [
         {
             "plan": plan,
@@ -154,6 +218,60 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
                 update={"supervisor_model": "override-supervisor-model"}
             ),
             "uncovered_subtopics": None,
+        }
+    ]
+    assert ("run_council_generator", "llm_call") in decorated
+
+
+def test_run_council_generator_uses_shared_non_checkpoint_helper(monkeypatch) -> None:
+    decorated = _install_kitaru_checkpoint_stub(monkeypatch)
+    _install_supervisor_checkpoint_stub(monkeypatch)
+    module = _import_council_module()
+    config = ResearchConfig.for_tier(Tier.STANDARD)
+    plan = _sample_plan()
+    ledger = EvidenceLedger(entries=[])
+    captured = []
+    expected = SupervisorCheckpointResult(
+        decision=SupervisorDecision(rationale="helper"),
+        raw_results=[],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "execute_supervisor_turn",
+        lambda plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None: (
+            captured.append(
+                {
+                    "plan": plan_arg,
+                    "ledger": ledger_arg,
+                    "iteration": iteration_arg,
+                    "config": config_arg,
+                    "uncovered_subtopics": uncovered_subtopics,
+                }
+            )
+            or expected
+        ),
+    )
+
+    result = module.run_council_generator(
+        plan,
+        ledger,
+        3,
+        model_name="override-supervisor-model",
+        config=config,
+        uncovered_subtopics=["impact"],
+    )
+
+    assert result == expected
+    assert captured == [
+        {
+            "plan": plan,
+            "ledger": ledger,
+            "iteration": 3,
+            "config": config.model_copy(
+                update={"supervisor_model": "override-supervisor-model"}
+            ),
+            "uncovered_subtopics": ["impact"],
         }
     ]
     assert ("run_council_generator", "llm_call") in decorated

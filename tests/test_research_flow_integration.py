@@ -6,15 +6,22 @@ from contextlib import contextmanager
 from deep_research.config import ResearchConfig
 from deep_research.enums import StopReason, Tier
 from deep_research.models import (
+    CoherenceCheckpointResult,
     CoverageScore,
+    CritiqueCheckpointResult,
     EvidenceLedger,
+    GroundingCheckpointResult,
     IterationBudget,
     RawToolResult,
+    RenderCheckpointResult,
     RenderPayload,
     ResearchPlan,
     RelevanceCheckpointResult,
     RequestClassification,
+    SearchAction,
+    SearchExecutionResult,
     SelectionGraph,
+    SupervisorDecision,
     SupervisorCheckpointResult,
 )
 
@@ -147,12 +154,25 @@ def _sample_coverage() -> CoverageScore:
     )
 
 
+def _render_result(name: str, markdown: str) -> RenderCheckpointResult:
+    return RenderCheckpointResult(
+        render=RenderPayload(name=name, content_markdown=markdown),
+        budget=IterationBudget(),
+    )
+
+
 def _patch_success_path(module, monkeypatch) -> None:
     """Patch the research flow module into a single-iteration happy path."""
     monkeypatch.setattr(
         module,
         "build_plan",
         _as_checkpoint(lambda brief, classification, tier: _sample_plan()),
+    )
+    monkeypatch.setattr(
+        module,
+        "execute_searches",
+        _as_checkpoint(lambda decision, config: SearchExecutionResult()),
+        raising=False,
     )
     monkeypatch.setattr(
         module,
@@ -176,6 +196,12 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
+        "fetch_content",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
         "evaluate_coverage",
         _as_checkpoint(lambda ledger, plan: _sample_coverage()),
     )
@@ -196,8 +222,8 @@ def _patch_success_path(module, monkeypatch) -> None:
         module,
         "render_reading_path",
         _as_checkpoint(
-            lambda selection: RenderPayload(
-                name="reading_path", content_markdown="# RP\n"
+            lambda selection, ledger, plan, config: _render_result(
+                "reading_path", "# RP\n"
             )
         ),
     )
@@ -205,9 +231,11 @@ def _patch_success_path(module, monkeypatch) -> None:
         module,
         "render_backing_report",
         _as_checkpoint(
-            lambda selection, ledger, plan: RenderPayload(
-                name="backing_report",
-                content_markdown="# BR\n",
+            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config: (
+                _render_result(
+                    "backing_report",
+                    "# BR\n",
+                )
             )
         ),
     )
@@ -215,11 +243,14 @@ def _patch_success_path(module, monkeypatch) -> None:
         module,
         "review_renders",
         _as_checkpoint(
-            lambda *args, **kwargs: module.CritiqueResult(
-                dimensions=[],
-                summary="critique",
-                revision_suggestions=[],
-                revision_recommended=False,
+            lambda *args, **kwargs: CritiqueCheckpointResult(
+                critique=module.CritiqueResult(
+                    dimensions=[],
+                    summary="critique",
+                    revision_suggestions=[],
+                    revision_recommended=False,
+                ),
+                budget=IterationBudget(),
             )
         ),
     )
@@ -232,19 +263,25 @@ def _patch_success_path(module, monkeypatch) -> None:
         module,
         "judge_grounding",
         _as_checkpoint(
-            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+            lambda *args, **kwargs: GroundingCheckpointResult(
+                grounding=module.GroundingResult(score=1.0, verdicts=[]),
+                budget=IterationBudget(),
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "judge_coherence",
         _as_checkpoint(
-            lambda *args, **kwargs: module.CoherenceResult(
-                relevance=1.0,
-                logical_flow=1.0,
-                completeness=1.0,
-                consistency=1.0,
-                summary="coherent",
+            lambda *args, **kwargs: CoherenceCheckpointResult(
+                coherence=module.CoherenceResult(
+                    relevance=1.0,
+                    logical_flow=1.0,
+                    completeness=1.0,
+                    consistency=1.0,
+                    summary="coherent",
+                ),
+                budget=IterationBudget(),
             )
         ),
     )
@@ -293,11 +330,14 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         module,
         "review_renders",
         _as_checkpoint(
-            lambda *args, **kwargs: module.CritiqueResult(
-                dimensions=[],
-                summary="critique",
-                revision_suggestions=["tighten"],
-                revision_recommended=True,
+            lambda *args, **kwargs: CritiqueCheckpointResult(
+                critique=module.CritiqueResult(
+                    dimensions=[],
+                    summary="critique",
+                    revision_suggestions=["tighten"],
+                    revision_recommended=True,
+                ),
+                budget=IterationBudget(estimated_cost_usd=0.4),
             )
         ),
     )
@@ -310,19 +350,25 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         module,
         "judge_grounding",
         _as_checkpoint(
-            lambda *args, **kwargs: module.GroundingResult(score=1.0, verdicts=[])
+            lambda *args, **kwargs: GroundingCheckpointResult(
+                grounding=module.GroundingResult(score=1.0, verdicts=[]),
+                budget=IterationBudget(estimated_cost_usd=0.3),
+            )
         ),
     )
     monkeypatch.setattr(
         module,
         "judge_coherence",
         _as_checkpoint(
-            lambda *args, **kwargs: module.CoherenceResult(
-                relevance=1.0,
-                logical_flow=1.0,
-                completeness=1.0,
-                consistency=1.0,
-                summary="coherent",
+            lambda *args, **kwargs: CoherenceCheckpointResult(
+                coherence=module.CoherenceResult(
+                    relevance=1.0,
+                    logical_flow=1.0,
+                    completeness=1.0,
+                    consistency=1.0,
+                    summary="coherent",
+                ),
+                budget=IterationBudget(estimated_cost_usd=0.2),
             )
         ),
     )
@@ -351,6 +397,11 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     ]
     assert record.continue_reason is None
     assert record.stop_reason is StopReason.CONVERGED
+    assert (
+        result.render_settings.writer_model
+        == ResearchConfig.for_tier(Tier.DEEP).writer_model
+    )
+    assert result.run_summary.estimated_cost_usd == 0.9
     assert result.critique_result.summary == "critique"
     assert result.grounding_result.score == 1.0
     assert result.coherence_result.summary == "coherent"
@@ -403,3 +454,115 @@ def test_council_flow_aggregates_multiple_generator_results(monkeypatch) -> None
     result = handle.wait()
 
     assert result is not None
+
+
+def test_research_flow_combines_supervisor_and_builtin_search_results(
+    monkeypatch,
+) -> None:
+    module = _load_research_flow_module()
+    normalized_batches = []
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    _patch_success_path(module, monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
+                decision=SupervisorDecision(
+                    rationale="search next",
+                    search_actions=[
+                        SearchAction(query="learn kitaru", rationale="fill gaps")
+                    ],
+                ),
+                raw_results=[
+                    RawToolResult(
+                        tool_name="mcp_search",
+                        provider="openai",
+                        payload={"items": ["a"]},
+                    )
+                ],
+                budget=IterationBudget(estimated_cost_usd=0.3),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "execute_searches",
+        _as_checkpoint(
+            lambda decision, config: SearchExecutionResult(
+                raw_results=[
+                    RawToolResult(
+                        tool_name="provider_search",
+                        provider="semantic_scholar",
+                        payload={"items": ["b"]},
+                    )
+                ],
+                budget=IterationBudget(estimated_cost_usd=0.2),
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "normalize_evidence",
+        _as_checkpoint(
+            lambda raw_results: normalized_batches.append(list(raw_results)) or []
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "fetch_content",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+
+    handle = module.research_flow.run("learn kitaru")
+    result = handle.wait()
+
+    assert normalized_batches == [
+        [
+            RawToolResult(
+                tool_name="mcp_search",
+                provider="openai",
+                payload={"items": ["a"]},
+            ),
+            RawToolResult(
+                tool_name="provider_search",
+                provider="semantic_scholar",
+                payload={"items": ["b"]},
+            ),
+        ]
+    ]
+    assert result.run_summary.provider_usage_summary == {
+        "openai": 1,
+        "semantic_scholar": 1,
+    }
+    assert result.iteration_trace.iterations[0].tool_calls == [
+        module.ToolCallRecord(
+            tool_name="mcp_search",
+            status="ok",
+            provider="openai",
+            summary="mcp_search via openai succeeded",
+        ),
+        module.ToolCallRecord(
+            tool_name="provider_search",
+            status="ok",
+            provider="semantic_scholar",
+            summary="provider_search via semantic_scholar succeeded",
+        ),
+    ]
+    assert result.run_summary.estimated_cost_usd == 0.5

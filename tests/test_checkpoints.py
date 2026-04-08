@@ -22,6 +22,8 @@ from deep_research.models import (
     ResearchPlan,
     RelevanceCheckpointResult,
     RunSummary,
+    SearchAction,
+    SupervisorDecision,
     SelectionGraph,
     StopReason,
     SupervisorCheckpointResult,
@@ -45,6 +47,7 @@ def _clear_checkpoint_modules() -> None:
         "deep_research.checkpoints.grounding",
         "deep_research.checkpoints.coherence",
         "deep_research.checkpoints.normalize",
+        "deep_research.checkpoints.search",
         "deep_research.checkpoints.relevance",
         "deep_research.checkpoints.merge",
         "deep_research.checkpoints.evaluate",
@@ -145,6 +148,7 @@ def _install_agent_builder_stubs(monkeypatch):
         success_criteria=["Produce a summary"],
     )
     supervisor_output = SupervisorCheckpointResult(
+        decision=SupervisorDecision(rationale="Need more sources."),
         raw_results=[
             RawToolResult(
                 tool_name="search",
@@ -322,6 +326,34 @@ def test_normalize_evidence_accepts_raw_results(monkeypatch) -> None:
     assert module.normalize_evidence._checkpoint_type == "tool_call"
 
 
+def test_normalize_evidence_uses_payload_source_kind_and_baseline_quality(
+    monkeypatch,
+) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    module = _import_checkpoint_module("deep_research.checkpoints.normalize")
+
+    result = RawToolResult(
+        tool_name="search",
+        provider="arxiv",
+        payload={
+            "source_kind": "paper",
+            "results": [
+                {
+                    "title": "DPO Survey",
+                    "url": "https://arxiv.org/abs/2401.00001",
+                    "description": "Survey abstract",
+                    "arxiv_id": "2401.00001",
+                }
+            ],
+        },
+    )
+
+    normalized = module.normalize_evidence([result])
+
+    assert normalized[0].source_kind == "paper"
+    assert normalized[0].quality_score >= 0.9
+
+
 def test_normalize_evidence_accepts_raw_results_with_items_payload(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
 
@@ -346,6 +378,28 @@ def test_normalize_evidence_accepts_raw_results_with_items_payload(monkeypatch) 
     assert normalized[0].snippets[0].text == "y"
 
 
+def test_evidence_ledger_accepts_bucket_style_constructor_inputs() -> None:
+    candidate_payload = {
+        "key": "candidate-1",
+        "title": "Example",
+        "url": "https://example.com/source-1",
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "selected": True,
+    }
+
+    ledger = EvidenceLedger.model_validate(
+        {
+            "considered": [candidate_payload],
+            "selected": [candidate_payload],
+            "rejected": [],
+        }
+    )
+
+    assert ledger.considered[0].key == "candidate-1"
+    assert ledger.selected[0].key == "candidate-1"
+
+
 def test_supervisor_factory_uses_checkpoint_result_contract(monkeypatch) -> None:
     wrap_calls = _install_supervisor_factory_dependency_stubs(monkeypatch)
 
@@ -353,7 +407,7 @@ def test_supervisor_factory_uses_checkpoint_result_contract(monkeypatch) -> None
 
     module.build_supervisor_agent("test-model", toolsets=[], tools=[])
 
-    assert wrap_calls[0]["agent"].kwargs["output_type"] is SupervisorCheckpointResult
+    assert wrap_calls[0]["agent"].kwargs["output_type"] is SupervisorDecision
 
 
 def test_classify_request_uses_configured_model_and_returns_output(monkeypatch) -> None:
@@ -400,9 +454,62 @@ def test_build_plan_uses_tier_model_and_passes_brief(monkeypatch) -> None:
     assert ("build_plan", "llm_call") in decorated
 
 
-def test_run_supervisor_uses_configured_model(monkeypatch) -> None:
+def test_run_supervisor_returns_structured_decision_and_mcp_raw_results(
+    monkeypatch,
+) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
-    calls = _install_agent_builder_stubs(monkeypatch)
+    supervisor_calls = []
+
+    supervisor_output = SupervisorDecision(
+        rationale="Need paper search next.",
+        search_actions=[
+            SearchAction(
+                query="direct preference optimization survey",
+                rationale="Need recent paper coverage.",
+                preferred_providers=["arxiv", "semantic_scholar"],
+            )
+        ],
+    )
+
+    def build_supervisor_agent(model_name, *args, **kwargs):
+        supervisor_calls.append(
+            {"model_name": model_name, "args": args, "kwargs": kwargs}
+        )
+
+        def run_sync(prompt):
+            return types.SimpleNamespace(
+                output=supervisor_output,
+                usage=lambda: types.SimpleNamespace(
+                    input_tokens=11,
+                    output_tokens=7,
+                    total_tokens=18,
+                ),
+                all_messages=lambda: [
+                    types.SimpleNamespace(
+                        parts=[
+                            types.SimpleNamespace(
+                                part_kind="tool-return",
+                                tool_name="search",
+                                content={
+                                    "provider": "mcp",
+                                    "payload": {
+                                        "source_kind": "web",
+                                        "results": [],
+                                    },
+                                },
+                            )
+                        ]
+                    )
+                ],
+            )
+
+        return types.SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.supervisor",
+        types.SimpleNamespace(build_supervisor_agent=build_supervisor_agent),
+    )
 
     module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
     config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
@@ -416,14 +523,19 @@ def test_run_supervisor_uses_configured_model(monkeypatch) -> None:
         _sample_plan(), EvidenceLedger(entries=[]), 2, config
     )
 
-    assert result.raw_results[0].tool_name == "search"
-    assert calls["supervisor_calls"] == [
+    assert result.decision.search_actions[0].preferred_providers == [
+        "arxiv",
+        "semantic_scholar",
+    ]
+    assert result.raw_results[0].provider == "mcp"
+    assert result.budget.total_tokens == 18
+    assert supervisor_calls == [
         {
             "model_name": "supervisor-test-model",
             "args": (),
             "kwargs": {
                 "toolsets": [],
-                "tools": calls["supervisor_calls"][0]["kwargs"]["tools"],
+                "tools": supervisor_calls[0]["kwargs"]["tools"],
             },
         }
     ]
@@ -434,7 +546,30 @@ def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
-    calls = _install_agent_builder_stubs(monkeypatch)
+    calls = []
+
+    def build_supervisor_agent(model_name, *args, **kwargs):
+        calls.append({"model_name": model_name, "args": args, "kwargs": kwargs})
+
+        def run_sync(prompt):
+            calls.append({"prompt": prompt})
+            return types.SimpleNamespace(
+                output=SupervisorDecision(rationale="Need more coverage."),
+                usage=lambda: types.SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                ),
+                all_messages=lambda: [],
+            )
+
+        return types.SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.supervisor",
+        types.SimpleNamespace(build_supervisor_agent=build_supervisor_agent),
+    )
 
     module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
     config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
@@ -463,8 +598,8 @@ def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
         config,
     )
 
-    assert result.raw_results[0].tool_name == "search"
-    assert calls["supervisor_calls"] == [
+    assert result.decision.rationale == "Need more coverage."
+    assert calls[0:1] == [
         {
             "model_name": "override-supervisor-model",
             "args": (),
@@ -473,10 +608,249 @@ def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
     ]
     import json
 
-    prompt = json.loads(calls["run_calls"][0])
+    prompt = json.loads(calls[1]["prompt"])
     assert prompt["uncovered_subtopics"] == ["status", "impact"]
     assert prompt["max_tool_calls"] == 7
     assert prompt["tool_timeout_sec"] == 45
+    assert prompt["enabled_providers"] == config.enabled_providers
+
+
+def test_extract_mcp_raw_results_accepts_multiple_search_like_shapes(
+    monkeypatch,
+) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
+
+    result = types.SimpleNamespace(
+        all_messages=lambda: [
+            types.SimpleNamespace(
+                parts=[
+                    types.SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="search",
+                        content=RawToolResult(
+                            tool_name="search",
+                            provider="mcp",
+                            payload={"source_kind": "web", "results": []},
+                        ),
+                    ),
+                    types.SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="search",
+                        content={
+                            "tool_name": "search",
+                            "provider": "mcp",
+                            "payload": {"source_kind": "paper", "items": []},
+                        },
+                    ),
+                    types.SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="search",
+                        content={
+                            "provider": "mcp",
+                            "source_kind": "web",
+                            "results": [],
+                        },
+                    ),
+                ]
+            )
+        ]
+    )
+
+    raw_results = module.extract_mcp_raw_results(result)
+
+    assert [item.provider for item in raw_results] == ["mcp", "mcp", "mcp"]
+    assert raw_results[0].payload["source_kind"] == "web"
+    assert raw_results[1].payload["source_kind"] == "paper"
+    assert raw_results[2].payload["results"] == []
+
+
+def test_extract_mcp_raw_results_ignores_non_search_like_shapes(monkeypatch) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
+
+    result = types.SimpleNamespace(
+        all_messages=lambda: [
+            types.SimpleNamespace(
+                parts=[
+                    types.SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="search",
+                        content="not-a-dict",
+                    ),
+                    types.SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="search",
+                        content={"provider": "mcp"},
+                    ),
+                    types.SimpleNamespace(
+                        part_kind="text",
+                        tool_name="search",
+                        content={
+                            "provider": "mcp",
+                            "source_kind": "web",
+                            "results": [],
+                        },
+                    ),
+                ]
+            )
+        ]
+    )
+
+    assert module.extract_mcp_raw_results(result) == []
+
+
+def test_run_supervisor_uses_explicit_pricing_when_present(monkeypatch) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+
+    def build_supervisor_agent(model_name, *args, **kwargs):
+        def run_sync(prompt):
+            return types.SimpleNamespace(
+                output=SupervisorDecision(rationale="Need more coverage."),
+                usage=lambda: types.SimpleNamespace(
+                    input_tokens=11,
+                    output_tokens=7,
+                    total_tokens=18,
+                ),
+                all_messages=lambda: [],
+            )
+
+        return types.SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.supervisor",
+        types.SimpleNamespace(build_supervisor_agent=build_supervisor_agent),
+    )
+
+    module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
+    config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
+        update={
+            "supervisor_pricing": {
+                "input_per_million_usd": 100.0,
+                "output_per_million_usd": 200.0,
+            }
+        }
+    )
+
+    result = module.run_supervisor(
+        _sample_plan(),
+        EvidenceLedger(entries=[]),
+        1,
+        config,
+    )
+
+    assert result.budget.input_tokens == 11
+    assert result.budget.output_tokens == 7
+    assert result.budget.estimated_cost_usd == 0.0025
+
+
+def test_execute_searches_returns_raw_results_and_provider_budget(monkeypatch) -> None:
+    decorated = _install_kitaru_checkpoint_stub(monkeypatch)
+    module = _import_checkpoint_module("deep_research.checkpoints.search")
+
+    class FakeProvider:
+        name = "arxiv"
+
+        def estimate_cost_usd(self, query_count: int) -> float:
+            return 0.0
+
+        def search(self, queries, *, max_results_per_query=10, recency_days=None):
+            return [
+                RawToolResult(
+                    tool_name="search",
+                    provider="arxiv",
+                    payload={"source_kind": "paper", "results": []},
+                )
+            ]
+
+    monkeypatch.setattr(
+        module,
+        "ProviderRegistry",
+        lambda config: types.SimpleNamespace(
+            providers_for=lambda action: [FakeProvider()]
+        ),
+    )
+
+    result = module.execute_searches(
+        SupervisorDecision(
+            rationale="Need paper search.",
+            search_actions=[SearchAction(query="rlhf survey", rationale="Find papers")],
+        ),
+        ResearchConfig.for_tier(Tier.STANDARD),
+    )
+
+    assert result.raw_results[0].provider == "arxiv"
+    assert result.budget.estimated_cost_usd == 0.0
+    assert ("execute_searches", "tool_call") in decorated
+
+
+def test_execute_searches_dedupes_duplicate_search_actions(monkeypatch) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    module = _import_checkpoint_module("deep_research.checkpoints.search")
+    search_calls = []
+
+    class FakeProvider:
+        name = "semantic_scholar"
+
+        def estimate_cost_usd(self, query_count: int) -> float:
+            return 0.02 * query_count
+
+        def search(self, queries, *, max_results_per_query=10, recency_days=None):
+            search_calls.append(
+                {
+                    "queries": list(queries),
+                    "max_results_per_query": max_results_per_query,
+                    "recency_days": recency_days,
+                }
+            )
+            return [
+                RawToolResult(
+                    tool_name="search",
+                    provider="semantic_scholar",
+                    payload={"source_kind": "paper", "results": []},
+                )
+            ]
+
+    monkeypatch.setattr(
+        module,
+        "ProviderRegistry",
+        lambda config: types.SimpleNamespace(
+            providers_for=lambda action: [FakeProvider()]
+        ),
+    )
+
+    result = module.execute_searches(
+        SupervisorDecision(
+            rationale="Need paper search.",
+            search_actions=[
+                SearchAction(
+                    query="rlhf survey",
+                    rationale="Find papers",
+                    preferred_providers=["semantic_scholar"],
+                    recency_days=30,
+                    max_results=3,
+                ),
+                SearchAction(
+                    query="RLHF survey",
+                    rationale="Duplicate phrasing should dedupe",
+                    preferred_providers=["semantic_scholar"],
+                    recency_days=30,
+                    max_results=3,
+                ),
+            ],
+        ),
+        ResearchConfig.for_tier(Tier.STANDARD),
+    )
+
+    assert len(search_calls) == 1
+    assert search_calls[0] == {
+        "queries": ["rlhf survey"],
+        "max_results_per_query": 3,
+        "recency_days": 30,
+    }
+    assert len(result.raw_results) == 1
+    assert result.budget.estimated_cost_usd == 0.02
 
 
 def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None:
@@ -488,34 +862,52 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
     grounding_module = _import_checkpoint_module("deep_research.checkpoints.grounding")
     coherence_module = _import_checkpoint_module("deep_research.checkpoints.coherence")
     config = ResearchConfig.for_tier(Tier.DEEP).model_copy(
-        update={"review_model": "review-model", "judge_model": "judge-model"}
+        update={
+            "review_model": "review-model",
+            "judge_model": "judge-model",
+            "review_pricing": {
+                "input_per_million_usd": 100.0,
+                "output_per_million_usd": 200.0,
+            },
+            "judge_pricing": {
+                "input_per_million_usd": 100.0,
+                "output_per_million_usd": 200.0,
+            },
+        }
     )
     renders = [RenderPayload(name="reading_path", content_markdown="# RP")]
 
-    critique = review_module.review_renders(
+    critique_result = review_module.review_renders(
         renders,
         _sample_plan(),
         SelectionGraph(items=[]),
         EvidenceLedger(entries=[]),
         config,
     )
-    revised = revise_module.revise_renders(renders, critique, _sample_plan())
-    grounding = grounding_module.judge_grounding(
+    revised = revise_module.revise_renders(
+        renders,
+        critique_result.critique,
+        _sample_plan(),
+    )
+    grounding_result = grounding_module.judge_grounding(
         revised,
         EvidenceLedger(entries=[]),
         config,
     )
-    coherence = coherence_module.judge_coherence(
+    coherence_result = coherence_module.judge_coherence(
         revised,
         _sample_plan(),
         config,
     )
 
-    assert critique.summary == "Review summary"
+    assert critique_result.critique.summary == "Review summary"
+    assert critique_result.budget.estimated_cost_usd == 0.0
     assert revised[0].name == "reading_path"
     assert revised[0].structured_content["critique_summary"] == "Review summary"
-    assert grounding.score == 1.0
-    assert coherence.summary == "Coherent overall."
+    assert grounding_result.grounding.score == 1.0
+    assert grounding_result.budget.estimated_cost_usd == 0.0
+    assert coherence_result.coherence.summary == "Coherent overall."
+    assert coherence_result.budget.estimated_cost_usd == 0.0
     assert calls["reviewer_calls"] == [
         {"model_name": "review-model", "args": (), "kwargs": {}}
     ]

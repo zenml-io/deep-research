@@ -41,6 +41,17 @@ Kitaru @flow / @checkpoint              PydanticAI Agent
 ## The Research Loop
 
 ![Deep Research Engine Flow](flow.png)
+[Excalidraw URL](https://excalidraw.com/#json=5oHahDqsheVVnPJdBjA2j,fgmIEkQR64EBRp4ztiS2sQ)
+
+```
+classify_request -> build_plan -> run_supervisor / council -> execute_searches -> normalize_evidence -> score_relevance -> merge_evidence -> fetch_content -> evaluate_coverage
+
+After convergence:
+
+build_selection_graph -> render_reading_path -> render_backing_report -> review / revise -> grounding / coherence -> assemble_package
+```
+
+`full_report` stays lazy. The package IO helpers synthesize it from saved package state on demand instead of emitting it during the main flow.
 
 
 ### Stop Rules (checked after every iteration, in priority order)
@@ -75,9 +86,11 @@ Optional quality layers (deep tier): `CritiqueResult`, `GroundingResult`, `Coher
 
 | Renderer | Timing | Description |
 |---|---|---|
-| `reading_path` | Eager | Ordered resources with per-item rationale and subtopic coverage |
-| `backing_report` | Eager | Evidence selection rationale, gap analysis — the "show your work" artifact |
+| `reading_path` | Eager | Deterministic scaffold plus synthesized prose for an ordered reading guide |
+| `backing_report` | Eager | Deterministic scaffold plus synthesized prose for evidence selection rationale and gap analysis |
 | `full_report` | Lazy | Full cited synthesis, produced on first request then cached |
+
+The renderer modules build deterministic `RenderPayload` scaffolds. The rendering checkpoints own the writer-model call that turns those scaffolds into prose and validates citations against the scaffold citation map.
 
 ## Tiers
 
@@ -92,7 +105,7 @@ When `tier = "auto"`, the classifier detects complexity from the brief and selec
 
 ### Council Mode (Opt-In)
 
-N parallel generators (default: 3) each execute independent search turns. An aggregator merges their evidence ledgers (union candidates, best-score-wins dedup, union matched subtopics). Available on deep and custom tiers. Approximately 15x more tokens than single-agent — use for high-stakes research where breadth matters more than cost.
+N parallel generators (default: 3) each produce independent supervisor decisions. The council aggregator merges and dedupes their `SearchAction`s before built-in provider execution, so the flow does not fan out identical Brave/arXiv/Semantic Scholar/Exa searches multiple times. Available on deep and custom tiers. Approximately 15x more tokens than single-agent; use for high-stakes research where breadth matters more than cost.
 
 ## Project Layout
 
@@ -111,14 +124,16 @@ deep_research/
 ├── checkpoints/             # Kitaru checkpoint functions
 │   ├── classify.py          #   @checkpoint(type="llm_call")
 │   ├── plan.py              #   @checkpoint(type="llm_call")
-│   ├── supervisor.py        #   @checkpoint(type="llm_call") — search turn
+│   ├── supervisor.py        #   @checkpoint(type="llm_call") — decision + MCP capture
 │   ├── council.py           #   @checkpoint(type="llm_call") — parallel generators
+│   ├── search.py            #   @checkpoint(type="tool_call") — built-in provider execution
 │   ├── normalize.py         #   @checkpoint(type="tool_call")
 │   ├── relevance.py         #   @checkpoint(type="llm_call")
 │   ├── merge.py             #   @checkpoint(type="tool_call")
+│   ├── fetch.py             #   @checkpoint(type="tool_call") — canonical content fetch
 │   ├── evaluate.py          #   @checkpoint(type="tool_call") — coverage scoring
 │   ├── select.py            #   @checkpoint(type="tool_call") — selection graph
-│   ├── rendering.py         #   reading_path, backing_report, full_report
+│   ├── rendering.py         #   synthesized reading/backing/full report checkpoints
 │   ├── review.py            #   @checkpoint(type="llm_call") — critique
 │   ├── revise.py            #   @checkpoint(type="llm_call")
 │   ├── grounding.py         #   @checkpoint(type="llm_call") — LLM judge
@@ -138,13 +153,21 @@ deep_research/
 ├── config.py                # ResearchConfig, tier defaults, env settings
 ├── enums.py                 # StopReason, Tier, SourceKind
 ├── providers/
-│   ├── __init__.py          #   build_supervisor_surface (tools + MCP toolsets)
+│   ├── __init__.py          #   build_supervisor_surface + ProviderRegistry exports
 │   ├── mcp_config.py        #   MCPServerConfig + toolset factory
-│   └── normalization.py     #   Raw tool results → EvidenceCandidate
-├── renderers/               # Pure functions: package data → markdown + structured
+│   ├── normalization.py     #   Raw tool results → EvidenceCandidate
+│   └── search/
+│       ├── __init__.py      #   SearchProvider protocol + ProviderRegistry
+│       ├── brave.py         #   Brave built-in web search
+│       ├── arxiv_provider.py
+│       ├── semantic_scholar.py
+│       ├── exa_provider.py
+│       └── fetcher.py       #   URL fetch + HTML to text extraction
+├── renderers/               # Pure functions: package data → deterministic scaffolds
 │   ├── reading_path.py
 │   ├── backing_report.py
-│   └── full_report.py
+│   ├── full_report.py
+│   └── materialization.py   #   Lazy full-report synthesis helper
 ├── tools/
 │   ├── bash_executor.py     #   Allow-listed bash sandbox (echo, ls, pwd)
 │   └── state_reader.py      #   read_plan, read_gaps tools for supervisor
@@ -193,7 +216,7 @@ def build_planner_agent(model_name: str):
     )
 ```
 
-The supervisor agent is special — it receives MCP toolsets and local tools (read_plan, read_gaps, run_bash) for search execution:
+The supervisor agent is special. It returns a structured `SupervisorDecision`, can still use MCP toolsets and local tools, and the checkpoint reconstructs any MCP tool results from PydanticAI message history. Built-in provider execution happens later in a deterministic checkpoint:
 
 ```python
 def build_supervisor_agent(model_name, toolsets, tools):
@@ -201,7 +224,7 @@ def build_supervisor_agent(model_name, toolsets, tools):
         Agent(
             model_name,
             name="supervisor",
-            output_type=SupervisorCheckpointResult,
+            output_type=SupervisorDecision,
             instructions=load_prompt("supervisor"),
             toolsets=toolsets,
             tools=tools,
@@ -234,7 +257,8 @@ Evidence flows through a strict pipeline:
 2. **Normalization** — `normalize_tool_results()` converts to `EvidenceCandidate` with canonical URLs, deterministic keys (SHA256 of DOI/arXiv/URL), and normalized scores
 3. **Relevance scoring** — LLM scores each candidate against the research plan
 4. **Merge** — `merge_candidates()` ratchet-merges into the ledger (scores only go up, snippets accumulate, dedup by DOI > arXiv > URL > title)
-5. **Selection** — Quality floor filter (default 0.3), then deterministic ordering by quality + authority + relevance
+5. **Fetch enrichment** — `fetch_content()` pulls canonical page text for a bounded set of candidates and enriches the canonical ledger entry in place
+6. **Selection** — Quality floor filter (default 0.3), then deterministic ordering by quality + authority + relevance
 
 The ratchet rule guarantees that the engine never loses good evidence from earlier iterations.
 
@@ -329,6 +353,10 @@ All settings use the `RESEARCH_` prefix and are loaded via Pydantic Settings.
 | `RESEARCH_SOURCE_QUALITY_FLOOR` | `0.30` | Minimum quality for selection |
 | `RESEARCH_COUNCIL_SIZE` | `3` | Parallel generators in council mode |
 | `RESEARCH_COUNCIL_COST_BUDGET_USD` | `2.00` | Council cost budget |
+| `RESEARCH_ENABLED_PROVIDERS` | `arxiv,semantic_scholar` | Built-in search providers enabled for deterministic execution |
+| `RESEARCH_MAX_RESULTS_PER_QUERY` | `10` | Per-provider result cap for each search action |
+| `RESEARCH_MAX_FETCH_CANDIDATES_PER_ITERATION` | `5` | Max canonical pages fetched after merge |
+| `RESEARCH_MAX_FETCHED_CHARS_PER_CANDIDATE` | `4000` | Max extracted page text retained per candidate |
 
 ### Provider API Keys
 
@@ -340,7 +368,13 @@ PydanticAI reads keys from standard environment variables. At least one must be 
 | Anthropic (Claude) | `ANTHROPIC_API_KEY` |
 | OpenAI (GPT) | `OPENAI_API_KEY` |
 
-Search providers are plugged in via MCP server configurations. The engine is fully functional with zero external search keys — the supervisor can use its bash sandbox and any configured MCP servers.
+Built-in search providers can run with zero extra search keys when `arxiv` and `semantic_scholar` are enabled. Brave and Exa stay optional keyed providers, and MCP remains available as an advanced path for the supervisor.
+
+| Search Provider | Variable | Required |
+|---|---|---|
+| Brave | `RESEARCH_BRAVE_API_KEY` or `BRAVE_API_KEY` | No |
+| Exa | `RESEARCH_EXA_API_KEY` or `EXA_API_KEY` | No |
+| Semantic Scholar | `RESEARCH_SEMANTIC_SCHOLAR_API_KEY` or `SEMANTIC_SCHOLAR_API_KEY` | No |
 
 ## Installation
 

@@ -3,7 +3,8 @@ import json
 from kitaru import checkpoint
 
 from deep_research.agents.relevance_scorer import build_relevance_scorer_agent
-from deep_research.config import ResearchConfig
+from deep_research.config import ModelPricing, ResearchConfig
+from deep_research.flow.costing import budget_from_agent_result
 from deep_research.models import (
     EvidenceCandidate,
     RelevanceCheckpointResult,
@@ -23,4 +24,11 @@ def score_relevance(
         "plan": plan.model_dump(mode="json"),
         "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
     }
-    return agent.run_sync(json.dumps(prompt, indent=2)).output
+    result = agent.run_sync(json.dumps(prompt, indent=2))
+    return RelevanceCheckpointResult(
+        candidates=result.output.candidates,
+        budget=budget_from_agent_result(
+            result,
+            ModelPricing.model_validate(config.relevance_scorer_pricing),
+        ),
+    )

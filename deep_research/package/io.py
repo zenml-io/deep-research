@@ -1,11 +1,15 @@
 import shutil
 from pathlib import Path
 
+from deep_research.config import ModelPricing, ResearchConfig
 from deep_research.models import InvestigationPackage, RenderPayload
-from deep_research.renderers.full_report import render_full_report
+from deep_research.renderers.full_report import (
+    render_full_report as build_full_report_scaffold,
+)
+from deep_research.renderers.materialization import materialize_render_payload
 
 
-def _sanitize_path_component(value: str, *, field_name: str) -> str:
+def sanitize_path_component(value: str, *, field_name: str) -> str:
     """Validate a single path segment and reject traversal, separators, or padding.
 
     The package writer uses run IDs and render names as file-system path components.
@@ -27,7 +31,7 @@ def write_markdown(content: str, path: Path) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _write_json(content: str, path: Path) -> None:
+def write_json(content: str, path: Path) -> None:
     """Write serialized JSON text to disk after ensuring the parent directory exists.
 
     This helper mirrors `write_markdown()` so package persistence can create nested
@@ -37,7 +41,7 @@ def _write_json(content: str, path: Path) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _reset_directory(path: Path) -> None:
+def reset_directory(path: Path) -> None:
     """Replace a generated-output directory with an empty copy at the same path.
 
     Package writes are expected to be idempotent, so this helper removes any stale
@@ -46,71 +50,26 @@ def _reset_directory(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
-
-
-def _render_summary_markdown(package: InvestigationPackage) -> str:
-    """Render the top-level summary markdown shown alongside the saved package.
-
-    The summary is intentionally short and only exposes the run identifier and final
-    status so humans can quickly inspect a run directory without opening JSON files.
-    """
-    return (
-        "# Summary\n\n"
-        f"Run ID: {package.run_summary.run_id}\n\n"
-        f"Status: {package.run_summary.status}\n"
-    )
-
-
-def _render_plan_markdown(package: InvestigationPackage) -> str:
-    """Render a readable markdown companion for the structured research plan.
-
-    The output mirrors the stored plan JSON, including approval state, key questions,
-    and grouped queries, so the run directory can be reviewed without parsing models.
-    """
-    lines = [
-        "# Research Plan",
-        "",
-        f"Goal: {package.research_plan.goal}",
-        "",
-        f"Approval status: {package.research_plan.approval_status}",
-        "",
-        "## Key Questions",
-    ]
-    lines.extend(f"- {question}" for question in package.research_plan.key_questions)
-    lines.extend(["", "## Query Groups"])
-    for group_name, queries in package.research_plan.query_groups.items():
-        lines.append(f"- {group_name}")
-        lines.extend(f"  - {query}" for query in queries)
-    return "\n".join(lines) + "\n"
-
-
-def _render_ledger_markdown(package: InvestigationPackage) -> str:
-    """Render a compact markdown inventory of evidence ledger entries.
-
-    Each entry is listed with its key, title, URL, and selected flag so the saved run
-    directory includes a quick human-readable index of the evidence set.
-    """
-    lines = [
-        "# Evidence Ledger",
-        "",
-        f"Entries: {len(package.evidence_ledger.entries)}",
-        "",
-    ]
-    for entry in package.evidence_ledger.entries:
-        lines.extend(
-            [
-                f"## {entry.key}",
-                f"- Title: {entry.title}",
-                f"- URL: {entry.url}",
-                f"- Selected: {'yes' if entry.selected else 'no'}",
-            ]
-        )
-    return "\n".join(lines) + "\n"
-
-
-def write_full_report(package: InvestigationPackage, run_dir: Path) -> RenderPayload:
+# This package IO helper may execute an LLM call outside Kitaru tracking after the
+# main flow has completed.
+def write_full_report(
+    package: InvestigationPackage,
+    run_dir: Path,
+    config: ResearchConfig | None = None,
+) -> RenderPayload:
     """Generate and write the canonical full report render on demand."""
-    render = render_full_report(package)
+    if config is not None:
+        writer_model = config.writer_model
+    elif package.render_settings is not None:
+        writer_model = package.render_settings.writer_model
+    else:
+        raise ValueError("write_full_report requires config or package.render_settings")
+    render = materialize_render_payload(
+        build_full_report_scaffold(package),
+        writer_model=writer_model,
+        prompt_name="writer_full_report",
+        pricing=ModelPricing(),
+    ).render
     if render.name != "full_report":
         raise ValueError("Expected render.name to be 'full_report'")
     write_markdown(render.content_markdown, run_dir / "renders" / "full_report.md")
@@ -119,13 +78,13 @@ def write_full_report(package: InvestigationPackage, run_dir: Path) -> RenderPay
 
 def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
     """Persist an investigation package as JSON and rendered markdown files."""
-    run_dir_name = _sanitize_path_component(
+    run_dir_name = sanitize_path_component(
         package.run_summary.run_id,
         field_name="run_id",
     )
     reserved_render_file_names = {"full_report.md"}
     render_file_names = [
-        f"{_sanitize_path_component(render.name, field_name='render.name')}.md"
+        f"{sanitize_path_component(render.name, field_name='render.name')}.md"
         for render in package.renders
     ]
     normalized_render_file_names = {
@@ -138,25 +97,63 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
 
     run_dir = output_dir / run_dir_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    _reset_directory(run_dir / "renders")
-    _reset_directory(run_dir / "iterations")
-    _write_json(
+    reset_directory(run_dir / "renders")
+    reset_directory(run_dir / "iterations")
+    write_json(
         package.model_dump_json(indent=2),
         run_dir / "package.json",
     )
-    write_markdown(_render_summary_markdown(package), run_dir / "summary.md")
-    _write_json(
+    write_markdown(
+        (
+            "# Summary\n\n"
+            f"Run ID: {package.run_summary.run_id}\n\n"
+            f"Status: {package.run_summary.status}\n"
+        ),
+        run_dir / "summary.md",
+    )
+    write_json(
         package.research_plan.model_dump_json(indent=2),
         run_dir / "plan.json",
     )
-    write_markdown(_render_plan_markdown(package), run_dir / "plan.md")
-    _write_json(
+    plan_lines = [
+        "# Research Plan",
+        "",
+        f"Goal: {package.research_plan.goal}",
+        "",
+        f"Approval status: {package.research_plan.approval_status}",
+        "",
+        "## Key Questions",
+    ]
+    plan_lines.extend(
+        f"- {question}" for question in package.research_plan.key_questions
+    )
+    plan_lines.extend(["", "## Query Groups"])
+    for group_name, queries in package.research_plan.query_groups.items():
+        plan_lines.append(f"- {group_name}")
+        plan_lines.extend(f"  - {query}" for query in queries)
+    write_markdown("\n".join(plan_lines) + "\n", run_dir / "plan.md")
+    write_json(
         package.evidence_ledger.model_dump_json(indent=2),
         run_dir / "evidence" / "ledger.json",
     )
-    write_markdown(_render_ledger_markdown(package), run_dir / "evidence" / "ledger.md")
+    ledger_lines = [
+        "# Evidence Ledger",
+        "",
+        f"Entries: {len(package.evidence_ledger.entries)}",
+        "",
+    ]
+    for entry in package.evidence_ledger.entries:
+        ledger_lines.extend(
+            [
+                f"## {entry.key}",
+                f"- Title: {entry.title}",
+                f"- URL: {entry.url}",
+                f"- Selected: {'yes' if entry.selected else 'no'}",
+            ]
+        )
+    write_markdown("\n".join(ledger_lines) + "\n", run_dir / "evidence" / "ledger.md")
     for iteration in package.iteration_trace.iterations:
-        _write_json(
+        write_json(
             iteration.model_dump_json(indent=2),
             run_dir / "iterations" / f"{iteration.iteration:03d}.json",
         )
