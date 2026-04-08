@@ -35,6 +35,7 @@ def test_read_gaps_reports_missing_subtopics() -> None:
                 url="https://example.com/b",
                 provider="test",
                 source_kind="web",
+                matched_subtopics=["b"],
             )
         ]
     )

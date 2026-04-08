@@ -1,12 +1,17 @@
 import shutil
-import importlib
 from pathlib import Path
 
 from deep_research.models import InvestigationPackage, RenderPayload
+from deep_research.renderers.full_report import render_full_report
 
 
 def _sanitize_path_component(value: str, *, field_name: str) -> str:
-    """Validate that a string is safe for use as a single path component."""
+    """Validate a single path segment and reject traversal, separators, or padding.
+
+    The package writer uses run IDs and render names as file-system path components.
+    This helper enforces that each value is one clean segment, not an empty value,
+    reserved traversal token, or a string that smuggles in directory separators.
+    """
     if value in {"", ".", ".."}:
         raise ValueError(f"Unsafe path component for {field_name}: {value!r}")
     if value != value.strip():
@@ -23,20 +28,32 @@ def write_markdown(content: str, path: Path) -> None:
 
 
 def _write_json(content: str, path: Path) -> None:
-    """Write JSON content to disk, creating parent directories first."""
+    """Write serialized JSON text to disk after ensuring the parent directory exists.
+
+    This helper mirrors `write_markdown()` so package persistence can create nested
+    output folders on demand before emitting stable JSON artifacts.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
 def _reset_directory(path: Path) -> None:
-    """Recreate a directory from scratch so generated outputs start clean."""
+    """Replace a generated-output directory with an empty copy at the same path.
+
+    Package writes are expected to be idempotent, so this helper removes any stale
+    render or iteration files from a prior run before recreating the directory.
+    """
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
 
 
 def _render_summary_markdown(package: InvestigationPackage) -> str:
-    """Render the top-level run summary markdown file."""
+    """Render the top-level summary markdown shown alongside the saved package.
+
+    The summary is intentionally short and only exposes the run identifier and final
+    status so humans can quickly inspect a run directory without opening JSON files.
+    """
     return (
         "# Summary\n\n"
         f"Run ID: {package.run_summary.run_id}\n\n"
@@ -45,7 +62,11 @@ def _render_summary_markdown(package: InvestigationPackage) -> str:
 
 
 def _render_plan_markdown(package: InvestigationPackage) -> str:
-    """Render the research plan markdown companion file."""
+    """Render a readable markdown companion for the structured research plan.
+
+    The output mirrors the stored plan JSON, including approval state, key questions,
+    and grouped queries, so the run directory can be reviewed without parsing models.
+    """
     lines = [
         "# Research Plan",
         "",
@@ -64,7 +85,11 @@ def _render_plan_markdown(package: InvestigationPackage) -> str:
 
 
 def _render_ledger_markdown(package: InvestigationPackage) -> str:
-    """Render a markdown view of the evidence ledger entries."""
+    """Render a compact markdown inventory of evidence ledger entries.
+
+    Each entry is listed with its key, title, URL, and selected flag so the saved run
+    directory includes a quick human-readable index of the evidence set.
+    """
     lines = [
         "# Evidence Ledger",
         "",
@@ -85,8 +110,7 @@ def _render_ledger_markdown(package: InvestigationPackage) -> str:
 
 def write_full_report(package: InvestigationPackage, run_dir: Path) -> RenderPayload:
     """Generate and write the canonical full report render on demand."""
-    renderer_module = importlib.import_module("deep_research.renderers.full_report")
-    render = renderer_module.render_full_report(package)
+    render = render_full_report(package)
     if render.name != "full_report":
         raise ValueError("Expected render.name to be 'full_report'")
     write_markdown(render.content_markdown, run_dir / "renders" / "full_report.md")

@@ -12,6 +12,6 @@ def build_planner_agent(model_name: str):
             model_name,
             name="planner",
             output_type=ResearchPlan,
-            system_prompt=load_prompt("planner"),
+            instructions=load_prompt("planner"),
         )
     )

@@ -1,3 +1,5 @@
+import json
+
 from kitaru import checkpoint
 
 from deep_research.agents.judge import build_grounding_judge_agent
@@ -17,4 +19,4 @@ def judge_grounding(
         "renders": [render.model_dump(mode="json") for render in renders],
         "ledger": ledger.model_dump(mode="json"),
     }
-    return agent.run_sync(prompt).output
+    return agent.run_sync(json.dumps(prompt, indent=2)).output

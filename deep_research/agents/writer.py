@@ -12,6 +12,6 @@ def build_writer_agent(model_name: str):
             model_name,
             name="writer",
             output_type=RenderPayload,
-            system_prompt=load_prompt("writer"),
+            instructions=load_prompt("writer"),
         )
     )

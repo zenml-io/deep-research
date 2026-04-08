@@ -12,6 +12,6 @@ def build_classifier_agent(model_name: str):
             model_name,
             name="classifier",
             output_type=RequestClassification,
-            system_prompt=load_prompt("classifier"),
+            instructions=load_prompt("classifier"),
         )
     )

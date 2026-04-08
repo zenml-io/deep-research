@@ -59,6 +59,7 @@ def _install_supervisor_factory_dependency_stubs(monkeypatch):
 
     class FakeAgent:
         def __init__(self, model_name, **kwargs):
+            """Record constructor inputs so supervisor factory tests can inspect them later."""
             self.model_name = model_name
             self.kwargs = kwargs
 
@@ -123,6 +124,7 @@ def _install_agent_builder_stubs(monkeypatch):
 
     class FakeAgent:
         def __init__(self, output):
+            """Store the canned output object returned by the fake agent `run_sync` call."""
             self._output = output
 
         def run_sync(self, prompt):
@@ -270,13 +272,21 @@ def _install_agent_builder_stubs(monkeypatch):
 
 
 def _import_checkpoint_module(name: str):
-    """Import a checkpoint module after clearing cached checkpoint modules."""
+    """Import a checkpoint module after clearing cached checkpoint-module imports first.
+
+    These tests install lightweight stubs into `sys.modules`, so each import must start
+    from a clean slate to ensure decorators and agent builders are rebound correctly.
+    """
     _clear_checkpoint_modules()
     return importlib.import_module(name)
 
 
 def _sample_plan() -> ResearchPlan:
-    """Return a representative research plan fixture for checkpoint tests."""
+    """Return a representative research plan fixture shared across checkpoint tests.
+
+    The fixture includes multiple subtopics and key questions so selection, coverage,
+    and prompt-shaping tests exercise more than the most trivial single-field case.
+    """
     return ResearchPlan(
         goal="Answer the brief",
         key_questions=["What changed?", "Why does it matter?"],
@@ -461,7 +471,9 @@ def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
             "kwargs": {"toolsets": [sentinel_toolset], "tools": sentinel_tools},
         }
     ]
-    prompt = calls["run_calls"][0]
+    import json
+
+    prompt = json.loads(calls["run_calls"][0])
     assert prompt["uncovered_subtopics"] == ["status", "impact"]
     assert prompt["max_tool_calls"] == 7
     assert prompt["tool_timeout_sec"] == 45
@@ -1027,7 +1039,7 @@ def test_build_selection_graph_returns_selected_entries(monkeypatch) -> None:
 
     assert result.items == []
     assert result.gap_coverage_summary == ["status", "impact"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_uses_selected_entries_and_gap_summary(
@@ -1121,7 +1133,7 @@ def test_build_selection_graph_uses_selected_entries_and_gap_summary(
         == "Higher quality, authority, and relevance sources appear earlier."
     )
     assert result.gap_coverage_summary == ["operations"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_uses_selected_flags_for_legacy_entries_only_ledger(
@@ -1162,7 +1174,7 @@ def test_build_selection_graph_uses_selected_flags_for_legacy_entries_only_ledge
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["impact"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_ignores_all_rejected_legacy_entries_only_ledger(
@@ -1188,7 +1200,7 @@ def test_build_selection_graph_ignores_all_rejected_legacy_entries_only_ledger(
 
     assert result.items == []
     assert result.gap_coverage_summary == ["status", "impact"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_uses_text_coverage_for_legacy_selected_entry_without_matched_subtopics(
@@ -1214,7 +1226,7 @@ def test_build_selection_graph_uses_text_coverage_for_legacy_selected_entry_with
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["impact"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_treats_matched_subtopics_case_insensitively(
@@ -1248,7 +1260,7 @@ def test_build_selection_graph_treats_matched_subtopics_case_insensitively(
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["Impact"]
-    assert ("build_selection_graph", "llm_call") in decorated
+    assert ("build_selection_graph", "tool_call") in decorated
 
 
 def test_build_selection_graph_breaks_score_ties_by_candidate_key(monkeypatch) -> None:

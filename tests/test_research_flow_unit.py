@@ -522,7 +522,7 @@ def test_research_flow_rebuilds_default_config_after_clarification_tier_change(
         ),
     )
 
-    def fake_run_supervisor(plan, ledger, iteration, config, **kwargs):
+    def fake_run_supervisor(plan, ledger, iteration, config, uncovered_subtopics=None, **kwargs):
         observed_configs.append(config)
         return types.SimpleNamespace(
             raw_results=[],
@@ -1137,6 +1137,7 @@ def test_research_flow_records_completion_after_eager_render_loads(
 
     class FakeFuture:
         def __init__(self, value, *, loaded_time: float):
+            """Store a payload and the clock value that should be observed when loading it."""
             self.value = value
             self.loaded_time = loaded_time
 
@@ -1586,7 +1587,7 @@ def test_research_flow_preserves_overrides_when_clarification_changes_tier(
     )
 
     def fake_run_council_generator(
-        plan, ledger, iteration, model_name, config, **kwargs
+        plan, ledger, iteration, model_name, config, uncovered_subtopics=None, **kwargs
     ):
         observed_configs.append(config)
         return types.SimpleNamespace(

@@ -45,7 +45,7 @@ def _install_kitaru_checkpoint_stub(monkeypatch):
 def _install_supervisor_checkpoint_stub(monkeypatch) -> None:
     """Stub the supervisor checkpoint module so council tests stay isolated."""
 
-    def fake_execute(plan, ledger, iteration, config):
+    def fake_execute(plan, ledger, iteration, config, uncovered_subtopics=None):
         return SupervisorCheckpointResult(raw_results=[])
 
     monkeypatch.setitem(
@@ -56,7 +56,11 @@ def _install_supervisor_checkpoint_stub(monkeypatch) -> None:
 
 
 def _sample_plan() -> ResearchPlan:
-    """Return a representative research plan fixture for council tests."""
+    """Return a multi-subtopic research plan fixture for council aggregation tests.
+
+    Council tests use this plan to ensure override models and merged generator outputs
+    operate against realistic plan data instead of an overly trivial placeholder.
+    """
     return ResearchPlan(
         goal="Answer the brief",
         key_questions=["What changed?", "Why does it matter?"],
@@ -118,13 +122,14 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
     ledger = EvidenceLedger(entries=[])
     captured = []
 
-    def fake_execute(plan_arg, ledger_arg, iteration_arg, config_arg):
+    def fake_execute(plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None):
         captured.append(
             {
                 "plan": plan_arg,
                 "ledger": ledger_arg,
                 "iteration": iteration_arg,
                 "config": config_arg,
+                "uncovered_subtopics": uncovered_subtopics,
             }
         )
         return SupervisorCheckpointResult(raw_results=[])
@@ -148,6 +153,7 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
             "config": config.model_copy(
                 update={"supervisor_model": "override-supervisor-model"}
             ),
+            "uncovered_subtopics": None,
         }
     ]
     assert ("run_council_generator", "llm_call") in decorated

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime as _datetime
 from math import isfinite
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     AnyUrl,
@@ -16,6 +16,9 @@ from pydantic import (
 )
 
 from deep_research.enums import SourceKind, StopReason, Tier
+
+
+UnitFloat = Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
 
 
 class StrictBaseModel(BaseModel):
@@ -37,7 +40,11 @@ def _validate_iso8601_timestamp(value: str | None) -> str | None:
 
 
 def _validate_json_mapping_keys(value: object) -> None:
-    """Recursively require string keys in nested raw_metadata mappings."""
+    """Recursively validate that every nested mapping inside raw metadata uses string keys.
+
+    Raw metadata must stay JSON-serializable for package persistence, so nested dict-like
+    structures cannot contain non-string keys anywhere in the value tree.
+    """
     if isinstance(value, dict):
         for key, nested_value in value.items():
             if not isinstance(key, str):
@@ -76,10 +83,10 @@ class EvidenceCandidate(StrictBaseModel):
     snippets: list[EvidenceSnippet] = Field(default_factory=list)
     provider: str
     source_kind: SourceKind
-    quality_score: float = 0.0
-    relevance_score: float = 0.0
-    authority_score: float = 0.0
-    freshness_score: float = 0.0
+    quality_score: UnitFloat = 0.0
+    relevance_score: UnitFloat = 0.0
+    authority_score: UnitFloat = 0.0
+    freshness_score: UnitFloat = 0.0
     matched_subtopics: list[str] = Field(default_factory=list)
     doi: str | None = None
     arxiv_id: str | None = None
@@ -87,15 +94,7 @@ class EvidenceCandidate(StrictBaseModel):
     selected: bool = False
 
     @model_validator(mode="after")
-    def validate_scores(self) -> "EvidenceCandidate":
-        if not 0.0 <= self.quality_score <= 1.0:
-            raise ValueError("quality_score must be between 0.0 and 1.0")
-        if not 0.0 <= self.relevance_score <= 1.0:
-            raise ValueError("relevance_score must be between 0.0 and 1.0")
-        if not 0.0 <= self.authority_score <= 1.0:
-            raise ValueError("authority_score must be between 0.0 and 1.0")
-        if not 0.0 <= self.freshness_score <= 1.0:
-            raise ValueError("freshness_score must be between 0.0 and 1.0")
+    def validate_raw_metadata(self) -> "EvidenceCandidate":
         try:
             _validate_json_mapping_keys(self.raw_metadata)
             json.dumps(self.raw_metadata, allow_nan=False)
@@ -204,14 +203,8 @@ class IterationTrace(StrictBaseModel):
 
 class CritiqueDimensionScore(StrictBaseModel):
     name: str
-    score: StrictFloat
+    score: UnitFloat
     rationale: str
-
-    @model_validator(mode="after")
-    def validate_score(self) -> "CritiqueDimensionScore":
-        if not 0.0 <= self.score <= 1.0:
-            raise ValueError("score must be between 0.0 and 1.0")
-        return self
 
 
 class CritiqueResult(StrictBaseModel):
@@ -229,35 +222,16 @@ class GroundingVerdict(StrictBaseModel):
 
 
 class GroundingResult(StrictBaseModel):
-    score: StrictFloat
+    score: UnitFloat
     verdicts: list[GroundingVerdict] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_score(self) -> "GroundingResult":
-        if not 0.0 <= self.score <= 1.0:
-            raise ValueError("score must be between 0.0 and 1.0")
-        return self
 
 
 class CoherenceResult(StrictBaseModel):
-    relevance: StrictFloat
-    logical_flow: StrictFloat
-    completeness: StrictFloat
-    consistency: StrictFloat
+    relevance: UnitFloat
+    logical_flow: UnitFloat
+    completeness: UnitFloat
+    consistency: UnitFloat
     summary: str
-
-    @model_validator(mode="after")
-    def validate_scores(self) -> "CoherenceResult":
-        for field_name in (
-            "relevance",
-            "logical_flow",
-            "completeness",
-            "consistency",
-        ):
-            value = getattr(self, field_name)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{field_name} must be between 0.0 and 1.0")
-        return self
 
 
 class RenderPayload(StrictBaseModel):
@@ -327,23 +301,11 @@ class InvestigationPackage(StrictBaseModel):
 
 
 class CoverageScore(StrictBaseModel):
-    subtopic_coverage: StrictFloat
-    source_diversity: StrictFloat
-    evidence_density: StrictFloat
-    total: StrictFloat
+    subtopic_coverage: UnitFloat
+    source_diversity: UnitFloat
+    evidence_density: UnitFloat
+    total: UnitFloat
     uncovered_subtopics: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_bounds(self) -> "CoverageScore":
-        for value in (
-            self.subtopic_coverage,
-            self.source_diversity,
-            self.evidence_density,
-            self.total,
-        ):
-            if not 0.0 <= value <= 1.0:
-                raise ValueError("coverage scores must be between 0.0 and 1.0")
-        return self
 
 
 class ToolCallRecord(StrictBaseModel):

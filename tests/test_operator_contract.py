@@ -6,7 +6,11 @@ from contextlib import contextmanager
 
 @contextmanager
 def _preserve_modules(*names: str):
-    """Temporarily preserve selected modules while operator stubs are installed."""
+    """Temporarily save and restore selected modules while operator stubs are injected.
+
+    The helper prevents test-time stub installation from leaking into the wider process
+    by restoring each named module to its original object after the import completes.
+    """
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -20,7 +24,11 @@ def _preserve_modules(*names: str):
 
 
 def _load_research_flow_module():
-    """Import the flow module under minimal operator-contract stubs."""
+    """Import the flow module under minimal stubs needed for operator-name contract tests.
+
+    The test only needs checkpoint, flow, and adapter symbols to exist, so this helper
+    loads the module under lightweight stand-ins instead of the full runtime stack.
+    """
 
     def checkpoint(*, type):
         def decorator(func):

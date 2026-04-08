@@ -12,7 +12,7 @@ def build_grounding_judge_agent(model_name: str):
             model_name,
             name="grounding_judge",
             output_type=GroundingResult,
-            system_prompt=load_prompt("judge_grounding"),
+            instructions=load_prompt("judge_grounding"),
         )
     )
 
@@ -24,6 +24,6 @@ def build_coherence_judge_agent(model_name: str):
             model_name,
             name="coherence_judge",
             output_type=CoherenceResult,
-            system_prompt=load_prompt("judge_coherence"),
+            instructions=load_prompt("judge_coherence"),
         )
     )

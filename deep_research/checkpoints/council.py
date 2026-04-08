@@ -19,10 +19,11 @@ def run_council_generator(
     iteration: int,
     model_name: str,
     config: ResearchConfig,
+    uncovered_subtopics: list[str] | None = None,
 ) -> SupervisorCheckpointResult:
     """Checkpoint: run one council member's supervisor turn for parallel evidence gathering."""
     override_config = config.model_copy(update={"supervisor_model": model_name})
-    return run_supervisor(plan, ledger, iteration, override_config)
+    return run_supervisor(plan, ledger, iteration, override_config, uncovered_subtopics)
 
 
 def aggregate_council_results(

@@ -10,7 +10,11 @@ ALLOWED_COMMANDS = {"echo", "ls", "pwd", "true", "false"}
 
 
 def _error_result(error: str, payload: dict | None = None) -> RawToolResult:
-    """Build a failed RawToolResult with the given error message."""
+    """Construct a failed bash-tool result with a normalized payload and error message.
+
+    Centralizing this shape keeps all early-return validation and timeout failures aligned
+    with the `RawToolResult` contract used by the rest of the research pipeline.
+    """
     return RawToolResult(
         tool_name="run_bash",
         provider="bash",
@@ -65,7 +69,11 @@ def run_bash(command: str, timeout_sec: int = 20) -> RawToolResult:
 
 
 def _is_allowed_command(command_name: str) -> bool:
-    """Check whether a command name is in the allow-list."""
+    """Return whether a command name is allowed by the executor allow-list.
+
+    Absolute paths are always rejected so callers cannot bypass the curated command set
+    by pointing directly at binaries outside the approved allow-listed names.
+    """
     if Path(command_name).is_absolute():
         return False
 
@@ -73,7 +81,11 @@ def _is_allowed_command(command_name: str) -> bool:
 
 
 def _is_disallowed_path_argument(argument: str) -> bool:
-    """Return True if an argument contains an absolute or parent-traversal path."""
+    """Reject path-like arguments that escape the temporary execution directory.
+
+    Option flags are ignored, but absolute paths and parent-directory traversal segments
+    are blocked so allow-listed commands cannot be repurposed to read arbitrary files.
+    """
     if not argument or argument.startswith("-"):
         return False
 

@@ -1,13 +1,10 @@
 from datetime import UTC, datetime
 
-from kitaru import checkpoint
-
 from deep_research.models import RenderPayload, SelectionGraph
 
 
-@checkpoint(type="llm_call")
 def render_reading_path(selection: SelectionGraph) -> RenderPayload:
-    """Checkpoint: render a markdown reading path from the curated selection."""
+    """Build the reading-path markdown and structured payload from a selection graph."""
     lines = ["# Reading Path", ""]
     items: list[dict[str, object]] = []
     citation_map: dict[str, str] = {}

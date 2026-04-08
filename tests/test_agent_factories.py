@@ -4,7 +4,11 @@ import types
 
 
 def _install_agent_stubs(monkeypatch):
-    """Install fake Agent and prompt-loader stubs for factory tests."""
+    """Install fake agent-construction dependencies and capture their observed inputs.
+
+    The returned call lists let factory tests assert which prompts, output types, and
+    wrapper options each agent builder passes to PydanticAI and the Kitaru adapter.
+    """
     wrap_calls = []
     prompt_calls = []
 
@@ -23,17 +27,18 @@ def _install_agent_stubs(monkeypatch):
 
     class FakeAgent:
         def __init__(self, model_name, **kwargs):
+            """Capture fake agent construction inputs after validating the supported kwargs."""
             allowed_keys = {
                 "name",
                 "output_type",
-                "system_prompt",
+                "instructions",
                 "toolsets",
                 "tools",
             }
             unexpected_keys = set(kwargs) - allowed_keys
             assert not unexpected_keys, f"unexpected Agent kwargs: {unexpected_keys}"
             assert "name" in kwargs
-            assert "system_prompt" in kwargs
+            assert "instructions" in kwargs
             if "output_type" in kwargs:
                 assert kwargs["output_type"].__name__ in allowed_output_types
             self.model_name = model_name
@@ -93,7 +98,7 @@ def test_build_classifier_agent_returns_wrapped_agent(monkeypatch) -> None:
     assert wrap_calls[0]["agent"].kwargs == {
         "name": "classifier",
         "output_type": module.RequestClassification,
-        "system_prompt": "prompt:classifier",
+        "instructions": "prompt:classifier",
     }
 
 
@@ -164,7 +169,7 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         assert wrapped["tool_capture_config"] == tool_capture_config
         assert agent.model_name == "test-model"
         assert agent.kwargs["name"] == agent_name
-        assert agent.kwargs["system_prompt"] == f"prompt:{prompt_name}"
+        assert agent.kwargs["instructions"] == f"prompt:{prompt_name}"
         assert agent.kwargs["output_type"].__name__ == output_type_name
 
     supervisor_agent = wrapped_agents[2]["agent"]

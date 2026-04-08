@@ -1,3 +1,5 @@
+from typing import Any
+
 from kitaru.adapters import pydantic_ai as kp
 from pydantic_ai import Agent
 
@@ -6,7 +8,7 @@ from deep_research.prompts.loader import load_prompt
 
 
 def build_supervisor_agent(
-    model_name: str, toolsets: list[object], tools: list[object]
+    model_name: str, toolsets: list[Any], tools: list[Any]
 ):
     """Create a Kitaru-wrapped PydanticAI supervisor agent with tool capture."""
     return kp.wrap(
@@ -14,7 +16,7 @@ def build_supervisor_agent(
             model_name,
             name="supervisor",
             output_type=SupervisorCheckpointResult,
-            system_prompt=load_prompt("supervisor"),
+            instructions=load_prompt("supervisor"),
             toolsets=toolsets,
             tools=tools,
         ),

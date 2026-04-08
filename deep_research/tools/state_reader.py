@@ -8,5 +8,11 @@ def read_plan(plan: ResearchPlan) -> dict:
 
 def read_gaps(plan: ResearchPlan, ledger: EvidenceLedger) -> list[str]:
     """Return subtopics from the plan not yet covered by ledger entries."""
-    covered = {entry.title for entry in ledger.entries}
-    return [subtopic for subtopic in plan.subtopics if subtopic not in covered]
+    covered: set[str] = set()
+    for entry in ledger.entries:
+        covered.update(st.lower() for st in entry.matched_subtopics)
+    return [
+        subtopic
+        for subtopic in plan.subtopics
+        if subtopic.lower() not in covered
+    ]

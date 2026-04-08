@@ -47,7 +47,11 @@ def _ratchet_merge(
 def _canonicalize_candidates(
     candidates: list[EvidenceCandidate],
 ) -> tuple[list[EvidenceCandidate], list[DedupeEvent]]:
-    """Deduplicate candidates in precedence order and record duplicate matches."""
+    """Deduplicate candidates, merge duplicate records, and emit the dedupe event log.
+
+    This helper walks candidates in order, finds an existing canonical record using the
+    shared precedence rules, ratchets fields together, and records every duplicate match.
+    """
     seen: dict[tuple[str, str], EvidenceCandidate] = {}
     canonical: list[EvidenceCandidate] = []
     dedupe_log: list[DedupeEvent] = []

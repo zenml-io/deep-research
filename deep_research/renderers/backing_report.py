@@ -1,7 +1,5 @@
 from datetime import UTC, datetime
 
-from kitaru import checkpoint
-
 from deep_research.models import (
     EvidenceLedger,
     RenderPayload,
@@ -10,13 +8,12 @@ from deep_research.models import (
 )
 
 
-@checkpoint(type="llm_call")
 def render_backing_report(
     selection: SelectionGraph,
     ledger: EvidenceLedger,
     plan: ResearchPlan,
 ) -> RenderPayload:
-    """Checkpoint: render the backing report markdown from the selection and plan."""
+    """Build the backing-report markdown and metadata from the plan and selected evidence."""
     del ledger
     selection_keys = [item.candidate_key for item in selection.items]
     citation_map = {

@@ -1,3 +1,5 @@
+import json
+
 from kitaru import checkpoint
 
 from deep_research.agents.relevance_scorer import build_relevance_scorer_agent
@@ -21,4 +23,4 @@ def score_relevance(
         "plan": plan.model_dump(mode="json"),
         "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
     }
-    return agent.run_sync(prompt).output
+    return agent.run_sync(json.dumps(prompt, indent=2)).output

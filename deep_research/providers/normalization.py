@@ -9,7 +9,11 @@ from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResu
 
 
 def _clean_string(value: object) -> str | None:
-    """Normalize a scalar value into a stripped string, rejecting container inputs."""
+    """Normalize a scalar raw-result field into a trimmed string or `None`.
+
+    Container values are rejected here because downstream identity and metadata fields
+    expect leaf scalar values, not nested mappings or lists with ambiguous meaning.
+    """
     if value is None:
         return None
     if isinstance(value, Mapping) or (
@@ -21,14 +25,22 @@ def _clean_string(value: object) -> str | None:
 
 
 def _as_score(value: object) -> float:
-    """Coerce a missing or scalar score value into a float."""
+    """Coerce an optional raw score field into a float, defaulting missing values to zero.
+
+    Normalized evidence candidates treat absent scores as `0.0` so providers can omit
+    any subset of ranking signals without breaking candidate validation.
+    """
     if value is None:
         return 0.0
     return float(value)
 
 
 def _matched_subtopics(value: object) -> list[str]:
-    """Normalize matched_subtopics into a clean list of non-empty strings."""
+    """Normalize raw matched-subtopic data into a list of non-empty strings.
+
+    Providers may emit a single string, a list-like container, or unusable values.
+    This helper preserves only trimmed, non-empty subtopic labels in input order.
+    """
     if value is None:
         return []
     if isinstance(value, str):
@@ -46,7 +58,11 @@ def _matched_subtopics(value: object) -> list[str]:
 
 
 def _candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
-    """Choose the strongest semantic identity for a raw result item."""
+    """Choose the strongest stable identity available for a raw result item.
+
+    DOI wins over arXiv ID, and both win over canonical URL because those identifiers
+    survive URL variants and provider-specific formatting differences more reliably.
+    """
     doi = _clean_string(item.get("doi"))
     if doi is not None:
         return f"doi:{doi.lower()}"
@@ -59,13 +75,21 @@ def _candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
 
 
 def _candidate_key(item: Mapping[str, Any], canonical_url: str) -> str:
-    """Generate a deterministic short hash key from semantic source identity."""
+    """Generate a deterministic short key from the chosen semantic identity string.
+
+    Hashing keeps keys compact while still remaining stable across providers that emit
+    the same DOI, arXiv ID, or canonical URL for an evidence candidate.
+    """
     identity = _candidate_identity(item, canonical_url).encode("utf-8")
     return f"evidence-{sha256(identity).hexdigest()[:16]}"
 
 
 def _raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
-    """Copy non-core fields from a raw item into raw_metadata."""
+    """Copy provider-specific fields that are not promoted into first-class candidate data.
+
+    Core fields used for typed model attributes are excluded so `raw_metadata` remains a
+    clean bucket for auxiliary provider payload details rather than duplicated state.
+    """
     excluded = {
         "title",
         "url",
@@ -89,7 +113,11 @@ def _raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
 def _iter_result_items(
     raw_results: list[Mapping[str, Any] | RawToolResult],
 ) -> list[Mapping[str, Any]]:
-    """Flatten raw results into a list of individual item mappings."""
+    """Flatten mixed raw-result payloads into a uniform list of item mappings.
+
+    `RawToolResult` payloads may wrap items under `results` or `items`, while tests and
+    other callers can pass mappings directly. This helper normalizes those entry shapes.
+    """
     items: list[Mapping[str, Any]] = []
 
     for raw_result in raw_results:

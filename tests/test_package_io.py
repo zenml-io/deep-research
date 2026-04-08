@@ -1,7 +1,5 @@
-import sys
 from inspect import signature
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -177,7 +175,6 @@ def test_write_full_report_materializes_lazy_render_from_package_state(
 ) -> None:
     sample_package = make_package(render_names=[])
     run_dir = write_package(sample_package, tmp_path)
-    renderer_module = ModuleType("deep_research.renderers.full_report")
 
     assert signature(write_full_report).return_annotation is RenderPayload
 
@@ -191,11 +188,9 @@ def test_write_full_report_materializes_lazy_render_from_package_state(
             generated_at="2026-04-01T10:02:00Z",
         )
 
-    renderer_module.render_full_report = render_full_report
-    monkeypatch.setitem(
-        sys.modules,
-        "deep_research.renderers.full_report",
-        renderer_module,
+    monkeypatch.setattr(
+        "deep_research.package.io.render_full_report",
+        render_full_report,
     )
 
     render = write_full_report(sample_package, run_dir)
@@ -211,7 +206,6 @@ def test_write_full_report_rejects_unexpected_lazy_render_name(
 ) -> None:
     sample_package = make_package(render_names=[])
     run_dir = write_package(sample_package, tmp_path)
-    renderer_module = ModuleType("deep_research.renderers.full_report")
 
     def render_full_report(package: InvestigationPackage) -> RenderPayload:
         assert package == sample_package
@@ -221,11 +215,9 @@ def test_write_full_report_rejects_unexpected_lazy_render_name(
             citation_map={},
         )
 
-    renderer_module.render_full_report = render_full_report
-    monkeypatch.setitem(
-        sys.modules,
-        "deep_research.renderers.full_report",
-        renderer_module,
+    monkeypatch.setattr(
+        "deep_research.package.io.render_full_report",
+        render_full_report,
     )
 
     with pytest.raises(ValueError, match="Expected render.name to be 'full_report'"):

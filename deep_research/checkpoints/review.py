@@ -1,3 +1,5 @@
+import json
+
 from kitaru import checkpoint
 
 from deep_research.agents.reviewer import build_reviewer_agent
@@ -27,4 +29,4 @@ def review_renders(
         "selection": selection.model_dump(mode="json"),
         "ledger": ledger.model_dump(mode="json"),
     }
-    return agent.run_sync(prompt).output
+    return agent.run_sync(json.dumps(prompt, indent=2)).output

@@ -32,7 +32,11 @@ def _as_checkpoint(func):
 
 @contextmanager
 def _preserve_modules(*names: str):
-    """Temporarily preserve selected modules while integration stubs are active."""
+    """Temporarily preserve selected modules while integration-test stubs are installed.
+
+    The helper restores any existing runtime modules after each import so lightweight
+    stubs do not leak out of the integration-test setup path.
+    """
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -46,10 +50,15 @@ def _preserve_modules(*names: str):
 
 
 def _load_research_flow_module():
-    """Import the flow module under lightweight integration-time stubs."""
+    """Import the flow module under lightweight stubs that mimic integration behavior.
+
+    The helper installs fake flow handles and checkpoint submission semantics so tests
+    can exercise orchestration logic without needing the full Kitaru runtime.
+    """
 
     class FakeHandle:
         def __init__(self, value):
+            """Store the flow return value so tests can mimic Kitaru handle semantics."""
             self._value = value
 
         def wait(self):
@@ -91,7 +100,11 @@ def _load_research_flow_module():
 
 
 def _sample_plan() -> ResearchPlan:
-    """Return a representative research plan fixture for integration tests."""
+    """Return a representative research plan fixture used by integration happy paths.
+
+    The plan stays small enough for test readability while still resembling the shape of
+    a real orchestrated plan consumed by the flow.
+    """
     return ResearchPlan(
         goal="Learn Kitaru",
         key_questions=["What is it?"],
@@ -103,7 +116,11 @@ def _sample_plan() -> ResearchPlan:
 
 
 def _sample_supervisor_result() -> SupervisorCheckpointResult:
-    """Return a minimal supervisor result fixture for integration tests."""
+    """Return a minimal supervisor result fixture that still matches flow expectations.
+
+    Integration tests use this canned result to exercise normalization, merge, and cost
+    plumbing without depending on real provider output.
+    """
     return SupervisorCheckpointResult(
         raw_results=[
             RawToolResult(
@@ -117,7 +134,11 @@ def _sample_supervisor_result() -> SupervisorCheckpointResult:
 
 
 def _sample_coverage() -> CoverageScore:
-    """Return a full-coverage fixture used by integration happy paths."""
+    """Return a full-coverage fixture for integration tests that should stop cleanly.
+
+    Happy-path flow tests use this score to drive convergence logic toward a completed
+    package without needing multiple research iterations.
+    """
     return CoverageScore(
         subtopic_coverage=1.0,
         source_diversity=1.0,
@@ -340,6 +361,7 @@ def test_council_flow_aggregates_multiple_generator_results(monkeypatch) -> None
 
     class FakeFuture:
         def __init__(self, payload):
+            """Store the payload that `.load()` should yield for fake council futures."""
             self.payload = payload
 
         def load(self):

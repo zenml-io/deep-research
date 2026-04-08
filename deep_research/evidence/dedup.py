@@ -5,7 +5,11 @@ from deep_research.models import DedupeEvent, EvidenceCandidate
 
 
 def _candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]:
-    """Collect all usable deduplication identities for a candidate."""
+    """Collect every normalized identity that can participate in deduplication matching.
+
+    The returned identities intentionally include DOI, arXiv ID, canonical URL, and
+    normalized title so later precedence logic can choose the strongest available match.
+    """
     identities: list[tuple[str, str]] = []
     doi = (candidate.doi or "").strip().lower()
     if doi:
@@ -23,7 +27,11 @@ def _candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]
 
 
 def _match_precedence_keys(candidate: EvidenceCandidate) -> Iterable[tuple[str, str]]:
-    """Yield candidate identities in the configured deduplication precedence order."""
+    """Yield deduplication identities in the exact precedence order used for matching.
+
+    Consumers rely on this order to prefer DOI matches first, then arXiv IDs, then
+    canonical URLs, and only fall back to title matching as the weakest signal.
+    """
     identities = dict(_candidate_identities(candidate))
     for basis in ("doi", "arxiv_id", "canonical_url", "title"):
         identity = identities.get(basis)

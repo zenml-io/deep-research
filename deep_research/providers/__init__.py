@@ -1,3 +1,5 @@
+from typing import Any
+
 from deep_research.models import EvidenceLedger, ResearchPlan
 from deep_research.providers.mcp_config import MCPServerConfig, build_mcp_toolsets
 from deep_research.tools.bash_executor import run_bash
@@ -11,19 +13,22 @@ def build_supervisor_surface(
     uncovered_subtopics: list[str] | None,
     tool_timeout_sec: int,
     mcp_servers: list[MCPServerConfig] | None = None,
-) -> tuple[list[object], list[object]]:
+) -> tuple[list[Any], list[Any]]:
     """Build the direct provider surface for supervisor execution."""
     toolsets = build_mcp_toolsets(mcp_servers or [])
 
     def read_plan_tool() -> dict:
+        """Return the current research plan as a dictionary."""
         return read_plan(plan)
 
     def read_gaps_tool() -> list[str]:
+        """Return subtopics from the plan not yet covered by gathered evidence."""
         if uncovered_subtopics is not None:
             return list(uncovered_subtopics)
         return read_gaps(plan, ledger)
 
     def run_bash_tool(command: str):
+        """Execute an allow-listed shell command and return stdout/stderr."""
         return run_bash(command, timeout_sec=tool_timeout_sec)
 
     tools = [read_plan_tool, read_gaps_tool, run_bash_tool]

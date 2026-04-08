@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -12,10 +13,10 @@ class MCPServerConfig:
     """
 
     id: str
-    factory: Callable[[], object]
+    factory: Callable[[], Any]
 
 
-def build_mcp_toolsets(servers: list[MCPServerConfig]) -> list[object]:
+def build_mcp_toolsets(servers: list[MCPServerConfig]) -> list[Any]:
     """Build toolsets by invoking server factories in the given order."""
 
     return [server.factory() for server in servers]

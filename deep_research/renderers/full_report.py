@@ -1,13 +1,10 @@
 from datetime import UTC, datetime
 
-from kitaru import checkpoint
-
 from deep_research.models import InvestigationPackage, RenderPayload
 
 
-@checkpoint(type="llm_call")
 def render_full_report(package: InvestigationPackage) -> RenderPayload:
-    """Checkpoint: render the full report markdown from package state."""
+    """Build the canonical full-report markdown and metadata from package state."""
     selection_keys = [item.candidate_key for item in package.selection_graph.items]
     citation_map = {
         f"[{index}]": item.candidate_key

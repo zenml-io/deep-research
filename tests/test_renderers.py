@@ -1,6 +1,9 @@
+import ast
 from contextlib import contextmanager
 from datetime import datetime
 import importlib
+import inspect
+from pathlib import Path
 import sys
 import types
 
@@ -28,7 +31,11 @@ def _as_checkpoint(func):
 
 
 def _install_kitaru_stub() -> None:
-    """Install lightweight Kitaru and PydanticAI stubs for renderer tests."""
+    """Install lightweight Kitaru and PydanticAI stubs used to import renderer modules.
+
+    Renderer and flow tests only need the checkpoint and flow decorators to attach test
+    helpers, so these stubs avoid pulling in the real runtime integration stack.
+    """
 
     def checkpoint(*, type):
         def decorator(func):
@@ -64,7 +71,11 @@ def _install_kitaru_stub() -> None:
 
 @contextmanager
 def _preserve_modules(*names: str):
-    """Temporarily preserve selected modules while import-time stubs are installed."""
+    """Temporarily preserve selected modules while renderer import-time stubs are active.
+
+    This keeps the import helper from permanently overwriting globally cached modules
+    when tests swap in fake Kitaru and PydanticAI implementations.
+    """
     sentinel = object()
     originals = {name: sys.modules.get(name, sentinel) for name in names}
     try:
@@ -87,7 +98,11 @@ def _load_module(module_name: str):
 
 
 def _make_package() -> InvestigationPackage:
-    """Build a minimal package fixture for renderer-level tests."""
+    """Build a compact but realistic investigation package fixture for renderer tests.
+
+    The fixture includes a run summary, plan, selection graph, and empty render list so
+    renderer modules can be exercised without depending on the full research flow.
+    """
     return InvestigationPackage(
         run_summary=RunSummary(
             run_id="run-1",
@@ -161,7 +176,8 @@ def test_render_reading_path_returns_markdown_payload() -> None:
     }
     assert payload.citation_map == {"[1]": "a"}
     _assert_iso8601_timestamp(payload.generated_at)
-    assert module.render_reading_path._checkpoint_type == "llm_call"
+    assert not hasattr(module.render_reading_path, "_checkpoint_type")
+    assert not hasattr(module.render_reading_path, "submit")
 
 
 def test_render_reading_path_handles_richer_selection_items() -> None:
@@ -218,7 +234,8 @@ def test_render_backing_report_returns_goal_and_selected_count() -> None:
     }
     assert payload.citation_map == {"[1]": "a"}
     _assert_iso8601_timestamp(payload.generated_at)
-    assert module.render_backing_report._checkpoint_type == "llm_call"
+    assert not hasattr(module.render_backing_report, "_checkpoint_type")
+    assert not hasattr(module.render_backing_report, "submit")
 
 
 def test_render_full_report_returns_lazy_package_payload() -> None:
@@ -238,7 +255,60 @@ def test_render_full_report_returns_lazy_package_payload() -> None:
     }
     assert payload.citation_map == {"[1]": "source-1"}
     _assert_iso8601_timestamp(payload.generated_at)
-    assert module.render_full_report._checkpoint_type == "llm_call"
+
+
+def test_renderer_modules_stay_pure_and_checkpoint_wrappers_live_under_checkpoints() -> (
+    None
+):
+    reading_module = _load_module("deep_research.renderers.reading_path")
+    backing_module = _load_module("deep_research.renderers.backing_report")
+    full_report_module = _load_module("deep_research.renderers.full_report")
+    rendering_checkpoint_module = _load_module("deep_research.checkpoints.rendering")
+
+    for module, function_name in (
+        (reading_module, "render_reading_path"),
+        (backing_module, "render_backing_report"),
+        (full_report_module, "render_full_report"),
+    ):
+        func = getattr(module, function_name)
+        assert not hasattr(func, "_checkpoint_type")
+        assert not hasattr(func, "submit")
+
+    for function_name in (
+        "render_reading_path",
+        "render_backing_report",
+        "render_full_report",
+    ):
+        checkpoint_func = getattr(rendering_checkpoint_module, function_name)
+        assert checkpoint_func._checkpoint_type == "llm_call"
+        assert hasattr(checkpoint_func, "submit")
+
+
+def test_underscore_prefixed_functions_have_detailed_docstrings() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    failures: list[str] = []
+
+    for path in sorted(
+        [
+            *repo_root.joinpath("deep_research").glob("**/*.py"),
+            *repo_root.joinpath("tests").glob("**/*.py"),
+        ]
+    ):
+        module_ast = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(module_ast):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not node.name.startswith("_"):
+                continue
+            docstring = ast.get_docstring(node)
+            qualified_name = f"{path.relative_to(repo_root)}::{node.name}"
+            if not docstring:
+                failures.append(f"missing docstring: {qualified_name}")
+                continue
+            if len(docstring.split()) < 10:
+                failures.append(f"thin docstring: {qualified_name} -> {docstring!r}")
+
+    assert not failures, "\n".join(failures)
 
 
 def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
@@ -364,6 +434,17 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         "reading_path",
         "backing_report",
     ]
+
+
+def test_research_flow_imports_render_checkpoint_wrappers() -> None:
+    module = _load_module("deep_research.flow.research_flow")
+
+    assert (
+        module.render_reading_path.__module__ == "deep_research.checkpoints.rendering"
+    )
+    assert (
+        module.render_backing_report.__module__ == "deep_research.checkpoints.rendering"
+    )
 
 
 def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:

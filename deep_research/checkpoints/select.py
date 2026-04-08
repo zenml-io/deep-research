@@ -10,7 +10,7 @@ from deep_research.models import (
 )
 
 
-@checkpoint(type="llm_call")
+@checkpoint(type="tool_call")
 def build_selection_graph(
     ledger: EvidenceLedger, plan: ResearchPlan, config: ResearchConfig | None = None
 ) -> SelectionGraph:

@@ -35,8 +35,10 @@ from deep_research.models import (
     CritiqueResult,
     GroundingResult,
 )
-from deep_research.renderers.backing_report import render_backing_report
-from deep_research.renderers.reading_path import render_reading_path
+from deep_research.checkpoints.rendering import (
+    render_backing_report,
+    render_reading_path,
+)
 
 
 CLASSIFY_CHECKPOINT_NAME = "classify_request"
@@ -45,6 +47,21 @@ SUPERVISOR_CHECKPOINT_NAME = "run_supervisor"
 COUNCIL_GENERATOR_CHECKPOINT_NAME = "run_council_generator"
 APPROVE_PLAN_WAIT_NAME = "approve_plan"
 CLARIFY_BRIEF_WAIT_NAME = "clarify_brief"
+
+
+def _resolve_config(
+    resolved_tier: Tier,
+    user_config: ResearchConfig | None,
+) -> ResearchConfig:
+    """Build a ResearchConfig for the resolved tier, preserving user overrides."""
+    config = ResearchConfig.for_tier(resolved_tier)
+    if user_config is None:
+        return config
+    if user_config.tier == resolved_tier:
+        return user_config
+    overrides = user_config.model_dump()
+    overrides["tier"] = resolved_tier
+    return config.model_copy(update=overrides)
 
 
 @flow
@@ -57,14 +74,7 @@ def research_flow(
     user_config = config
     classification = classify_request.submit(brief, config).load()
     resolved_tier = classification.recommended_tier if tier == "auto" else Tier(tier)
-    config = ResearchConfig.for_tier(resolved_tier)
-    if user_config is not None:
-        if user_config.tier == resolved_tier:
-            config = user_config
-        else:
-            overrides = user_config.model_dump()
-            overrides["tier"] = resolved_tier
-            config = config.model_copy(update=overrides)
+    config = _resolve_config(resolved_tier, user_config)
 
     if classification.needs_clarification and classification.clarification_question:
         brief = wait(
@@ -76,14 +86,7 @@ def research_flow(
         resolved_tier = (
             classification.recommended_tier if tier == "auto" else Tier(tier)
         )
-        config = ResearchConfig.for_tier(resolved_tier)
-        if user_config is not None:
-            if user_config.tier == resolved_tier:
-                config = user_config
-            else:
-                overrides = user_config.model_dump()
-                overrides["tier"] = resolved_tier
-                config = config.model_copy(update=overrides)
+        config = _resolve_config(resolved_tier, user_config)
 
     plan = build_plan.submit(brief, classification, config.tier).load()
     if config.require_plan_approval:
@@ -99,6 +102,7 @@ def research_flow(
     iteration_history: list[IterationRecord] = []
     provider_usage_summary: dict[str, int] = {}
     spent_usd = 0.0
+    uncovered_subtopics: list[str] | None = None
     council_models = (
         [config.supervisor_model] * config.council_size if config.council_mode else []
     )
@@ -116,6 +120,7 @@ def research_flow(
                     iteration,
                     model_name,
                     config,
+                    uncovered_subtopics,
                     id=f"council_{index}",
                 )
                 for index, model_name in enumerate(council_models)
@@ -127,6 +132,7 @@ def research_flow(
                 ledger,
                 iteration,
                 config,
+                uncovered_subtopics,
             ).load()
         supervisor_cost = supervisor_result.budget.estimated_cost_usd
         spent_usd += supervisor_cost

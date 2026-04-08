@@ -12,6 +12,6 @@ def build_reviewer_agent(model_name: str):
             model_name,
             name="reviewer",
             output_type=CritiqueResult,
-            system_prompt=load_prompt("reviewer"),
+            instructions=load_prompt("reviewer"),
         )
     )

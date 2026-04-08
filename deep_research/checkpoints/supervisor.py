@@ -1,3 +1,5 @@
+import json
+
 from kitaru import checkpoint
 
 from deep_research.agents.supervisor import build_supervisor_agent
@@ -16,9 +18,11 @@ def run_supervisor(
     ledger: EvidenceLedger,
     iteration: int,
     config: ResearchConfig,
+    uncovered_subtopics: list[str] | None = None,
 ) -> SupervisorCheckpointResult:
     """Checkpoint: execute a single supervisor search turn and capture tool results."""
-    uncovered_subtopics = list(plan.subtopics)
+    if uncovered_subtopics is None:
+        uncovered_subtopics = list(plan.subtopics)
     toolsets, tools = build_supervisor_surface(
         plan,
         ledger,
@@ -39,4 +43,4 @@ def run_supervisor(
         "max_tool_calls": config.max_tool_calls_per_cycle,
         "tool_timeout_sec": config.tool_timeout_sec,
     }
-    return agent.run_sync(prompt).output
+    return agent.run_sync(json.dumps(prompt, indent=2)).output

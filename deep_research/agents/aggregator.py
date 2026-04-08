@@ -12,6 +12,6 @@ def build_aggregator_agent(model_name: str):
             model_name,
             name="aggregator",
             output_type=InvestigationPackage,
-            system_prompt=load_prompt("aggregator"),
+            instructions=load_prompt("aggregator"),
         )
     )
