@@ -11,7 +11,7 @@ from deep_research.models import (
 
 
 @checkpoint(type="tool_call")
-def build_selection_graph(
+def rank_evidence(
     ledger: EvidenceLedger, plan: ResearchPlan, config: ResearchConfig | None = None
 ) -> SelectionGraph:
     """Checkpoint: build a deterministic reading order from selected evidence."""

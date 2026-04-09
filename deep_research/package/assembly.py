@@ -8,6 +8,7 @@ from deep_research.models import (
     RenderPayload,
     RenderSettingsSnapshot,
     ResearchPlan,
+    ResearchPreferences,
     RunSummary,
     SelectionGraph,
 )
@@ -25,6 +26,8 @@ def assemble_package(
     critique_result: CritiqueResult | None = None,
     grounding_result: GroundingResult | None = None,
     coherence_result: CoherenceResult | None = None,
+    preferences: ResearchPreferences | None = None,
+    preference_degradations: list[str] | None = None,
 ) -> InvestigationPackage:
     """Construct an InvestigationPackage from its constituent parts."""
     return InvestigationPackage(
@@ -38,4 +41,6 @@ def assemble_package(
         critique_result=critique_result,
         grounding_result=grounding_result,
         coherence_result=coherence_result,
+        preferences=preferences,
+        preference_degradations=preference_degradations or [],
     )

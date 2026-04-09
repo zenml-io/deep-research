@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from deep_research.enums import SourceKind
+from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
 from deep_research.providers.search._http import build_client
@@ -10,6 +10,7 @@ from deep_research.providers.search._http import build_client
 
 class ExaSearchProvider:
     name = "exa"
+    source_group = SourceGroup.WEB
     supported_source_kinds = (SourceKind.WEB,)
     _cost_per_query_usd = 0.02
 

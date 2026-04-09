@@ -15,7 +15,14 @@ from pydantic import (
     model_validator,
 )
 
-from deep_research.enums import SourceKind, StopReason, Tier
+from deep_research.enums import (
+    DeliverableMode,
+    PlanningMode,
+    SourceGroup,
+    SourceKind,
+    StopReason,
+    Tier,
+)
 
 
 UnitFloat = Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
@@ -55,6 +62,27 @@ def validate_json_mapping_keys(value: object) -> None:
     if isinstance(value, list | tuple):
         for item in value:
             validate_json_mapping_keys(item)
+
+
+class ResearchPreferences(StrictBaseModel):
+    """User intent extracted from the research brief.
+
+    Advisory fields shape LLM decisions. Exclusion fields are hard constraints
+    enforced at the provider registry level.
+    """
+
+    audience: str | None = None
+    freshness: str | None = None
+    deliverable_mode: DeliverableMode = DeliverableMode.RESEARCH_PACKAGE
+    preferred_source_groups: list[SourceGroup] = Field(default_factory=list)
+    excluded_source_groups: list[SourceGroup] = Field(default_factory=list)
+    preferred_providers: list[str] = Field(default_factory=list)
+    excluded_providers: list[str] = Field(default_factory=list)
+    comparison_targets: list[str] = Field(default_factory=list)
+    time_window_days: int | None = None
+    planning_mode: PlanningMode = PlanningMode.BROAD_SCAN
+    cost_bias: str | None = None
+    speed_bias: str | None = None
 
 
 class ResearchPlan(StrictBaseModel):
@@ -264,6 +292,8 @@ class RenderPayload(StrictBaseModel):
 
 class RenderProse(StrictBaseModel):
     content_markdown: str
+    render_label: str = ""
+    deliverable_mode: DeliverableMode = DeliverableMode.RESEARCH_PACKAGE
 
 
 class RenderCheckpointResult(StrictBaseModel):
@@ -327,6 +357,8 @@ class InvestigationPackage(StrictBaseModel):
     grounding_result: GroundingResult | None = None
     coherence_result: CoherenceResult | None = None
     render_settings: RenderSettingsSnapshot | None = None
+    preferences: ResearchPreferences | None = None
+    preference_degradations: list[str] = Field(default_factory=list)
 
 
 class CoverageScore(StrictBaseModel):
@@ -423,6 +455,7 @@ class RequestClassification(StrictBaseModel):
     recommended_tier: Tier
     needs_clarification: bool = False
     clarification_question: str | None = None
+    preferences: ResearchPreferences = Field(default_factory=ResearchPreferences)
 
     @model_validator(mode="after")
     def validate_clarification_state(self) -> "RequestClassification":

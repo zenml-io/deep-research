@@ -8,11 +8,11 @@ Not a search wrapper. Not a report writer. A durable research system with conver
 
 Given a research brief, the engine:
 
-1. **Classifies** the request (audience, freshness, complexity) and selects a research tier
-2. **Plans** the investigation (subtopics, queries, success criteria)
+1. **Classifies** the request (audience, freshness, complexity), selects a research tier, and extracts structured **preferences** (deliverable mode, source biases, comparison targets, cost/speed trade-offs)
+2. **Plans** the investigation (subtopics, queries, success criteria) shaped by extracted preferences
 3. **Iterates** through search-evaluate-refine cycles until coverage converges or budget exhausts
 4. **Assembles** a canonical `InvestigationPackage` with full evidence provenance
-5. **Renders** human-facing outputs (reading paths, backing reports, full reports)
+5. **Renders** human-facing outputs based on deliverable mode (reading path + backing report for research packages; full report for other modes)
 6. **Critiques** renders via cross-provider review (different model evaluates different model's output)
 7. **Judges** grounding and coherence with LLM-as-a-judge from a third provider
 
@@ -41,17 +41,20 @@ Kitaru @flow / @checkpoint              PydanticAI Agent
 ## The Research Loop
 
 ![Deep Research Engine Flow](flow.png)
-[Excalidraw URL](https://excalidraw.com/#json=5oHahDqsheVVnPJdBjA2j,fgmIEkQR64EBRp4ztiS2sQ)
+[Excalidraw URL](https://excalidraw.com/#json=vubTTSYSPtaap6xqmCMQu,14v_EHEIEMOk2RybWmGq7A)
 
 ```
-classify_request -> build_plan -> run_supervisor / council -> execute_searches -> normalize_evidence -> score_relevance -> merge_evidence -> fetch_content -> evaluate_coverage
+classify_request (+ preferences) -> build_plan -> run_supervisor / council -> execute_searches -> extract_candidates -> score_relevance -> update_ledger -> enrich_candidates -> score_coverage
 
 After convergence:
 
-build_selection_graph -> render_reading_path -> render_backing_report -> review / revise -> grounding / coherence -> assemble_package
+rank_evidence -> deliverable_mode branch:
+  research_package: write_reading_path || write_backing_report
+  other modes:      write_full_report
+-> critique_reports -> apply_revisions -> verify_grounding || verify_coherence -> assemble_package
 ```
 
-`full_report` stays lazy. The package IO helpers synthesize it from saved package state on demand instead of emitting it during the main flow.
+The `deliverable_mode` (extracted from the brief by the classifier) controls which rendering path runs. `research_package` produces parallel reading path and backing report. All other modes (`final_report`, `comparison_memo`, `recommendation_brief`, `answer_only`) produce a single full report with preferences-adapted prompts.
 
 
 ### Stop Rules (checked after every iteration, in priority order)
@@ -78,19 +81,21 @@ The canonical output is an `InvestigationPackage` with six layers:
 | **EvidenceLedger** | All candidates: considered, selected, rejected, with dedupe log |
 | **SelectionGraph** | Ordered reading items with rationales, bridge notes, gap coverage |
 | **IterationTrace** | Per-iteration records: candidates, coverage, cost, tool calls |
-| **Renders** | Reading path, backing report (+ optional full report on demand) |
+| **Renders** | Reading path + backing report (research package mode) or full report (other modes) |
 
 Optional quality layers (deep tier): `CritiqueResult`, `GroundingResult`, `CoherenceResult`.
 
+Optional preference layers: `ResearchPreferences` (extracted intent), `preference_degradations` (unsupported mode fallback notes).
+
 ### Renderers
 
-| Renderer | Timing | Description |
+| Renderer | When Used | Description |
 |---|---|---|
-| `reading_path` | Eager | Deterministic scaffold plus synthesized prose for an ordered reading guide |
-| `backing_report` | Eager | Deterministic scaffold plus synthesized prose for evidence selection rationale and gap analysis |
-| `full_report` | Lazy | Full cited synthesis, produced on first request then cached |
+| `reading_path` | `research_package` mode | Deterministic scaffold plus synthesized prose for an ordered reading guide |
+| `backing_report` | `research_package` mode | Deterministic scaffold plus synthesized prose for evidence selection rationale and gap analysis |
+| `full_report` | All other deliverable modes | Full cited synthesis adapted to the requested deliverable mode |
 
-The renderer modules build deterministic `RenderPayload` scaffolds. The rendering checkpoints own the writer-model call that turns those scaffolds into prose and validates citations against the scaffold citation map.
+The renderer modules build deterministic `RenderPayload` scaffolds. The rendering checkpoints own the writer-model call that turns those scaffolds into prose and validates citations against the scaffold citation map. Writer prompts are adapted per deliverable mode via `prompt_for_mode()` in `materialization.py`.
 
 ## Tiers
 
@@ -119,25 +124,24 @@ deep_research/
 │   ├── reviewer.py          #   Cross-provider critique
 │   ├── judge.py             #   Grounding + coherence judges
 │   ├── writer.py            #   Report composition
-│   ├── curator.py           #   Evidence curation
-│   └── aggregator.py        #   Council result aggregation
+│   └── curator.py           #   Evidence curation
 ├── checkpoints/             # Kitaru checkpoint functions
 │   ├── classify.py          #   @checkpoint(type="llm_call")
 │   ├── plan.py              #   @checkpoint(type="llm_call")
 │   ├── supervisor.py        #   @checkpoint(type="llm_call") — decision + MCP capture
 │   ├── council.py           #   @checkpoint(type="llm_call") — parallel generators
 │   ├── search.py            #   @checkpoint(type="tool_call") — built-in provider execution
-│   ├── normalize.py         #   @checkpoint(type="tool_call")
-│   ├── relevance.py         #   @checkpoint(type="llm_call")
-│   ├── merge.py             #   @checkpoint(type="tool_call")
-│   ├── fetch.py             #   @checkpoint(type="tool_call") — canonical content fetch
-│   ├── evaluate.py          #   @checkpoint(type="tool_call") — coverage scoring
-│   ├── select.py            #   @checkpoint(type="tool_call") — selection graph
-│   ├── rendering.py         #   synthesized reading/backing/full report checkpoints
-│   ├── review.py            #   @checkpoint(type="llm_call") — critique
-│   ├── revise.py            #   @checkpoint(type="llm_call")
-│   ├── grounding.py         #   @checkpoint(type="llm_call") — LLM judge
-│   ├── coherence.py         #   @checkpoint(type="llm_call") — LLM judge
+│   ├── normalize.py         #   extract_candidates — @checkpoint(type="tool_call")
+│   ├── relevance.py         #   score_relevance — @checkpoint(type="llm_call")
+│   ├── merge.py             #   update_ledger — @checkpoint(type="tool_call")
+│   ├── fetch.py             #   enrich_candidates — @checkpoint(type="tool_call")
+│   ├── evaluate.py          #   score_coverage — @checkpoint(type="tool_call")
+│   ├── select.py            #   rank_evidence — @checkpoint(type="tool_call")
+│   ├── rendering.py         #   write_reading_path / write_backing_report / write_full_report
+│   ├── review.py            #   critique_reports — @checkpoint(type="llm_call")
+│   ├── revise.py            #   apply_revisions — @checkpoint(type="tool_call")
+│   ├── grounding.py         #   verify_grounding — @checkpoint(type="llm_call")
+│   ├── coherence.py         #   verify_coherence — @checkpoint(type="llm_call")
 │   └── assemble.py          #   @checkpoint(type="tool_call") — final package
 ├── evidence/                # Evidence processing (no LLM calls)
 │   ├── dedup.py             #   DOI > arXiv > URL > title precedence
@@ -151,7 +155,7 @@ deep_research/
 │   └── costing.py           #   Token → USD estimation
 ├── models.py                # All Pydantic models (strict, immutable)
 ├── config.py                # ResearchConfig, tier defaults, env settings
-├── enums.py                 # StopReason, Tier, SourceKind
+├── enums.py                 # StopReason, Tier, SourceKind, SourceGroup, DeliverableMode, PlanningMode
 ├── providers/
 │   ├── __init__.py          #   build_supervisor_surface + ProviderRegistry exports
 │   ├── mcp_config.py        #   MCPServerConfig + toolset factory
@@ -167,7 +171,7 @@ deep_research/
 │   ├── reading_path.py
 │   ├── backing_report.py
 │   ├── full_report.py
-│   └── materialization.py   #   Lazy full-report synthesis helper
+│   └── materialization.py   #   Writer synthesis + deliverable-mode prompt adaptation
 ├── tools/
 │   ├── bash_executor.py     #   Allow-listed bash sandbox (echo, ls, pwd)
 │   └── state_reader.py      #   read_plan, read_gaps tools for supervisor
@@ -184,7 +188,6 @@ deep_research/
 │   ├── judge_coherence.md
 │   ├── relevance_scorer.md
 │   ├── curator.md
-│   ├── aggregator.md
 │   └── question_generator.md
 └── critique/
     └── __init__.py          #   Re-exports critique models
@@ -198,7 +201,7 @@ Every agent is a PydanticAI `Agent` wrapped with `kitaru.adapters.pydantic_ai.wr
 
 - Has a typed `output_type` (Pydantic model) — structured output, not free text
 - Loads its system prompt from `prompts/<name>.md`
-- Is instantiated fresh per checkpoint call (no shared state between runs)
+- Is cached per model name via `lru_cache` (agent construction is expensive; cache avoids repeated wrapping)
 - Uses `instructions=` (current PydanticAI API) for system prompts
 
 ```python
@@ -257,7 +260,7 @@ Evidence flows through a strict pipeline:
 2. **Normalization** — `normalize_tool_results()` converts to `EvidenceCandidate` with canonical URLs, deterministic keys (SHA256 of DOI/arXiv/URL), and normalized scores
 3. **Relevance scoring** — LLM scores each candidate against the research plan
 4. **Merge** — `merge_candidates()` ratchet-merges into the ledger (scores only go up, snippets accumulate, dedup by DOI > arXiv > URL > title)
-5. **Fetch enrichment** — `fetch_content()` pulls canonical page text for a bounded set of candidates and enriches the canonical ledger entry in place
+5. **Fetch enrichment** — `enrich_candidates()` pulls canonical page text for a bounded set of candidates and enriches the canonical ledger entry in place
 6. **Selection** — Quality floor filter (default 0.3), then deterministic ordering by quality + authority + relevance
 
 The ratchet rule guarantees that the engine never loses good evidence from earlier iterations.
@@ -292,6 +295,26 @@ The engine supports two Kitaru `wait()` points:
 | `approve_plan` | `require_plan_approval = true` | Approve or reject the plan |
 
 Wait behavior is tier-dependent. Quick tier skips all waits.
+
+### Research Preferences
+
+The classifier extracts a `ResearchPreferences` object from the brief. Preferences split into two enforcement levels:
+
+| Type | Fields | Enforcement |
+|---|---|---|
+| **Advisory** | `preferred_source_groups`, `preferred_providers`, `audience`, `freshness`, `cost_bias`, `speed_bias` | Shape LLM decisions via prompt context |
+| **Hard constraint** | `excluded_source_groups`, `excluded_providers` | Enforced at the `ProviderRegistry` level — excluded providers never execute |
+
+Structural preferences control the research shape:
+
+| Field | Effect |
+|---|---|
+| `deliverable_mode` | Controls which rendering path runs (research package vs full report) |
+| `planning_mode` | Shapes how the planner structures subtopics (`broad_scan`, `comparison`, `timeline`, `deep_dive`, `decision_support`) |
+| `comparison_targets` | Ensures balanced coverage across compared items |
+| `time_window_days` | Constrains recency in search actions |
+
+Preferences flow through the entire pipeline: classifier → planner (prompt context) → supervisor (guidance field) → search execution (provider filtering) → rendering (prompt adaptation via `prompt_for_mode()`).
 
 ### Package Persistence
 
@@ -332,7 +355,6 @@ All LLM calls route through PydanticAI. Model strings use `provider/model-name` 
 | `relevance_scorer_model` | `gemini/gemini-2.5-flash` | Evidence relevance scoring |
 | `curator_model` | `gemini/gemini-2.0-flash-lite` | Reading path curation |
 | `writer_model` | `gemini/gemini-2.5-flash` | Report composition |
-| `aggregator_model` | `openai/gpt-4o-mini` | Council evidence aggregation |
 | `review_model` | `anthropic/claude-sonnet-4-20250514` | Cross-provider critique |
 | `judge_model` | `openai/gpt-4o-mini` | Grounding + coherence judges |
 

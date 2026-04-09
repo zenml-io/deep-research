@@ -5,7 +5,7 @@ from deep_research.providers.normalization import normalize_tool_results
 
 
 @checkpoint(type="tool_call")
-def normalize_evidence(raw_results: list[RawToolResult]) -> list[EvidenceCandidate]:
+def extract_candidates(raw_results: list[RawToolResult]) -> list[EvidenceCandidate]:
     """Checkpoint: convert raw tool outputs into normalized evidence candidates."""
     candidates: list[EvidenceCandidate] = []
     for result in raw_results:

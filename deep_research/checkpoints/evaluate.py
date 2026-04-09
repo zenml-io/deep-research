@@ -5,7 +5,7 @@ from deep_research.models import CoverageScore, EvidenceLedger, ResearchPlan
 
 
 @checkpoint(type="tool_call")
-def evaluate_coverage(ledger: EvidenceLedger, plan: ResearchPlan) -> CoverageScore:
+def score_coverage(ledger: EvidenceLedger, plan: ResearchPlan) -> CoverageScore:
     """Checkpoint: compute subtopic, diversity, and density coverage scores."""
     entries = resolve_coverage_entries(ledger)
     if not entries:

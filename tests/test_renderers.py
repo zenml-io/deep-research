@@ -16,6 +16,7 @@ from deep_research.models import (
     RenderCheckpointResult,
     RenderPayload,
     ResearchPlan,
+    ResearchPreferences,
     RunSummary,
     SelectionGraph,
     SelectionItem,
@@ -97,6 +98,10 @@ def _load_module(module_name: str):
     with _preserve_modules("kitaru", "kitaru.adapters", "pydantic_ai"):
         _install_kitaru_stub()
         sys.modules.pop(module_name, None)
+        # Clear checkpoint modules so they get re-imported with the stub decorator
+        for key in list(sys.modules):
+            if key.startswith("deep_research.checkpoints."):
+                sys.modules.pop(key, None)
         module = importlib.import_module(module_name)
     return module
 
@@ -387,9 +392,9 @@ def test_renderer_modules_stay_pure_and_checkpoint_wrappers_live_under_checkpoin
         assert not hasattr(func, "submit")
 
     for function_name in (
-        "render_reading_path",
-        "render_backing_report",
-        "render_full_report",
+        "write_reading_path",
+        "write_backing_report",
+        "write_full_report",
     ):
         checkpoint_func = getattr(rendering_checkpoint_module, function_name)
         assert checkpoint_func._checkpoint_type == "llm_call"
@@ -438,6 +443,7 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
                 recommended_tier=module.Tier.STANDARD,
                 needs_clarification=False,
                 clarification_question=None,
+                preferences=ResearchPreferences(),
             )
         ),
     )
@@ -467,7 +473,7 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "normalize_evidence",
+        "extract_candidates",
         _as_checkpoint(lambda raw_results: []),
     )
     monkeypatch.setattr(
@@ -482,18 +488,18 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "merge_evidence",
+        "update_ledger",
         _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
-        "fetch_content",
+        "enrich_candidates",
         _as_checkpoint(lambda ledger, config: ledger),
         raising=False,
     )
     monkeypatch.setattr(
         module,
-        "evaluate_coverage",
+        "score_coverage",
         _as_checkpoint(
             lambda ledger, plan: types.SimpleNamespace(
                 total=1.0, uncovered_subtopics=[]
@@ -510,15 +516,15 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "build_selection_graph",
+        "rank_evidence",
         _as_checkpoint(lambda ledger, plan, config=None: selection),
     )
     monkeypatch.setattr(module, "log", lambda **kwargs: None)
     monkeypatch.setattr(
         module,
-        "render_reading_path",
+        "write_reading_path",
         _as_checkpoint(
-            lambda rendered_selection, rendered_ledger, rendered_plan, rendered_config: (
+            lambda rendered_selection, rendered_ledger, rendered_plan, rendered_config, **kwargs: (
                 reading_path_calls.append(
                     (
                         rendered_selection,
@@ -533,9 +539,9 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "render_backing_report",
+        "write_backing_report",
         _as_checkpoint(
-            lambda rendered_selection, rendered_ledger, rendered_plan, iteration_trace, provider_usage_summary, stop_reason, rendered_config: (
+            lambda rendered_selection, rendered_ledger, rendered_plan, iteration_trace, provider_usage_summary, stop_reason, rendered_config, **kwargs: (
                 backing_report_calls.append(
                     (
                         rendered_selection,
@@ -579,10 +585,10 @@ def test_research_flow_imports_render_checkpoint_wrappers() -> None:
     module = _load_module("deep_research.flow.research_flow")
 
     assert (
-        module.render_reading_path.__module__ == "deep_research.checkpoints.rendering"
+        module.write_reading_path.__module__ == "deep_research.checkpoints.rendering"
     )
     assert (
-        module.render_backing_report.__module__ == "deep_research.checkpoints.rendering"
+        module.write_backing_report.__module__ == "deep_research.checkpoints.rendering"
     )
 
 
@@ -598,6 +604,7 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
                 recommended_tier=module.Tier.STANDARD,
                 needs_clarification=False,
                 clarification_question=None,
+                preferences=ResearchPreferences(),
             )
         ),
     )
@@ -626,7 +633,7 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        module, "normalize_evidence", _as_checkpoint(lambda raw_results: [])
+        module, "extract_candidates", _as_checkpoint(lambda raw_results: [])
     )
     monkeypatch.setattr(
         module,
@@ -640,7 +647,7 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "merge_evidence",
+        "update_ledger",
         _as_checkpoint(
             lambda scored, ledger, *, config=None: (
                 merge_calls.append((scored, ledger, config)) or ledger
@@ -649,13 +656,13 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "fetch_content",
+        "enrich_candidates",
         _as_checkpoint(lambda ledger, config: ledger),
         raising=False,
     )
     monkeypatch.setattr(
         module,
-        "evaluate_coverage",
+        "score_coverage",
         _as_checkpoint(
             lambda ledger, plan: types.SimpleNamespace(
                 total=1.0, uncovered_subtopics=[]
@@ -672,23 +679,23 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "build_selection_graph",
+        "rank_evidence",
         _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(
         module,
-        "render_reading_path",
+        "write_reading_path",
         _as_checkpoint(
-            lambda selection, ledger, plan, config: _render_result(
+            lambda selection, ledger, plan, config, **kwargs: _render_result(
                 "reading_path", "# Reading Path\n"
             )
         ),
     )
     monkeypatch.setattr(
         module,
-        "render_backing_report",
+        "write_backing_report",
         _as_checkpoint(
-            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config: (
+            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config, **kwargs: (
                 _render_result("backing_report", "# Backing Report\n")
             )
         ),

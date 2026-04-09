@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import json
 import sys
 import types
 
@@ -301,7 +302,7 @@ def _sample_plan() -> ResearchPlan:
     )
 
 
-def test_normalize_evidence_accepts_raw_results(monkeypatch) -> None:
+def test_extract_candidates_accepts_raw_results(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
 
     module = _import_checkpoint_module("deep_research.checkpoints.normalize")
@@ -319,14 +320,14 @@ def test_normalize_evidence_accepts_raw_results(monkeypatch) -> None:
             ]
         },
     )
-    normalized = module.normalize_evidence([result])
+    normalized = module.extract_candidates([result])
 
     assert normalized[0].title == "A"
     assert normalized[0].provider == "brave"
-    assert module.normalize_evidence._checkpoint_type == "tool_call"
+    assert module.extract_candidates._checkpoint_type == "tool_call"
 
 
-def test_normalize_evidence_uses_payload_source_kind_and_baseline_quality(
+def test_extract_candidates_uses_payload_source_kind_and_baseline_quality(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -348,13 +349,13 @@ def test_normalize_evidence_uses_payload_source_kind_and_baseline_quality(
         },
     )
 
-    normalized = module.normalize_evidence([result])
+    normalized = module.extract_candidates([result])
 
     assert normalized[0].source_kind == "paper"
     assert normalized[0].quality_score >= 0.9
 
 
-def test_normalize_evidence_accepts_raw_results_with_items_payload(monkeypatch) -> None:
+def test_extract_candidates_accepts_raw_results_with_items_payload(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
 
     module = _import_checkpoint_module("deep_research.checkpoints.normalize")
@@ -372,7 +373,7 @@ def test_normalize_evidence_accepts_raw_results_with_items_payload(monkeypatch) 
             ]
         },
     )
-    normalized = module.normalize_evidence([result])
+    normalized = module.extract_candidates([result])
 
     assert normalized[0].title == "B"
     assert normalized[0].snippets[0].text == "y"
@@ -450,7 +451,9 @@ def test_build_plan_uses_tier_model_and_passes_brief(monkeypatch) -> None:
             "kwargs": {},
         }
     ]
-    assert calls["run_calls"] == ["Research Kitaru"]
+    assert len(calls["run_calls"]) == 1
+    payload = json.loads(calls["run_calls"][0])
+    assert payload["brief"] == "Research Kitaru"
     assert ("build_plan", "llm_call") in decorated
 
 
@@ -768,7 +771,7 @@ def test_execute_searches_returns_raw_results_and_provider_budget(monkeypatch) -
         module,
         "ProviderRegistry",
         lambda config: types.SimpleNamespace(
-            providers_for=lambda action: [FakeProvider()]
+            providers_for=lambda action, **kwargs: [FakeProvider()]
         ),
     )
 
@@ -816,7 +819,7 @@ def test_execute_searches_dedupes_duplicate_search_actions(monkeypatch) -> None:
         module,
         "ProviderRegistry",
         lambda config: types.SimpleNamespace(
-            providers_for=lambda action: [FakeProvider()]
+            providers_for=lambda action, **kwargs: [FakeProvider()]
         ),
     )
 
@@ -877,24 +880,24 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
     )
     renders = [RenderPayload(name="reading_path", content_markdown="# RP")]
 
-    critique_result = review_module.review_renders(
+    critique_result = review_module.critique_reports(
         renders,
         _sample_plan(),
         SelectionGraph(items=[]),
         EvidenceLedger(entries=[]),
         config,
     )
-    revised = revise_module.revise_renders(
+    revised = revise_module.apply_revisions(
         renders,
         critique_result.critique,
         _sample_plan(),
     )
-    grounding_result = grounding_module.judge_grounding(
+    grounding_result = grounding_module.verify_grounding(
         revised,
         EvidenceLedger(entries=[]),
         config,
     )
-    coherence_result = coherence_module.judge_coherence(
+    coherence_result = coherence_module.verify_coherence(
         revised,
         _sample_plan(),
         config,
@@ -917,10 +920,10 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
     assert calls["coherence_calls"] == [
         {"model_name": "judge-model", "args": (), "kwargs": {}}
     ]
-    assert ("review_renders", "llm_call") in decorated
-    assert ("revise_renders", "llm_call") in decorated
-    assert ("judge_grounding", "llm_call") in decorated
-    assert ("judge_coherence", "llm_call") in decorated
+    assert ("critique_reports", "llm_call") in decorated
+    assert ("apply_revisions", "tool_call") in decorated
+    assert ("verify_grounding", "llm_call") in decorated
+    assert ("verify_coherence", "llm_call") in decorated
 
 
 def test_score_relevance_uses_configured_model(monkeypatch) -> None:
@@ -950,7 +953,7 @@ def test_score_relevance_uses_configured_model(monkeypatch) -> None:
     assert ("score_relevance", "llm_call") in decorated
 
 
-def test_merge_evidence_preserves_existing_and_adds_unique_entries(monkeypatch) -> None:
+def test_update_ledger_preserves_existing_and_adds_unique_entries(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.merge")
 
@@ -982,13 +985,13 @@ def test_merge_evidence_preserves_existing_and_adds_unique_entries(monkeypatch) 
         ),
     ]
 
-    merged = module.merge_evidence(scored, ledger)
+    merged = module.update_ledger(scored, ledger)
 
     assert [entry.key for entry in merged.entries] == ["existing", "new"]
-    assert module.merge_evidence._checkpoint_type == "tool_call"
+    assert module.update_ledger._checkpoint_type == "tool_call"
 
 
-def test_merge_evidence_uses_configured_quality_floor(monkeypatch) -> None:
+def test_update_ledger_uses_configured_quality_floor(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.merge")
     ledger = EvidenceLedger()
@@ -1007,13 +1010,13 @@ def test_merge_evidence_uses_configured_quality_floor(monkeypatch) -> None:
         update={"source_quality_floor": 0.5}
     )
 
-    merged = module.merge_evidence(scored, ledger, config)
+    merged = module.update_ledger(scored, ledger, config)
 
     assert merged.selected == []
     assert [candidate.key for candidate in merged.rejected] == ["candidate-1"]
 
 
-def test_merge_evidence_preserves_existing_dedupe_log(monkeypatch) -> None:
+def test_update_ledger_preserves_existing_dedupe_log(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.merge")
 
@@ -1063,12 +1066,12 @@ def test_merge_evidence_preserves_existing_dedupe_log(monkeypatch) -> None:
         )
     ]
 
-    merged = module.merge_evidence(scored, ledger)
+    merged = module.update_ledger(scored, ledger)
 
     assert [event.duplicate_key for event in merged.dedupe_log] == ["candidate-0"]
 
 
-def test_merge_evidence_does_not_duplicate_historical_dedupe_events_on_replay(
+def test_update_ledger_does_not_duplicate_historical_dedupe_events_on_replay(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1104,7 +1107,7 @@ def test_merge_evidence_does_not_duplicate_historical_dedupe_events_on_replay(
         ],
     )
 
-    merged = module.merge_evidence([], ledger)
+    merged = module.update_ledger([], ledger)
 
     assert [
         (event.duplicate_key, event.canonical_key, event.match_basis)
@@ -1112,7 +1115,7 @@ def test_merge_evidence_does_not_duplicate_historical_dedupe_events_on_replay(
     ] == [("candidate-0", "candidate-1", "canonical_url")]
 
 
-def test_evaluate_coverage_computes_serializable_score(monkeypatch) -> None:
+def test_score_coverage_computes_serializable_score(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
@@ -1137,15 +1140,15 @@ def test_evaluate_coverage_computes_serializable_score(monkeypatch) -> None:
         ]
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert isinstance(coverage, CoverageScore)
     assert 0.0 <= coverage.total <= 1.0
     assert coverage.subtopic_coverage == 1.0
-    assert module.evaluate_coverage._checkpoint_type == "tool_call"
+    assert module.score_coverage._checkpoint_type == "tool_call"
 
 
-def test_evaluate_coverage_ignores_rejected_only_evidence(monkeypatch) -> None:
+def test_score_coverage_ignores_rejected_only_evidence(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
@@ -1175,12 +1178,12 @@ def test_evaluate_coverage_ignores_rejected_only_evidence(monkeypatch) -> None:
         rejected=[rejected_candidate],
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.5
 
 
-def test_evaluate_coverage_ignores_all_rejected_evidence(monkeypatch) -> None:
+def test_score_coverage_ignores_all_rejected_evidence(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
@@ -1200,12 +1203,12 @@ def test_evaluate_coverage_ignores_all_rejected_evidence(monkeypatch) -> None:
         rejected=[rejected_candidate],
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.0
 
 
-def test_evaluate_coverage_uses_selected_flags_for_legacy_entries_only_ledger(
+def test_score_coverage_uses_selected_flags_for_legacy_entries_only_ledger(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1234,12 +1237,12 @@ def test_evaluate_coverage_uses_selected_flags_for_legacy_entries_only_ledger(
         ]
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.5
 
 
-def test_evaluate_coverage_counts_matched_subtopics_without_text_match(
+def test_score_coverage_counts_matched_subtopics_without_text_match(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1262,12 +1265,12 @@ def test_evaluate_coverage_counts_matched_subtopics_without_text_match(
         rejected=[],
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.5
 
 
-def test_evaluate_coverage_reports_uncovered_subtopics_and_preserves_checkpoint_metadata(
+def test_score_coverage_reports_uncovered_subtopics_and_preserves_checkpoint_metadata(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1289,25 +1292,25 @@ def test_evaluate_coverage_reports_uncovered_subtopics_and_preserves_checkpoint_
         rejected=[],
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.5
     assert coverage.uncovered_subtopics == ["impact"]
-    assert module.evaluate_coverage._checkpoint_type == "tool_call"
+    assert module.score_coverage._checkpoint_type == "tool_call"
 
 
-def test_evaluate_coverage_reports_all_subtopics_as_uncovered_without_entries(
+def test_score_coverage_reports_all_subtopics_as_uncovered_without_entries(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
-    coverage = module.evaluate_coverage(EvidenceLedger(entries=[]), _sample_plan())
+    coverage = module.score_coverage(EvidenceLedger(entries=[]), _sample_plan())
 
     assert coverage.uncovered_subtopics == ["status", "impact"]
 
 
-def test_evaluate_coverage_combines_selected_and_legacy_considered_entries(
+def test_score_coverage_combines_selected_and_legacy_considered_entries(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1337,13 +1340,13 @@ def test_evaluate_coverage_combines_selected_and_legacy_considered_entries(
         rejected=[],
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 1.0
     assert coverage.uncovered_subtopics == []
 
 
-def test_evaluate_coverage_combines_selected_and_legacy_entries_only_ledger(
+def test_score_coverage_combines_selected_and_legacy_entries_only_ledger(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1368,13 +1371,13 @@ def test_evaluate_coverage_combines_selected_and_legacy_entries_only_ledger(
     )
     ledger = EvidenceLedger(entries=[legacy_candidate, selected_candidate])
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 1.0
     assert coverage.uncovered_subtopics == []
 
 
-def test_evaluate_coverage_uses_legacy_considered_entries_when_selected_and_rejected_are_empty(
+def test_score_coverage_uses_legacy_considered_entries_when_selected_and_rejected_are_empty(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1390,13 +1393,13 @@ def test_evaluate_coverage_uses_legacy_considered_entries_when_selected_and_reje
     )
     ledger = EvidenceLedger(considered=[legacy_candidate], selected=[], rejected=[])
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.5
     assert coverage.uncovered_subtopics == ["status"]
 
 
-def test_evaluate_coverage_ignores_all_rejected_legacy_entries_only_ledger(
+def test_score_coverage_ignores_all_rejected_legacy_entries_only_ledger(
     monkeypatch,
 ) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1416,25 +1419,25 @@ def test_evaluate_coverage_ignores_all_rejected_legacy_entries_only_ledger(
         ]
     )
 
-    coverage = module.evaluate_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan())
 
     assert coverage.subtopic_coverage == 0.0
 
 
-def test_build_selection_graph_returns_selected_entries(monkeypatch) -> None:
+def test_rank_evidence_returns_selected_entries(monkeypatch) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
 
     module = _import_checkpoint_module("deep_research.checkpoints.select")
     ledger = EvidenceLedger(entries=[])
 
-    result = module.build_selection_graph(ledger, _sample_plan())
+    result = module.rank_evidence(ledger, _sample_plan())
 
     assert result.items == []
     assert result.gap_coverage_summary == ["status", "impact"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_uses_selected_entries_and_gap_summary(
+def test_rank_evidence_uses_selected_entries_and_gap_summary(
     monkeypatch,
 ) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1512,7 +1515,7 @@ def test_build_selection_graph_uses_selected_entries_and_gap_summary(
         success_criteria=["Produce a summary"],
     )
 
-    result = module.build_selection_graph(ledger, plan)
+    result = module.rank_evidence(ledger, plan)
 
     assert [item.candidate_key for item in result.items] == [
         "candidate-2",
@@ -1525,10 +1528,10 @@ def test_build_selection_graph_uses_selected_entries_and_gap_summary(
         == "Higher quality, authority, and relevance sources appear earlier."
     )
     assert result.gap_coverage_summary == ["operations"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_uses_selected_flags_for_legacy_entries_only_ledger(
+def test_rank_evidence_uses_selected_flags_for_legacy_entries_only_ledger(
     monkeypatch,
 ) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1562,14 +1565,14 @@ def test_build_selection_graph_uses_selected_flags_for_legacy_entries_only_ledge
         ]
     )
 
-    result = module.build_selection_graph(ledger, _sample_plan())
+    result = module.rank_evidence(ledger, _sample_plan())
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["impact"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_ignores_all_rejected_legacy_entries_only_ledger(
+def test_rank_evidence_ignores_all_rejected_legacy_entries_only_ledger(
     monkeypatch,
 ) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1588,14 +1591,14 @@ def test_build_selection_graph_ignores_all_rejected_legacy_entries_only_ledger(
         ]
     )
 
-    result = module.build_selection_graph(ledger, _sample_plan())
+    result = module.rank_evidence(ledger, _sample_plan())
 
     assert result.items == []
     assert result.gap_coverage_summary == ["status", "impact"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_uses_text_coverage_for_legacy_selected_entry_without_matched_subtopics(
+def test_rank_evidence_uses_text_coverage_for_legacy_selected_entry_without_matched_subtopics(
     monkeypatch,
 ) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1614,14 +1617,14 @@ def test_build_selection_graph_uses_text_coverage_for_legacy_selected_entry_with
         ]
     )
 
-    result = module.build_selection_graph(ledger, _sample_plan())
+    result = module.rank_evidence(ledger, _sample_plan())
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["impact"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_treats_matched_subtopics_case_insensitively(
+def test_rank_evidence_treats_matched_subtopics_case_insensitively(
     monkeypatch,
 ) -> None:
     decorated = _install_kitaru_checkpoint_stub(monkeypatch)
@@ -1648,14 +1651,14 @@ def test_build_selection_graph_treats_matched_subtopics_case_insensitively(
         success_criteria=["Produce a summary"],
     )
 
-    result = module.build_selection_graph(ledger, plan)
+    result = module.rank_evidence(ledger, plan)
 
     assert [item.candidate_key for item in result.items] == ["candidate-1"]
     assert result.gap_coverage_summary == ["Impact"]
-    assert ("build_selection_graph", "tool_call") in decorated
+    assert ("rank_evidence", "tool_call") in decorated
 
 
-def test_build_selection_graph_breaks_score_ties_by_candidate_key(monkeypatch) -> None:
+def test_rank_evidence_breaks_score_ties_by_candidate_key(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
     module = _import_checkpoint_module("deep_research.checkpoints.select")
     shared_scores = {
@@ -1685,7 +1688,7 @@ def test_build_selection_graph_breaks_score_ties_by_candidate_key(monkeypatch) -
         ]
     )
 
-    result = module.build_selection_graph(ledger, _sample_plan())
+    result = module.rank_evidence(ledger, _sample_plan())
 
     assert [item.candidate_key for item in result.items] == [
         "candidate-a",

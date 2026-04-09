@@ -13,7 +13,7 @@ from deep_research.providers.search.fetcher import fetch_url_content
 
 
 @checkpoint(type="tool_call")
-def fetch_content(ledger: EvidenceLedger, config: ResearchConfig) -> EvidenceLedger:
+def enrich_candidates(ledger: EvidenceLedger, config: ResearchConfig) -> EvidenceLedger:
     selected = sorted(
         resolve_selected_entries(ledger),
         key=lambda candidate: (

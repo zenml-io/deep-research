@@ -3,8 +3,8 @@ from kitaru import checkpoint
 from deep_research.models import CritiqueResult, RenderPayload, ResearchPlan
 
 
-@checkpoint(type="llm_call")
-def revise_renders(
+@checkpoint(type="tool_call")
+def apply_revisions(
     renders: list[RenderPayload],
     critique: CritiqueResult,
     plan: ResearchPlan,

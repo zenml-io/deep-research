@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
-from deep_research.enums import SourceKind
+from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
 from deep_research.providers.search._http import build_client
@@ -31,6 +31,7 @@ def published_on_or_after(
 
 class SemanticScholarProvider:
     name = "semantic_scholar"
+    source_group = SourceGroup.PAPERS
     supported_source_kinds = (SourceKind.PAPER,)
 
     def __init__(self, api_key: str) -> None:

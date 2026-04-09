@@ -10,6 +10,7 @@ from deep_research.models import (
     RenderCheckpointResult,
     RenderPayload,
     ResearchPlan,
+    ResearchPreferences,
     SelectionGraph,
     StopReason,
 )
@@ -18,11 +19,12 @@ from deep_research.renderers import backing_report, full_report, reading_path
 
 
 @checkpoint(type="llm_call")
-def render_reading_path(
+def write_reading_path(
     selection: SelectionGraph,
     ledger: EvidenceLedger,
     plan: ResearchPlan,
     config: ResearchConfig,
+    preferences: ResearchPreferences | None = None,
 ) -> RenderCheckpointResult:
     """Checkpoint: synthesize a reading path from the deterministic scaffold."""
     scaffold = reading_path.render_reading_path(selection, ledger, plan)
@@ -31,11 +33,12 @@ def render_reading_path(
         writer_model=config.writer_model,
         prompt_name="writer_reading_path",
         pricing=ModelPricing.model_validate(config.writer_pricing),
+        preferences=preferences,
     )
 
 
 @checkpoint(type="llm_call")
-def render_backing_report(
+def write_backing_report(
     selection: SelectionGraph,
     ledger: EvidenceLedger,
     plan: ResearchPlan,
@@ -43,6 +46,7 @@ def render_backing_report(
     provider_usage_summary: dict[str, int],
     stop_reason: StopReason,
     config: ResearchConfig,
+    preferences: ResearchPreferences | None = None,
 ) -> RenderCheckpointResult:
     """Checkpoint: synthesize a backing report from the deterministic scaffold."""
     scaffold = backing_report.render_backing_report(
@@ -58,11 +62,15 @@ def render_backing_report(
         writer_model=config.writer_model,
         prompt_name="writer_backing_report",
         pricing=ModelPricing.model_validate(config.writer_pricing),
+        preferences=preferences,
     )
+
+
 @checkpoint(type="llm_call")
-def render_full_report(
+def write_full_report(
     package: InvestigationPackage,
     config: ResearchConfig,
+    preferences: ResearchPreferences | None = None,
 ) -> RenderCheckpointResult:
     """Checkpoint: synthesize the canonical full report from package state."""
     return materialize_render_payload(
@@ -70,4 +78,5 @@ def render_full_report(
         writer_model=config.writer_model,
         prompt_name="writer_full_report",
         pricing=ModelPricing.model_validate(config.writer_pricing),
+        preferences=preferences,
     )

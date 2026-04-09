@@ -113,7 +113,7 @@ def test_render_reading_path_checkpoint_materializes_writer_prose(monkeypatch) -
         materialization_module, "load_prompt", lambda name: f"prompt:{name}"
     )
 
-    result = module.render_reading_path(
+    result = module.write_reading_path(
         SelectionGraph(
             items=[SelectionItem(candidate_key="source-1", rationale="Start here")]
         ),
@@ -161,7 +161,7 @@ def test_render_checkpoint_uses_writer_pricing_for_budget(monkeypatch) -> None:
         }
     )
 
-    result = module.render_reading_path(
+    result = module.write_reading_path(
         SelectionGraph(
             items=[SelectionItem(candidate_key="source-1", rationale="Start here")]
         ),
@@ -238,7 +238,7 @@ def test_materialize_full_report_uses_full_report_prompt(monkeypatch) -> None:
         lambda name: prompt_calls.append(name) or f"prompt:{name}",
     )
 
-    result = module.render_full_report(
+    result = module.write_full_report(
         _sample_package(),
         ResearchConfig.for_tier(Tier.STANDARD).model_copy(
             update={"writer_model": "gemini/gemini-2.5-flash"}

@@ -16,7 +16,7 @@ from deep_research.models import (
 
 
 @checkpoint(type="llm_call")
-def review_renders(
+def critique_reports(
     renders: list[RenderPayload],
     plan: ResearchPlan,
     selection: SelectionGraph,

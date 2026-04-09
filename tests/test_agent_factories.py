@@ -113,7 +113,6 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
     relevance_scorer = _load_module("deep_research.agents.relevance_scorer")
     curator = _load_module("deep_research.agents.curator")
     writer = _load_module("deep_research.agents.writer")
-    aggregator = _load_module("deep_research.agents.aggregator")
 
     wrapped_agents = [
         classifier.build_classifier_agent(model_name="test-model"),
@@ -126,11 +125,10 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         relevance_scorer.build_relevance_scorer_agent(model_name="test-model"),
         curator.build_curator_agent(model_name="test-model"),
         writer.build_writer_agent(model_name="test-model"),
-        aggregator.build_aggregator_agent(model_name="test-model"),
     ]
 
-    assert len(wrapped_agents) == 7
-    assert len(wrap_calls) == 7
+    assert len(wrapped_agents) == 6
+    assert len(wrap_calls) == 6
     assert prompt_calls == [
         "classifier",
         "planner",
@@ -138,7 +136,6 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         "relevance_scorer",
         "curator",
         "writer",
-        "aggregator",
     ]
 
     expected = [
@@ -158,7 +155,6 @@ def test_agent_factories_build_expected_wrapped_agents(monkeypatch) -> None:
         ),
         ("curator", "curator", "SelectionGraph", None),
         ("writer", "writer", "RenderProse", None),
-        ("aggregator", "aggregator", "InvestigationPackage", None),
     ]
 
     for wrapped, (

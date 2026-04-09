@@ -7,7 +7,7 @@ from deep_research.models import DedupeEvent, EvidenceCandidate, EvidenceLedger
 
 
 @checkpoint(type="tool_call")
-def merge_evidence(
+def update_ledger(
     scored: list[EvidenceCandidate],
     ledger: EvidenceLedger,
     config: ResearchConfig | None = None,

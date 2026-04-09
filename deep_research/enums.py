@@ -23,3 +23,27 @@ class SourceKind(str, Enum):
     DOCS = "docs"
     WEB = "web"
     DATASET = "dataset"
+
+
+class SourceGroup(str, Enum):
+    PAPERS = "papers"
+    WEB = "web"
+    NEWS = "news"
+    REPOS = "repos"
+    SOCIAL = "social"
+
+
+class DeliverableMode(str, Enum):
+    RESEARCH_PACKAGE = "research_package"
+    FINAL_REPORT = "final_report"
+    COMPARISON_MEMO = "comparison_memo"
+    RECOMMENDATION_BRIEF = "recommendation_brief"
+    ANSWER_ONLY = "answer_only"
+
+
+class PlanningMode(str, Enum):
+    BROAD_SCAN = "broad_scan"
+    DECISION_SUPPORT = "decision_support"
+    COMPARISON = "comparison"
+    TIMELINE = "timeline"
+    DEEP_DIVE = "deep_dive"

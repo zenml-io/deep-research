@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Protocol
 
 from deep_research.config import ResearchConfig
-from deep_research.enums import SourceKind
+from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult, SearchAction
 
 
 class SearchProvider(Protocol):
     name: str
+    source_group: SourceGroup
     supported_source_kinds: tuple[SourceKind, ...]
 
     def is_available(self) -> bool: ...
@@ -65,8 +66,25 @@ class ProviderRegistry:
         providers = [self._providers[name] for name in self._enabled_names]
         return [provider for provider in providers if provider.is_available()]
 
-    def providers_for(self, action: SearchAction) -> list[SearchProvider]:
+    def providers_for(
+        self,
+        action: SearchAction,
+        excluded_providers: list[str] | None = None,
+        excluded_source_groups: list[SourceGroup] | None = None,
+    ) -> list[SearchProvider]:
         providers = self.active_providers()
+
+        # Hard exclusions -- deterministic, no LLM discretion
+        if excluded_providers:
+            excluded_set = set(excluded_providers)
+            providers = [p for p in providers if p.name not in excluded_set]
+        if excluded_source_groups:
+            excluded_group_set = set(excluded_source_groups)
+            providers = [
+                p for p in providers if p.source_group not in excluded_group_set
+            ]
+
+        # Action-level preferences (from supervisor SearchAction)
         if action.preferred_providers:
             preferred = set(action.preferred_providers)
             providers = [

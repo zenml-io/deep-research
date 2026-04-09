@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import arxiv
 
-from deep_research.enums import SourceKind
+from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
 
@@ -21,6 +21,7 @@ def is_recent_enough(published: datetime, recency_days: int | None) -> bool:
 
 class ArxivSearchProvider:
     name = "arxiv"
+    source_group = SourceGroup.PAPERS
     supported_source_kinds = (SourceKind.PAPER,)
 
     def is_available(self) -> bool:

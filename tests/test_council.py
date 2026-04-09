@@ -185,7 +185,12 @@ def test_run_council_generator_uses_override_model_when_provided(monkeypatch) ->
     )
 
     def fake_execute(
-        plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None
+        plan_arg,
+        ledger_arg,
+        iteration_arg,
+        config_arg,
+        uncovered_subtopics=None,
+        **kwargs,
     ):
         captured.append(
             {
@@ -239,7 +244,7 @@ def test_run_council_generator_uses_shared_non_checkpoint_helper(monkeypatch) ->
     monkeypatch.setattr(
         module,
         "execute_supervisor_turn",
-        lambda plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None: (
+        lambda plan_arg, ledger_arg, iteration_arg, config_arg, uncovered_subtopics=None, **kwargs: (
             captured.append(
                 {
                     "plan": plan_arg,

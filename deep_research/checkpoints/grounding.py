@@ -14,7 +14,7 @@ from deep_research.models import (
 
 
 @checkpoint(type="llm_call")
-def judge_grounding(
+def verify_grounding(
     renders: list[RenderPayload],
     ledger: EvidenceLedger,
     config: ResearchConfig,

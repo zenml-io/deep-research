@@ -16,6 +16,7 @@ from deep_research.models import (
     RenderCheckpointResult,
     RenderPayload,
     ResearchPlan,
+    ResearchPreferences,
     RelevanceCheckpointResult,
     RequestClassification,
     SearchAction,
@@ -103,6 +104,7 @@ def _load_research_flow_module():
         )
         sys.modules["pydantic_ai"] = types.SimpleNamespace(Agent=object)
         sys.modules.pop("deep_research.flow.research_flow", None)
+        sys.modules.pop("deep_research.checkpoints.council", None)
         return importlib.import_module("deep_research.flow.research_flow")
 
 
@@ -171,12 +173,12 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "execute_searches",
-        _as_checkpoint(lambda decision, config: SearchExecutionResult()),
+        _as_checkpoint(lambda decision, config, **kwargs: SearchExecutionResult()),
         raising=False,
     )
     monkeypatch.setattr(
         module,
-        "normalize_evidence",
+        "extract_candidates",
         _as_checkpoint(lambda raw_results: []),
     )
     monkeypatch.setattr(
@@ -191,18 +193,18 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "merge_evidence",
+        "update_ledger",
         _as_checkpoint(lambda scored, ledger, config=None: ledger),
     )
     monkeypatch.setattr(
         module,
-        "fetch_content",
+        "enrich_candidates",
         _as_checkpoint(lambda ledger, config: ledger),
         raising=False,
     )
     monkeypatch.setattr(
         module,
-        "evaluate_coverage",
+        "score_coverage",
         _as_checkpoint(lambda ledger, plan: _sample_coverage()),
     )
     monkeypatch.setattr(
@@ -215,23 +217,23 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "build_selection_graph",
+        "rank_evidence",
         _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
     )
     monkeypatch.setattr(
         module,
-        "render_reading_path",
+        "write_reading_path",
         _as_checkpoint(
-            lambda selection, ledger, plan, config: _render_result(
+            lambda selection, ledger, plan, config, **kwargs: _render_result(
                 "reading_path", "# RP\n"
             )
         ),
     )
     monkeypatch.setattr(
         module,
-        "render_backing_report",
+        "write_backing_report",
         _as_checkpoint(
-            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config: (
+            lambda selection, ledger, plan, iteration_trace, provider_usage_summary, stop_reason, config, **kwargs: (
                 _render_result(
                     "backing_report",
                     "# BR\n",
@@ -241,7 +243,7 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "review_renders",
+        "critique_reports",
         _as_checkpoint(
             lambda *args, **kwargs: CritiqueCheckpointResult(
                 critique=module.CritiqueResult(
@@ -256,12 +258,12 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "revise_renders",
+        "apply_revisions",
         _as_checkpoint(lambda renders, critique, plan: renders),
     )
     monkeypatch.setattr(
         module,
-        "judge_grounding",
+        "verify_grounding",
         _as_checkpoint(
             lambda *args, **kwargs: GroundingCheckpointResult(
                 grounding=module.GroundingResult(score=1.0, verdicts=[]),
@@ -271,7 +273,7 @@ def _patch_success_path(module, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "judge_coherence",
+        "verify_coherence",
         _as_checkpoint(
             lambda *args, **kwargs: CoherenceCheckpointResult(
                 coherence=module.CoherenceResult(
@@ -328,7 +330,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "review_renders",
+        "critique_reports",
         _as_checkpoint(
             lambda *args, **kwargs: CritiqueCheckpointResult(
                 critique=module.CritiqueResult(
@@ -343,12 +345,12 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "revise_renders",
+        "apply_revisions",
         _as_checkpoint(lambda renders, critique, plan: renders),
     )
     monkeypatch.setattr(
         module,
-        "judge_grounding",
+        "verify_grounding",
         _as_checkpoint(
             lambda *args, **kwargs: GroundingCheckpointResult(
                 grounding=module.GroundingResult(score=1.0, verdicts=[]),
@@ -358,7 +360,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         module,
-        "judge_coherence",
+        "verify_coherence",
         _as_checkpoint(
             lambda *args, **kwargs: CoherenceCheckpointResult(
                 coherence=module.CoherenceResult(
@@ -503,7 +505,7 @@ def test_research_flow_combines_supervisor_and_builtin_search_results(
         module,
         "execute_searches",
         _as_checkpoint(
-            lambda decision, config: SearchExecutionResult(
+            lambda decision, config, **kwargs: SearchExecutionResult(
                 raw_results=[
                     RawToolResult(
                         tool_name="provider_search",
@@ -518,14 +520,14 @@ def test_research_flow_combines_supervisor_and_builtin_search_results(
     )
     monkeypatch.setattr(
         module,
-        "normalize_evidence",
+        "extract_candidates",
         _as_checkpoint(
             lambda raw_results: normalized_batches.append(list(raw_results)) or []
         ),
     )
     monkeypatch.setattr(
         module,
-        "fetch_content",
+        "enrich_candidates",
         _as_checkpoint(lambda ledger, config: ledger),
         raising=False,
     )

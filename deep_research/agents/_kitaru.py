@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def wrap_agent(agent: Any, tool_capture_config: dict[str, Any] | None = None) -> Any:
@@ -13,9 +16,11 @@ def wrap_agent(agent: Any, tool_capture_config: dict[str, Any] | None = None) ->
     try:
         from kitaru.adapters import pydantic_ai as kp
     except (ImportError, AttributeError):
+        logger.warning("kitaru.adapters.pydantic_ai not available; agent will run without Kitaru tracing")
         return agent
 
     try:
         return kp.wrap(agent, tool_capture_config=tool_capture_config)
     except TypeError:
+        logger.warning("kitaru.adapters.pydantic_ai.wrap() signature mismatch; agent will run without Kitaru tracing")
         return agent

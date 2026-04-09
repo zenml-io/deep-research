@@ -22,7 +22,7 @@ def _load_fetch_module(monkeypatch):
     return importlib.import_module("deep_research.checkpoints.fetch")
 
 
-def test_fetch_content_enriches_canonical_ledger_buckets(monkeypatch) -> None:
+def test_enrich_candidates_enriches_canonical_ledger_buckets(monkeypatch) -> None:
     module = _load_fetch_module(monkeypatch)
     selected_candidate = EvidenceCandidate(
         key="candidate-1",
@@ -59,7 +59,7 @@ def test_fetch_content_enriches_canonical_ledger_buckets(monkeypatch) -> None:
         lambda url, timeout_sec, max_chars: "Fetched body text",
     )
 
-    enriched = module.fetch_content(ledger, ResearchConfig.for_tier(Tier.STANDARD))
+    enriched = module.enrich_candidates(ledger, ResearchConfig.for_tier(Tier.STANDARD))
 
     assert enriched.considered[0].snippets[-1].text == "Fetched body text"
     assert enriched.considered[0].snippets[-1].source_locator == "fetched:body"
@@ -68,10 +68,10 @@ def test_fetch_content_enriches_canonical_ledger_buckets(monkeypatch) -> None:
     assert [snippet.text for snippet in enriched.rejected[0].snippets] == [
         "Rejected snippet"
     ]
-    assert module.fetch_content._checkpoint_type == "tool_call"
+    assert module.enrich_candidates._checkpoint_type == "tool_call"
 
 
-def test_fetch_content_skips_candidates_already_enriched(monkeypatch) -> None:
+def test_enrich_candidates_skips_candidates_already_enriched(monkeypatch) -> None:
     module = _load_fetch_module(monkeypatch)
     candidate = EvidenceCandidate(
         key="candidate-1",
@@ -95,13 +95,13 @@ def test_fetch_content_skips_candidates_already_enriched(monkeypatch) -> None:
         lambda *args, **kwargs: calls.append((args, kwargs)) or "should not be used",
     )
 
-    enriched = module.fetch_content(ledger, ResearchConfig.for_tier(Tier.STANDARD))
+    enriched = module.enrich_candidates(ledger, ResearchConfig.for_tier(Tier.STANDARD))
 
     assert calls == []
     assert enriched == ledger
 
 
-def test_fetch_content_preserves_and_enriches_canonical_entry_for_divergent_bucket_copies(
+def test_enrich_candidates_preserves_and_enriches_canonical_entry_for_divergent_bucket_copies(
     monkeypatch,
 ) -> None:
     module = _load_fetch_module(monkeypatch)
@@ -140,7 +140,7 @@ def test_fetch_content_preserves_and_enriches_canonical_entry_for_divergent_buck
         lambda url, timeout_sec, max_chars: "Fetched body text",
     )
 
-    enriched = module.fetch_content(ledger, ResearchConfig.for_tier(Tier.STANDARD))
+    enriched = module.enrich_candidates(ledger, ResearchConfig.for_tier(Tier.STANDARD))
 
     assert enriched.considered[0].title == "Canonical Example"
     assert enriched.considered[0].matched_subtopics == ["impact"]
@@ -151,7 +151,7 @@ def test_fetch_content_preserves_and_enriches_canonical_entry_for_divergent_buck
     assert enriched.selected[0] == enriched.considered[0]
 
 
-def test_fetch_content_isolates_fetch_failures_per_candidate(monkeypatch) -> None:
+def test_enrich_candidates_isolates_fetch_failures_per_candidate(monkeypatch) -> None:
     module = _load_fetch_module(monkeypatch)
     failing_candidate = EvidenceCandidate(
         key="candidate-1",
@@ -189,7 +189,7 @@ def test_fetch_content_isolates_fetch_failures_per_candidate(monkeypatch) -> Non
 
     monkeypatch.setattr("deep_research.checkpoints.fetch.fetch_url_content", fetch)
 
-    enriched = module.fetch_content(ledger, ResearchConfig.for_tier(Tier.STANDARD))
+    enriched = module.enrich_candidates(ledger, ResearchConfig.for_tier(Tier.STANDARD))
 
     assert [snippet.text for snippet in enriched.considered[0].snippets] == [
         "Failing snippet"

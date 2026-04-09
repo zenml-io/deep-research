@@ -10,6 +10,7 @@ from deep_research.models import (
     IterationBudget,
     RawToolResult,
     ResearchPlan,
+    ResearchPreferences,
     SearchAction,
     SupervisorDecision,
     SupervisorCheckpointResult,
@@ -24,6 +25,8 @@ def run_council_generator(
     model_name: str,
     config: ResearchConfig,
     uncovered_subtopics: list[str] | None = None,
+    brief: str | None = None,
+    preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
     """Checkpoint: run one council member's supervisor turn for parallel evidence gathering."""
     override_config = config.model_copy(update={"supervisor_model": model_name})
@@ -33,7 +36,11 @@ def run_council_generator(
         iteration,
         override_config,
         uncovered_subtopics,
+        brief=brief,
+        preferences=preferences,
     )
+
+
 @checkpoint(type="tool_call")
 def aggregate_council_results(
     grouped_results: list[SupervisorCheckpointResult],
