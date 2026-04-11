@@ -42,21 +42,28 @@ def test_research_config_carries_review_and_judge_models() -> None:
     settings = ResearchSettings(
         review_model="anthropic/reviewer",
         judge_model="openai/judge",
+        coverage_scorer_model="openai/scorer",
     )
 
     config = ResearchConfig.for_tier(Tier.DEEP, settings=settings)
 
     assert config.review_model == "anthropic/reviewer"
     assert config.judge_model == "openai/judge"
+    assert config.coverage_scorer_model == "openai/scorer"
 
 
 def test_research_config_carries_supervisor_tool_settings() -> None:
-    settings = ResearchSettings(max_tool_calls_per_cycle=7, tool_timeout_sec=45)
+    settings = ResearchSettings(
+        max_tool_calls_per_cycle=7,
+        tool_timeout_sec=45,
+        allow_supervisor_bash=True,
+    )
 
     config = ResearchConfig.for_tier(Tier.STANDARD, settings=settings)
 
     assert config.max_tool_calls_per_cycle == 7
     assert config.tool_timeout_sec == 45
+    assert config.allow_supervisor_bash is True
 
 
 def test_research_config_carries_provider_and_fetch_settings() -> None:
@@ -108,6 +115,7 @@ def test_research_config_uses_default_supervisor_tool_settings() -> None:
 
     assert config.max_tool_calls_per_cycle == settings.max_tool_calls_per_cycle
     assert config.tool_timeout_sec == settings.tool_timeout_sec
+    assert config.allow_supervisor_bash is False
 
 
 def test_invalid_settings_values_raise_validation_error() -> None:

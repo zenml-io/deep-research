@@ -86,16 +86,50 @@ class ResearchPreferences(StrictBaseModel):
 
 
 class ResearchPlan(StrictBaseModel):
-    goal: str
-    key_questions: list[str]
-    subtopics: list[str]
-    queries: list[str]
-    sections: list[str]
-    success_criteria: list[str]
-    query_groups: dict[str, list[str]] = Field(default_factory=dict)
-    allowed_source_groups: list[str] = Field(default_factory=list)
+    """Structured plan the planner produces for a research brief.
+
+    Captures the goal, guiding questions, subtopic decomposition, seed queries,
+    output sections, and success criteria that the downstream supervisor loop
+    and writer will rely on.
+    """
+
+    goal: str = Field(
+        ...,
+        description="One-sentence statement of what the research run should achieve.",
+    )
+    key_questions: list[str] = Field(
+        ...,
+        description="Specific questions the final deliverable must answer.",
+    )
+    subtopics: list[str] = Field(
+        ...,
+        description="Decomposition of the goal into focused subtopics to investigate.",
+    )
+    queries: list[str] = Field(
+        ...,
+        description="Initial search queries seeded for the supervisor to run.",
+    )
+    sections: list[str] = Field(
+        ...,
+        description="Section titles the writer should use to structure the deliverable.",
+    )
+    success_criteria: list[str] = Field(
+        ...,
+        description="Observable criteria used to judge whether the run succeeded.",
+    )
+    query_groups: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Optional grouping of queries keyed by subtopic or theme for targeted search.",
+    )
+    allowed_source_groups: list[str] = Field(
+        default_factory=list,
+        description="Optional allow-list of source groups (e.g. academic, news) the plan should stay within.",
+    )
     approval_status: Literal["not_requested", "pending", "approved", "rejected"] = (
-        "not_requested"
+        Field(
+            default="not_requested",
+            description="Human-in-the-loop approval state for the plan before execution proceeds.",
+        )
     )
 
 
@@ -187,8 +221,20 @@ class SelectionItem(StrictBaseModel):
 
 
 class SelectionGraph(StrictBaseModel):
-    items: list[SelectionItem] = Field(default_factory=list)
-    gap_coverage_summary: list[str] = Field(default_factory=list)
+    """Curator's ordered shortlist of evidence chosen for the final deliverable.
+
+    Explains which candidates survived curation, how they connect, and which
+    subtopic gaps the selection still leaves open.
+    """
+
+    items: list[SelectionItem] = Field(
+        default_factory=list,
+        description="Ordered list of curated selection items with rationales and bridge notes.",
+    )
+    gap_coverage_summary: list[str] = Field(
+        default_factory=list,
+        description="Human-readable notes describing subtopics that remain under-covered after curation.",
+    )
 
 
 class IterationRecord(StrictBaseModel):
@@ -236,10 +282,28 @@ class CritiqueDimensionScore(StrictBaseModel):
 
 
 class CritiqueResult(StrictBaseModel):
-    dimensions: list[CritiqueDimensionScore] = Field(default_factory=list)
-    summary: str
-    revision_suggestions: list[str] = Field(default_factory=list)
-    revision_recommended: bool = False
+    """Reviewer agent's critique of a draft deliverable.
+
+    Scores the draft across multiple rubric dimensions and produces
+    actionable revision suggestions for the writer.
+    """
+
+    dimensions: list[CritiqueDimensionScore] = Field(
+        default_factory=list,
+        description="Per-dimension rubric scores with short rationales from the reviewer.",
+    )
+    summary: str = Field(
+        ...,
+        description="Overall qualitative summary of the draft's strengths and weaknesses.",
+    )
+    revision_suggestions: list[str] = Field(
+        default_factory=list,
+        description="Concrete, actionable revision instructions the writer should apply.",
+    )
+    revision_recommended: bool = Field(
+        default=False,
+        description="True when the reviewer believes another writer pass is warranted.",
+    )
 
 
 class CritiqueCheckpointResult(StrictBaseModel):
@@ -255,8 +319,20 @@ class GroundingVerdict(StrictBaseModel):
 
 
 class GroundingResult(StrictBaseModel):
-    score: UnitFloat
-    verdicts: list[GroundingVerdict] = Field(default_factory=list)
+    """Judge verdict on whether claims in the draft are grounded in cited evidence.
+
+    Aggregates per-citation verdicts into a single grounding score used by
+    the control loop to decide whether to continue iterating.
+    """
+
+    score: UnitFloat = Field(
+        ...,
+        description="Overall fraction of claims judged to be supported by their citations (0.0 to 1.0).",
+    )
+    verdicts: list[GroundingVerdict] = Field(
+        default_factory=list,
+        description="Per-citation grounding verdicts with rationale and resolved candidate key.",
+    )
 
 
 class GroundingCheckpointResult(StrictBaseModel):
@@ -265,11 +341,32 @@ class GroundingCheckpointResult(StrictBaseModel):
 
 
 class CoherenceResult(StrictBaseModel):
-    relevance: UnitFloat
-    logical_flow: UnitFloat
-    completeness: UnitFloat
-    consistency: UnitFloat
-    summary: str
+    """Judge verdict on the structural quality of a draft deliverable.
+
+    Captures independent 0-1 scores across relevance, flow, completeness, and
+    consistency so the control loop can decide on further revision.
+    """
+
+    relevance: UnitFloat = Field(
+        ...,
+        description="How well the draft addresses the research brief (0.0 to 1.0).",
+    )
+    logical_flow: UnitFloat = Field(
+        ...,
+        description="Quality of argument progression and transitions between sections (0.0 to 1.0).",
+    )
+    completeness: UnitFloat = Field(
+        ...,
+        description="Extent to which the draft covers all required subtopics and questions (0.0 to 1.0).",
+    )
+    consistency: UnitFloat = Field(
+        ...,
+        description="Internal consistency of claims, terminology, and framing (0.0 to 1.0).",
+    )
+    summary: str = Field(
+        ...,
+        description="Qualitative rationale summarising the structural assessment.",
+    )
 
 
 class CoherenceCheckpointResult(StrictBaseModel):
@@ -291,9 +388,24 @@ class RenderPayload(StrictBaseModel):
 
 
 class RenderProse(StrictBaseModel):
-    content_markdown: str
-    render_label: str = ""
-    deliverable_mode: DeliverableMode = DeliverableMode.RESEARCH_PACKAGE
+    """Writer agent's prose rendering of a deliverable (pre-citation-mapping).
+
+    Used as the structured output type for the writer agent when it emits
+    a markdown draft for a specific deliverable mode.
+    """
+
+    content_markdown: str = Field(
+        ...,
+        description="Full markdown body of the rendered deliverable produced by the writer.",
+    )
+    render_label: str = Field(
+        default="",
+        description="Short label identifying this render (e.g. 'full_report', 'backing_report').",
+    )
+    deliverable_mode: DeliverableMode = Field(
+        default=DeliverableMode.RESEARCH_PACKAGE,
+        description="Which deliverable flavour this render targets.",
+    )
 
 
 class RenderCheckpointResult(StrictBaseModel):
@@ -346,6 +458,32 @@ class RunSummary(StrictBaseModel):
         return self
 
 
+class RunMetadataStamp(StrictBaseModel):
+    """Immutable run identity and wall-clock start captured at flow kickoff.
+
+    Produced inside a checkpoint so replay returns the same ``run_id`` and
+    ``started_at`` the original run observed, keeping non-determinism behind
+    the checkpoint replay boundary.
+    """
+
+    run_id: str = Field(
+        ...,
+        description="Stable identifier for this run, shared across all RunSummary snapshots.",
+    )
+    started_at: str = Field(
+        ...,
+        description="ISO-8601 UTC timestamp (Z-suffixed) marking when the flow kicked off.",
+    )
+
+    @field_validator("started_at")
+    @classmethod
+    def validate_started_at(cls, value: str) -> str:
+        validated = validate_iso8601_timestamp(value)
+        if validated is None:
+            raise ValueError("started_at must be a parseable ISO-8601 string")
+        return validated
+
+
 class InvestigationPackage(StrictBaseModel):
     run_summary: RunSummary
     research_plan: ResearchPlan
@@ -362,11 +500,26 @@ class InvestigationPackage(StrictBaseModel):
 
 
 class CoverageScore(StrictBaseModel):
-    subtopic_coverage: UnitFloat
-    source_diversity: UnitFloat
-    evidence_density: UnitFloat
-    total: UnitFloat
-    uncovered_subtopics: list[str] = Field(default_factory=list)
+    subtopic_coverage: UnitFloat = Field(
+        ...,
+        description="Fraction of plan subtopics judged to be covered by the gathered evidence (0.0 to 1.0).",
+    )
+    source_diversity: UnitFloat = Field(
+        ...,
+        description="Diversity of information sources used, normalized to 0.0-1.0.",
+    )
+    evidence_density: UnitFloat = Field(
+        ...,
+        description="Density of evidence relative to the number of key questions, normalized to 0.0-1.0.",
+    )
+    total: UnitFloat = Field(
+        ...,
+        description="Weighted average of subtopic_coverage, source_diversity, and evidence_density.",
+    )
+    uncovered_subtopics: list[str] = Field(
+        default_factory=list,
+        description="Subtopics from the plan that the scorer judged to be insufficiently covered.",
+    )
 
 
 class ToolCallRecord(StrictBaseModel):
@@ -428,8 +581,27 @@ class SearchExecutionResult(StrictBaseModel):
 
 
 class SupervisorDecision(StrictBaseModel):
-    rationale: str
-    search_actions: list[SearchAction] = Field(default_factory=list)
+    """Supervisor agent's decision for the next iteration of the research loop.
+
+    Contains the reasoning, the concrete search actions to execute this turn,
+    and a status flag signalling whether enough evidence has been gathered.
+    """
+
+    rationale: str = Field(
+        ...,
+        description="Brief explanation of why these search actions were chosen and what gap they target.",
+    )
+    search_actions: list[SearchAction] = Field(
+        default_factory=list,
+        description="Search actions (query + preferences) the supervisor wants executed this turn.",
+    )
+    status: Literal["continue", "complete"] = Field(
+        default="continue",
+        description=(
+            "'complete' if the supervisor believes enough evidence has been gathered "
+            "to answer the brief; 'continue' otherwise."
+        ),
+    )
 
 
 class SupervisorCheckpointResult(StrictBaseModel):
@@ -441,7 +613,19 @@ class SupervisorCheckpointResult(StrictBaseModel):
 
 
 class RelevanceScorerOutput(StrictBaseModel):
-    candidates: list[EvidenceCandidate]
+    """Structured output from the relevance scorer agent.
+
+    Wraps the scored candidates so the LLM can return the updated list in
+    a single, schema-validated payload.
+    """
+
+    candidates: list[EvidenceCandidate] = Field(
+        ...,
+        description=(
+            "Full list of candidates with updated relevance_score and matched_subtopics "
+            "fields reflecting the scorer's judgement."
+        ),
+    )
 
 
 class RelevanceCheckpointResult(StrictBaseModel):
@@ -450,12 +634,36 @@ class RelevanceCheckpointResult(StrictBaseModel):
 
 
 class RequestClassification(StrictBaseModel):
-    audience_mode: str
-    freshness_mode: str
-    recommended_tier: Tier
-    needs_clarification: bool = False
-    clarification_question: str | None = None
-    preferences: ResearchPreferences = Field(default_factory=ResearchPreferences)
+    """Classifier agent's interpretation of an incoming research brief.
+
+    Captures audience/freshness framing, a recommended run tier, optional
+    clarification state, and extracted user preferences used downstream.
+    """
+
+    audience_mode: str = Field(
+        ...,
+        description="Inferred target audience style (e.g. 'technical', 'executive', 'general').",
+    )
+    freshness_mode: str = Field(
+        ...,
+        description="Inferred recency requirement (e.g. 'evergreen', 'recent', 'breaking').",
+    )
+    recommended_tier: Tier = Field(
+        ...,
+        description="Suggested effort tier for this brief (quick, standard, deep, custom).",
+    )
+    needs_clarification: bool = Field(
+        default=False,
+        description="True when the brief is too ambiguous to run without a follow-up question.",
+    )
+    clarification_question: str | None = Field(
+        default=None,
+        description="Follow-up question to surface to the user; required when needs_clarification is True.",
+    )
+    preferences: ResearchPreferences = Field(
+        default_factory=ResearchPreferences,
+        description="Structured user preferences extracted from the brief (source groups, freshness, biases).",
+    )
 
     @model_validator(mode="after")
     def validate_clarification_state(self) -> "RequestClassification":

@@ -588,7 +588,7 @@ def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
     monkeypatch.setattr(
         module,
         "build_supervisor_surface",
-        lambda plan, ledger, *, uncovered_subtopics, tool_timeout_sec, mcp_servers=None: (
+        lambda plan, ledger, *, uncovered_subtopics, tool_timeout_sec, allow_bash_tool=False, mcp_servers=None: (
             [sentinel_toolset],
             sentinel_tools,
         ),
@@ -1115,8 +1115,48 @@ def test_update_ledger_does_not_duplicate_historical_dedupe_events_on_replay(
     ] == [("candidate-0", "candidate-1", "canonical_url")]
 
 
-def test_score_coverage_computes_serializable_score(monkeypatch) -> None:
+def _install_coverage_scorer_stub(monkeypatch, canned_output):
+    """Stub the coverage scorer agent factory so the evaluate checkpoint uses a fake LLM."""
+    calls = []
+
+    def build_coverage_scorer_agent(model_name):
+        calls.append(model_name)
+
+        def run_sync(prompt):
+            return types.SimpleNamespace(output=canned_output)
+
+        return types.SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.coverage_scorer",
+        types.SimpleNamespace(build_coverage_scorer_agent=build_coverage_scorer_agent),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.observability",
+        types.SimpleNamespace(
+            bootstrap_logfire=lambda: None,
+            span=lambda *args, **kwargs: __import__("contextlib").nullcontext(),
+        ),
+    )
+    return calls
+
+
+def _sample_config() -> ResearchConfig:
+    return ResearchConfig.for_tier(Tier.STANDARD)
+
+
+def test_score_coverage_delegates_to_llm_agent(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
+    canned = CoverageScore(
+        subtopic_coverage=0.8,
+        source_diversity=0.7,
+        evidence_density=0.6,
+        total=0.7,
+        uncovered_subtopics=["impact"],
+    )
+    scorer_calls = _install_coverage_scorer_stub(monkeypatch, canned)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
     ledger = EvidenceLedger(
@@ -1129,62 +1169,39 @@ def test_score_coverage_computes_serializable_score(monkeypatch) -> None:
                 provider="brave",
                 source_kind="web",
             ),
-            EvidenceCandidate(
-                key="2",
-                title="Impact",
-                url="https://impact.example",
-                snippets=[EvidenceSnippet(text="Impact details and consequences")],
-                provider="docs",
-                source_kind="docs",
-            ),
         ]
     )
 
-    coverage = module.score_coverage(ledger, _sample_plan())
+    config = _sample_config()
+    coverage = module.score_coverage(ledger, _sample_plan(), config)
 
     assert isinstance(coverage, CoverageScore)
-    assert 0.0 <= coverage.total <= 1.0
-    assert coverage.subtopic_coverage == 1.0
-    assert module.score_coverage._checkpoint_type == "tool_call"
+    assert coverage.total == 0.7
+    assert coverage.uncovered_subtopics == ["impact"]
+    assert scorer_calls == [config.coverage_scorer_model]
+    assert module.score_coverage._checkpoint_type == "llm_call"
 
 
-def test_score_coverage_ignores_rejected_only_evidence(monkeypatch) -> None:
+def test_score_coverage_returns_zeros_for_empty_ledger(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
+    # Agent should NOT be called for empty entries, so provide a dummy
+    _install_coverage_scorer_stub(monkeypatch, None)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
-    selected_candidate = EvidenceCandidate(
-        key="selected-1",
-        title="Status",
-        url="https://status.example",
-        snippets=[EvidenceSnippet(text="Current status and context")],
-        provider="brave",
-        source_kind="web",
-        quality_score=0.8,
-        selected=True,
-    )
-    rejected_candidate = EvidenceCandidate(
-        key="rejected-1",
-        title="Impact",
-        url="https://impact.example",
-        snippets=[EvidenceSnippet(text="Impact details and consequences")],
-        provider="docs",
-        source_kind="docs",
-        quality_score=0.1,
-        selected=False,
-    )
-    ledger = EvidenceLedger(
-        considered=[selected_candidate, rejected_candidate],
-        selected=[selected_candidate],
-        rejected=[rejected_candidate],
+    coverage = module.score_coverage(
+        EvidenceLedger(entries=[]), _sample_plan(), _sample_config()
     )
 
-    coverage = module.score_coverage(ledger, _sample_plan())
+    assert coverage.subtopic_coverage == 0.0
+    assert coverage.source_diversity == 0.0
+    assert coverage.evidence_density == 0.0
+    assert coverage.total == 0.0
+    assert coverage.uncovered_subtopics == ["status", "impact"]
 
-    assert coverage.subtopic_coverage == 0.5
 
-
-def test_score_coverage_ignores_all_rejected_evidence(monkeypatch) -> None:
+def test_score_coverage_empty_ledger_with_rejected_only(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
+    _install_coverage_scorer_stub(monkeypatch, None)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
     rejected_candidate = EvidenceCandidate(
@@ -1203,225 +1220,42 @@ def test_score_coverage_ignores_all_rejected_evidence(monkeypatch) -> None:
         rejected=[rejected_candidate],
     )
 
-    coverage = module.score_coverage(ledger, _sample_plan())
+    coverage = module.score_coverage(ledger, _sample_plan(), _sample_config())
 
     assert coverage.subtopic_coverage == 0.0
+    assert coverage.total == 0.0
 
 
-def test_score_coverage_uses_selected_flags_for_legacy_entries_only_ledger(
-    monkeypatch,
-) -> None:
+def test_score_coverage_passes_config_model_to_agent_factory(monkeypatch) -> None:
     _install_kitaru_checkpoint_stub(monkeypatch)
+    canned = CoverageScore(
+        subtopic_coverage=1.0,
+        source_diversity=1.0,
+        evidence_density=1.0,
+        total=1.0,
+    )
+    scorer_calls = _install_coverage_scorer_stub(monkeypatch, canned)
     module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
 
     ledger = EvidenceLedger(
         entries=[
             EvidenceCandidate(
-                key="selected-1",
+                key="1",
                 title="Status",
                 url="https://status.example",
-                snippets=[EvidenceSnippet(text="Current status and context")],
+                snippets=[EvidenceSnippet(text="info")],
                 provider="brave",
                 source_kind="web",
-                selected=True,
-            ),
-            EvidenceCandidate(
-                key="rejected-1",
-                title="Impact",
-                url="https://impact.example",
-                snippets=[EvidenceSnippet(text="Impact details and consequences")],
-                provider="docs",
-                source_kind="docs",
-                selected=False,
             ),
         ]
     )
 
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 0.5
-
-
-def test_score_coverage_counts_matched_subtopics_without_text_match(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    selected_candidate = EvidenceCandidate(
-        key="selected-1",
-        title="Operational guide",
-        url="https://ops.example",
-        snippets=[EvidenceSnippet(text="Playbook and runbook")],
-        provider="docs",
-        source_kind="docs",
-        matched_subtopics=["impact"],
-        quality_score=0.8,
-        selected=True,
+    config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
+        update={"coverage_scorer_model": "test-model-override"}
     )
-    ledger = EvidenceLedger(
-        considered=[selected_candidate],
-        selected=[selected_candidate],
-        rejected=[],
-    )
+    module.score_coverage(ledger, _sample_plan(), config)
 
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 0.5
-
-
-def test_score_coverage_reports_uncovered_subtopics_and_preserves_checkpoint_metadata(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    selected_candidate = EvidenceCandidate(
-        key="selected-1",
-        title="Status",
-        url="https://status.example",
-        snippets=[EvidenceSnippet(text="Current status and context")],
-        provider="brave",
-        source_kind="web",
-        quality_score=0.8,
-        selected=True,
-    )
-    ledger = EvidenceLedger(
-        considered=[selected_candidate],
-        selected=[selected_candidate],
-        rejected=[],
-    )
-
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 0.5
-    assert coverage.uncovered_subtopics == ["impact"]
-    assert module.score_coverage._checkpoint_type == "tool_call"
-
-
-def test_score_coverage_reports_all_subtopics_as_uncovered_without_entries(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    coverage = module.score_coverage(EvidenceLedger(entries=[]), _sample_plan())
-
-    assert coverage.uncovered_subtopics == ["status", "impact"]
-
-
-def test_score_coverage_combines_selected_and_legacy_considered_entries(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    legacy_candidate = EvidenceCandidate(
-        key="legacy-1",
-        title="Impact briefing",
-        url="https://impact.example",
-        provider="docs",
-        source_kind="docs",
-        matched_subtopics=["impact"],
-    )
-    selected_candidate = EvidenceCandidate(
-        key="selected-1",
-        title="Status update",
-        url="https://status.example",
-        provider="brave",
-        source_kind="web",
-        matched_subtopics=["status"],
-        quality_score=0.8,
-        selected=True,
-    )
-    ledger = EvidenceLedger(
-        considered=[legacy_candidate, selected_candidate],
-        selected=[selected_candidate],
-        rejected=[],
-    )
-
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 1.0
-    assert coverage.uncovered_subtopics == []
-
-
-def test_score_coverage_combines_selected_and_legacy_entries_only_ledger(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    legacy_candidate = EvidenceCandidate(
-        key="legacy-1",
-        title="Impact briefing",
-        url="https://impact.example",
-        provider="docs",
-        source_kind="docs",
-        matched_subtopics=["impact"],
-    )
-    selected_candidate = EvidenceCandidate(
-        key="selected-1",
-        title="Status update",
-        url="https://status.example",
-        provider="brave",
-        source_kind="web",
-        matched_subtopics=["status"],
-        selected=True,
-    )
-    ledger = EvidenceLedger(entries=[legacy_candidate, selected_candidate])
-
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 1.0
-    assert coverage.uncovered_subtopics == []
-
-
-def test_score_coverage_uses_legacy_considered_entries_when_selected_and_rejected_are_empty(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    legacy_candidate = EvidenceCandidate(
-        key="legacy-1",
-        title="Impact briefing",
-        url="https://impact.example",
-        provider="docs",
-        source_kind="docs",
-        matched_subtopics=["impact"],
-    )
-    ledger = EvidenceLedger(considered=[legacy_candidate], selected=[], rejected=[])
-
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 0.5
-    assert coverage.uncovered_subtopics == ["status"]
-
-
-def test_score_coverage_ignores_all_rejected_legacy_entries_only_ledger(
-    monkeypatch,
-) -> None:
-    _install_kitaru_checkpoint_stub(monkeypatch)
-    module = _import_checkpoint_module("deep_research.checkpoints.evaluate")
-
-    ledger = EvidenceLedger(
-        entries=[
-            EvidenceCandidate(
-                key="rejected-1",
-                title="Status",
-                url="https://status.example",
-                snippets=[EvidenceSnippet(text="Current status and context")],
-                provider="brave",
-                source_kind="web",
-                selected=False,
-            )
-        ]
-    )
-
-    coverage = module.score_coverage(ledger, _sample_plan())
-
-    assert coverage.subtopic_coverage == 0.0
+    assert scorer_calls == ["test-model-override"]
 
 
 def test_rank_evidence_returns_selected_entries(monkeypatch) -> None:

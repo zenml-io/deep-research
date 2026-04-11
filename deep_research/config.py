@@ -1,10 +1,12 @@
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from deep_research.enums import Tier
 
 
 class ModelPricing(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     input_per_million_usd: float = Field(default=0.0, ge=0.0)
     output_per_million_usd: float = Field(default=0.0, ge=0.0)
 
@@ -30,6 +32,7 @@ class ResearchSettings(BaseSettings):
     convergence_min_coverage: float = Field(default=0.60, ge=0.0, le=1.0)
     max_tool_calls_per_cycle: int = Field(default=5, gt=0)
     tool_timeout_sec: int = Field(default=20, gt=0)
+    allow_supervisor_bash: bool = False
     source_quality_floor: float = Field(default=0.30, ge=0.0, le=1.0)
     council_size: int = Field(default=3, gt=0)
     council_cost_budget_usd: float = Field(default=2.0, ge=0.0)
@@ -42,6 +45,7 @@ class ResearchSettings(BaseSettings):
     aggregator_model: str = "openai:gpt-4o-mini"
     review_model: str = "anthropic:claude-sonnet-4-20250514"
     judge_model: str = "openai:gpt-4o-mini"
+    coverage_scorer_model: str = "openai:gpt-4o-mini"
     brave_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("RESEARCH_BRAVE_API_KEY", "BRAVE_API_KEY"),
@@ -79,6 +83,8 @@ class ResearchSettings(BaseSettings):
 
 
 class ResearchConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     tier: Tier
     max_iterations: int
     cost_budget_usd: float
@@ -93,6 +99,7 @@ class ResearchConfig(BaseModel):
     source_quality_floor: float = 0.30
     max_tool_calls_per_cycle: int
     tool_timeout_sec: int
+    allow_supervisor_bash: bool = False
     classifier_model: str
     planner_model: str
     supervisor_model: str
@@ -102,6 +109,7 @@ class ResearchConfig(BaseModel):
     aggregator_model: str
     review_model: str
     judge_model: str
+    coverage_scorer_model: str
     supervisor_pricing: ModelPricing = Field(default_factory=ModelPricing)
     relevance_scorer_pricing: ModelPricing = Field(default_factory=ModelPricing)
     writer_pricing: ModelPricing = Field(default_factory=ModelPricing)
@@ -163,6 +171,7 @@ class ResearchConfig(BaseModel):
             source_quality_floor=settings.source_quality_floor,
             max_tool_calls_per_cycle=settings.max_tool_calls_per_cycle,
             tool_timeout_sec=settings.tool_timeout_sec,
+            allow_supervisor_bash=settings.allow_supervisor_bash,
             classifier_model=settings.classifier_model,
             planner_model=settings.planner_model,
             supervisor_model=settings.supervisor_model,
@@ -172,6 +181,7 @@ class ResearchConfig(BaseModel):
             aggregator_model=settings.aggregator_model,
             review_model=settings.review_model,
             judge_model=settings.judge_model,
+            coverage_scorer_model=settings.coverage_scorer_model,
             supervisor_pricing=ModelPricing(),
             relevance_scorer_pricing=ModelPricing(),
             writer_pricing=ModelPricing(),
