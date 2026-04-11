@@ -101,30 +101,49 @@ PydanticAI is the structured completion layer — it calls models and returns ty
 
 ## The Research Loop
 
-![Deep Research Engine Flow](flow.png)
-[Excalidraw URL](https://excalidraw.com/#json=vubTTSYSPtaap6xqmCMQu,14v_EHEIEMOk2RybWmGq7A)
+```mermaid
+flowchart TD
+    A[classify_request] --> B[build_plan]
+    B --> C{wait: approve plan?}
+    C -->|approved| D[run_supervisor / council]
 
+    subgraph iteration["Iteration Loop"]
+        D --> E[execute_searches]
+        E --> F[extract_candidates]
+        F --> G[score_relevance]
+        G --> H[update_ledger]
+        H --> I[enrich_candidates]
+        I --> J["score_coverage (LLM)"]
+        J --> K{converged?}
+        K -->|"stall / diminishing"| L{replan gate}
+        L -->|replan| D
+        L -->|no replan| M[stop]
+        K -->|"supervisor complete"| M
+        K -->|budget / time / max iter| M
+        K -->|no| D
+    end
+
+    M --> N[rank_evidence]
+    N --> O{deliverable_mode?}
+    O -->|"research_package"| P["write_reading_path ∥ write_backing_report"]
+    O -->|"other modes"| Q[write_full_report]
+    P --> R[critique_reports]
+    Q --> R
+    R --> S["apply_revisions (writer agent)"]
+    S --> T["verify_grounding ∥ verify_coherence"]
+    T --> U[assemble_package]
+    U --> V[InvestigationPackage]
 ```
-classify_request (+ preferences) -> build_plan -> run_supervisor / council
--> execute_searches -> extract_candidates -> score_relevance -> update_ledger
--> enrich_candidates -> score_coverage -> [converged?] -> loop or continue
 
-After convergence:
-
-rank_evidence -> [deliverable_mode?]
-  research_package: write_reading_path || write_backing_report
-  other modes:      write_full_report
--> critique_reports -> apply_revisions -> verify_grounding || verify_coherence
--> assemble_package -> InvestigationPackage
-```
+> [Excalidraw version](https://excalidraw.com/#json=vubTTSYSPtaap6xqmCMQu,14v_EHEIEMOk2RybWmGq7A) (may lag behind the Mermaid diagram above)
 
 ### How It Works
 
 1. **Classify** — Determine audience, freshness, complexity. Extract structured preferences (deliverable mode, source biases, comparison targets). Select a research tier.
 2. **Plan** — Break the brief into subtopics, queries, sections, and success criteria. Preferences shape the plan structure.
-3. **Iterate** — The supervisor (or council of N parallel supervisors) decides what to search. Built-in providers execute. Results are extracted, scored for relevance, merged into the evidence ledger, enriched with full page text, and coverage is scored. The loop continues until convergence or budget exhaustion.
+3. **Iterate** — The supervisor (or council of N parallel supervisors) decides what to search. Built-in providers execute. Results are extracted, scored for relevance, merged into the evidence ledger, enriched with full page text, and coverage is scored by an LLM agent against the plan's subtopics. If the loop stalls, a replan gate can revise subtopics and queries before giving up. The loop continues until convergence or budget exhaustion.
 4. **Render** — Rank evidence into reading order. Based on deliverable mode, write either a reading path + backing report (research package) or a single full report (other modes). Writer prompts adapt per mode.
-5. **Critique** — A different model provider reviews the output. Citations are verified against evidence. Coherence is scored against the plan. Revisions are applied.
+5. **Critique** — A different model provider reviews the output. The writer agent then regenerates prose for each render using critique feedback. Citations are verified against evidence. Coherence is scored against the plan.
 6. **Assemble** — Everything goes into a canonical `InvestigationPackage` with full provenance.
 
 ### Stop Rules
@@ -134,8 +153,9 @@ rank_evidence -> [deliverable_mode?]
 | Budget exhausted | `estimated_cost >= cost_budget_usd` |
 | Time exhausted | `elapsed_seconds >= time_box_seconds` |
 | Converged | `coverage >= min_coverage` AND no remaining gaps |
-| Loop stall | Zero coverage gain in an iteration |
-| Diminishing returns | Low gain + over 50% resource usage |
+| Supervisor complete | Supervisor signals `status: "complete"` directly |
+| Loop stall | Zero coverage gain in an iteration (triggers replan gate first) |
+| Diminishing returns | Low gain + over 50% resource usage (triggers replan gate first) |
 | Max iterations | Hard cap reached |
 
 ### Research Preferences
@@ -183,7 +203,9 @@ All LLM calls route through PydanticAI. Model strings use `provider/model-name` 
 | `planner_model` | `gemini/gemini-2.5-flash` | Plan generation |
 | `supervisor_model` | `gemini/gemini-2.5-flash` | Research cycle supervisor |
 | `relevance_scorer_model` | `gemini/gemini-2.5-flash` | Evidence relevance scoring |
-| `writer_model` | `gemini/gemini-2.5-flash` | Report composition |
+| `coverage_scorer_model` | `gemini/gemini-2.5-flash` | LLM-based coverage scoring |
+| `replanner_model` | `gemini/gemini-2.5-flash` | Replan gate (subtopic/query revision) |
+| `writer_model` | `gemini/gemini-2.5-flash` | Report composition + revision |
 | `review_model` | `anthropic/claude-sonnet-4-20250514` | Cross-provider critique |
 | `judge_model` | `openai/gpt-4o-mini` | Grounding + coherence verification |
 
@@ -217,7 +239,7 @@ At least one LLM provider key must be configured. Built-in search providers (arX
 
 ## Observability
 
-Logfire bootstrap is enabled automatically at runtime when the `logfire` SDK is installed. The engine configures Logfire with `include_content=True` for PydanticAI spans and extra scrubbing patterns for common credential fields, then falls back cleanly if Logfire is unavailable.
+Logfire bootstrap is enabled automatically at runtime when the `logfire` SDK is installed. Every checkpoint emits a named span (e.g. `run_supervisor`, `score_coverage`, `revise_render`), and the iteration loop records `iteration_coverage`, `iteration_cost_usd`, and `iteration_candidates` as metrics at each cycle. PydanticAI spans include `content=True` for full prompt/completion visibility. The engine also instruments `httpx` and MCP transports when the Logfire SDK is present, and falls back cleanly when it isn't.
 
 To send traces to Logfire locally, authenticate and select a project:
 
@@ -234,7 +256,7 @@ Note: per the official Logfire docs, scrubbing does **not** redact PydanticAI me
 uv run pytest tests/ -v
 ```
 
-265 tests covering models, evidence pipeline, convergence logic, checkpoints, renderers, agent factories, flow orchestration, and real agent behavior with PydanticAI's `TestModel`.
+264 tests covering models, evidence pipeline, convergence logic, checkpoints, renderers, agent factories, flow orchestration, and real agent behavior with PydanticAI's `TestModel`.
 
 ## Offline Eval Harness (Foundation)
 
@@ -321,9 +343,11 @@ deep_research/
 │   ├── classifier.py        #   Request classification + preference extraction
 │   ├── planner.py           #   Research plan generation
 │   ├── relevance_scorer.py  #   Evidence relevance scoring
+│   ├── coverage_scorer.py   #   LLM-based coverage scoring
+│   ├── replanner.py         #   Replan gate (subtopic/query revision on stall)
 │   ├── reviewer.py          #   Cross-provider critique
 │   ├── judge.py             #   Grounding + coherence verification
-│   ├── writer.py            #   Report composition
+│   ├── writer.py            #   Report composition + revision
 │   └── curator.py           #   Evidence curation
 ├── checkpoints/             # Kitaru checkpoint functions
 │   ├── classify.py          #   classify_request
@@ -335,13 +359,15 @@ deep_research/
 │   ├── relevance.py         #   score_relevance
 │   ├── merge.py             #   update_ledger
 │   ├── fetch.py             #   enrich_candidates
-│   ├── evaluate.py          #   score_coverage
+│   ├── evaluate.py          #   score_coverage (LLM-scored)
+│   ├── replan.py            #   evaluate_replan — stall recovery gate
 │   ├── select.py            #   rank_evidence
 │   ├── rendering.py         #   write_reading_path / write_backing_report / write_full_report
 │   ├── review.py            #   critique_reports
-│   ├── revise.py            #   apply_revisions
+│   ├── revise.py            #   apply_revisions (writer agent regeneration)
 │   ├── grounding.py         #   verify_grounding
 │   ├── coherence.py         #   verify_coherence
+│   ├── metadata.py          #   stamp_run_metadata / finalize_run_metadata
 │   └── assemble.py          #   assemble_package
 ├── evidence/                # Evidence processing (no LLM calls)
 │   ├── dedup.py             #   DOI > arXiv > URL > title precedence
@@ -350,12 +376,15 @@ deep_research/
 │   ├── url.py               #   URL canonicalization
 │   └── resolution.py        #   Selected/coverage entry resolution
 ├── flow/
-│   ├── research_flow.py     #   @flow — top-level orchestration
+│   ├── research_flow.py     #   @flow — top-level orchestration (~116 lines)
+│   ├── _pipeline.py         #   Iteration loop, rendering, critique, assembly helpers
 │   ├── convergence.py       #   Stop decision logic
 │   └── costing.py           #   Token → USD estimation
 ├── models.py                # All Pydantic models (strict, immutable)
 ├── config.py                # ResearchConfig, tier defaults, env settings
 ├── enums.py                 # StopReason, Tier, SourceKind, DeliverableMode, PlanningMode
+├── observability.py         # Logfire bootstrap, span(), metric() helpers
+├── agent_io.py              # Tool-result collection (Hooks-based) + serialization
 ├── providers/
 │   ├── __init__.py          #   build_supervisor_surface + ProviderRegistry
 │   ├── mcp_config.py        #   MCPServerConfig + toolset factory
@@ -382,6 +411,8 @@ deep_research/
     ├── supervisor.md
     ├── planner.md
     ├── classifier.md
+    ├── coverage_scorer.md
+    ├── replanner.md
     └── ...
 ```
 
