@@ -50,7 +50,7 @@ from deep_research.models import (
     RawToolResult,
     ToolCallRecord,
 )
-from deep_research.observability import bootstrap_logfire
+from deep_research.observability import bootstrap_logfire, span
 
 
 CLASSIFY_CHECKPOINT_NAME = "classify_request"
@@ -76,40 +76,41 @@ def research_flow(
 ) -> InvestigationPackage:
     """Orchestrate the full research pipeline from brief to investigation package."""
     bootstrap_logfire()
-    stamp = stamp_run_metadata.submit().load()
-    run_state = _pipeline.resolve_config_and_classify(brief, tier, config)
-    plan = build_plan.submit(
-        run_state.brief, run_state.classification, run_state.config.tier
-    ).load()
-    _pipeline.await_plan_approval_if_required(plan, run_state.config)
-    iteration_output = _pipeline.run_iteration_loop(plan, run_state, stamp)
-    selection = rank_evidence.submit(
-        iteration_output.ledger, plan, run_state.config
-    ).load()
-    renders, render_cost, degradations = _pipeline.render_deliverable(
-        selection, iteration_output, plan, run_state, stamp
-    )
-    spent_usd = iteration_output.spent_usd + render_cost
-    critique_bundle = _pipeline.run_critique_if_enabled(
-        renders, plan, selection, iteration_output.ledger, run_state.config
-    )
-    spent_usd = spent_usd + critique_bundle.spent_usd
-    judge_bundle = _pipeline.run_judges_if_enabled(
-        critique_bundle.renders, plan, iteration_output.ledger, run_state.config
-    )
-    spent_usd = spent_usd + judge_bundle.spent_usd
-    finalization = finalize_run_metadata.submit(stamp.started_at).load()
-    return _pipeline.assemble_final_package(
-        stamp=stamp,
-        finalization=finalization,
-        run_state=run_state,
-        plan=plan,
-        iteration_output=iteration_output,
-        selection=selection,
-        renders=critique_bundle.renders,
-        spent_usd=spent_usd,
-        critique_result=critique_bundle.critique_result,
-        grounding_result=judge_bundle.grounding_result,
-        coherence_result=judge_bundle.coherence_result,
-        degradations=degradations,
-    )
+    with span("research_flow", brief_length=len(brief), tier=tier):
+        stamp = stamp_run_metadata.submit().load()
+        run_state = _pipeline.resolve_config_and_classify(brief, tier, config)
+        plan = build_plan.submit(
+            run_state.brief, run_state.classification, run_state.config.tier
+        ).load()
+        _pipeline.await_plan_approval_if_required(plan, run_state.config)
+        iteration_output = _pipeline.run_iteration_loop(plan, run_state, stamp)
+        selection = rank_evidence.submit(
+            iteration_output.ledger, plan, run_state.config
+        ).load()
+        renders, render_cost, degradations = _pipeline.render_deliverable(
+            selection, iteration_output, plan, run_state, stamp
+        )
+        spent_usd = iteration_output.spent_usd + render_cost
+        critique_bundle = _pipeline.run_critique_if_enabled(
+            renders, plan, selection, iteration_output.ledger, run_state.config
+        )
+        spent_usd = spent_usd + critique_bundle.spent_usd
+        judge_bundle = _pipeline.run_judges_if_enabled(
+            critique_bundle.renders, plan, iteration_output.ledger, run_state.config
+        )
+        spent_usd = spent_usd + judge_bundle.spent_usd
+        finalization = finalize_run_metadata.submit(stamp.started_at).load()
+        return _pipeline.assemble_final_package(
+            stamp=stamp,
+            finalization=finalization,
+            run_state=run_state,
+            plan=plan,
+            iteration_output=iteration_output,
+            selection=selection,
+            renders=critique_bundle.renders,
+            spent_usd=spent_usd,
+            critique_result=critique_bundle.critique_result,
+            grounding_result=judge_bundle.grounding_result,
+            coherence_result=judge_bundle.coherence_result,
+            degradations=degradations,
+        )

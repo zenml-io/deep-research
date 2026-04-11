@@ -15,6 +15,7 @@ from deep_research.models import (
     SupervisorDecision,
     SupervisorCheckpointResult,
 )
+from deep_research.observability import span
 
 
 @checkpoint(type="llm_call")
@@ -29,16 +30,17 @@ def run_council_generator(
     preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
     """Checkpoint: run one council member's supervisor turn for parallel evidence gathering."""
-    override_config = config.model_copy(update={"supervisor_model": model_name})
-    return execute_supervisor_turn(
-        plan,
-        ledger,
-        iteration,
-        override_config,
-        uncovered_subtopics,
-        brief=brief,
-        preferences=preferences,
-    )
+    with span("council_generator", model=model_name, iteration=iteration):
+        override_config = config.model_copy(update={"supervisor_model": model_name})
+        return execute_supervisor_turn(
+            plan,
+            ledger,
+            iteration,
+            override_config,
+            uncovered_subtopics,
+            brief=brief,
+            preferences=preferences,
+        )
 
 
 @checkpoint(type="tool_call")

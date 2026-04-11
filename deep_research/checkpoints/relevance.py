@@ -10,6 +10,7 @@ from deep_research.models import (
     RelevanceCheckpointResult,
     ResearchPlan,
 )
+from deep_research.observability import span
 
 
 @checkpoint(type="llm_call")
@@ -19,16 +20,19 @@ def score_relevance(
     config: ResearchConfig,
 ) -> RelevanceCheckpointResult:
     """Checkpoint: score each candidate's relevance to the research plan via LLM."""
-    agent = build_relevance_scorer_agent(config.relevance_scorer_model)
-    prompt = {
-        "plan": plan.model_dump(mode="json"),
-        "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-    }
-    result = agent.run_sync(json.dumps(prompt, indent=2))
-    return RelevanceCheckpointResult(
-        candidates=result.output.candidates,
-        budget=budget_from_agent_result(
-            result,
-            ModelPricing.model_validate(config.relevance_scorer_pricing),
-        ),
-    )
+    with span("score_relevance", candidate_count=len(candidates)):
+        agent = build_relevance_scorer_agent(config.relevance_scorer_model)
+        prompt = {
+            "plan": plan.model_dump(mode="json"),
+            "candidates": [
+                candidate.model_dump(mode="json") for candidate in candidates
+            ],
+        }
+        result = agent.run_sync(json.dumps(prompt, indent=2))
+        return RelevanceCheckpointResult(
+            candidates=result.output.candidates,
+            budget=budget_from_agent_result(
+                result,
+                ModelPricing.model_validate(config.relevance_scorer_pricing),
+            ),
+        )

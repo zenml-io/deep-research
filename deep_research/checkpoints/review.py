@@ -13,6 +13,7 @@ from deep_research.models import (
     ResearchPlan,
     SelectionGraph,
 )
+from deep_research.observability import span
 
 
 @checkpoint(type="llm_call")
@@ -24,18 +25,19 @@ def critique_reports(
     config: ResearchConfig,
 ) -> CritiqueCheckpointResult:
     """Checkpoint: critique eager renders against the current package context."""
-    agent = build_reviewer_agent(config.review_model)
-    prompt = {
-        "renders": [render.model_dump(mode="json") for render in renders],
-        "plan": plan.model_dump(mode="json"),
-        "selection": selection.model_dump(mode="json"),
-        "ledger": ledger.model_dump(mode="json"),
-    }
-    result = agent.run_sync(json.dumps(prompt, indent=2))
-    return CritiqueCheckpointResult(
-        critique=CritiqueResult.model_validate(result.output),
-        budget=budget_from_agent_result(
-            result,
-            ModelPricing.model_validate(config.review_pricing),
-        ),
-    )
+    with span("critique_reports", render_count=len(renders)):
+        agent = build_reviewer_agent(config.review_model)
+        prompt = {
+            "renders": [render.model_dump(mode="json") for render in renders],
+            "plan": plan.model_dump(mode="json"),
+            "selection": selection.model_dump(mode="json"),
+            "ledger": ledger.model_dump(mode="json"),
+        }
+        result = agent.run_sync(json.dumps(prompt, indent=2))
+        return CritiqueCheckpointResult(
+            critique=CritiqueResult.model_validate(result.output),
+            budget=budget_from_agent_result(
+                result,
+                ModelPricing.model_validate(config.review_pricing),
+            ),
+        )

@@ -14,6 +14,7 @@ from deep_research.models import (
     RunSummary,
     SelectionGraph,
 )
+from deep_research.observability import span
 
 
 @checkpoint(type="tool_call")
@@ -32,17 +33,18 @@ def assemble_package(
     preference_degradations: list[str] | None = None,
 ) -> InvestigationPackage:
     """Checkpoint: combine all research artifacts into the final investigation package."""
-    return InvestigationPackage(
-        run_summary=run_summary,
-        research_plan=research_plan,
-        evidence_ledger=evidence_ledger,
-        selection_graph=selection_graph,
-        iteration_trace=iteration_trace,
-        renders=renders,
-        render_settings=render_settings,
-        critique_result=critique_result,
-        grounding_result=grounding_result,
-        coherence_result=coherence_result,
-        preferences=preferences,
-        preference_degradations=preference_degradations or [],
-    )
+    with span("assemble_package"):
+        return InvestigationPackage(
+            run_summary=run_summary,
+            research_plan=research_plan,
+            evidence_ledger=evidence_ledger,
+            selection_graph=selection_graph,
+            iteration_trace=iteration_trace,
+            renders=renders,
+            render_settings=render_settings,
+            critique_result=critique_result,
+            grounding_result=grounding_result,
+            coherence_result=coherence_result,
+            preferences=preferences,
+            preference_degradations=preference_degradations or [],
+        )

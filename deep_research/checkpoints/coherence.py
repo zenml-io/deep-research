@@ -11,6 +11,7 @@ from deep_research.models import (
     RenderPayload,
     ResearchPlan,
 )
+from deep_research.observability import span
 
 
 @checkpoint(type="llm_call")
@@ -20,16 +21,17 @@ def verify_coherence(
     config: ResearchConfig,
 ) -> CoherenceCheckpointResult:
     """Checkpoint: judge coherence of the final eager renders against the plan."""
-    agent = build_coherence_judge_agent(config.judge_model)
-    prompt = {
-        "renders": [render.model_dump(mode="json") for render in renders],
-        "plan": plan.model_dump(mode="json"),
-    }
-    result = agent.run_sync(json.dumps(prompt, indent=2))
-    return CoherenceCheckpointResult(
-        coherence=CoherenceResult.model_validate(result.output),
-        budget=budget_from_agent_result(
-            result,
-            ModelPricing.model_validate(config.judge_pricing),
-        ),
-    )
+    with span("verify_coherence"):
+        agent = build_coherence_judge_agent(config.judge_model)
+        prompt = {
+            "renders": [render.model_dump(mode="json") for render in renders],
+            "plan": plan.model_dump(mode="json"),
+        }
+        result = agent.run_sync(json.dumps(prompt, indent=2))
+        return CoherenceCheckpointResult(
+            coherence=CoherenceResult.model_validate(result.output),
+            budget=budget_from_agent_result(
+                result,
+                ModelPricing.model_validate(config.judge_pricing),
+            ),
+        )

@@ -39,6 +39,7 @@ from deep_research.models import (
     SupervisorCheckpointResult,
     ToolCallRecord,
 )
+from deep_research.observability import metric, span
 
 
 APPROVE_PLAN_WAIT_NAME = "approve_plan"
@@ -284,155 +285,173 @@ def run_iteration_loop(
     stop_reason = StopReason.MAX_ITERATIONS
     _replans_used = 0
 
-    for iteration in range(config.max_iterations):
-        supervisor_result = _run_supervisor_turn(
-            plan, ledger, iteration, run_state, uncovered_subtopics, council_models
-        )
-        decision = supervisor_result.decision
+    with span("iteration_loop", max_iterations=config.max_iterations):
+        for iteration in range(config.max_iterations):
+            with span("iteration", iteration=iteration):
+                supervisor_result = _run_supervisor_turn(
+                    plan,
+                    ledger,
+                    iteration,
+                    run_state,
+                    uncovered_subtopics,
+                    council_models,
+                )
+                decision = supervisor_result.decision
 
-        # Supervisor can signal completion directly via status field.
-        if decision.status == "complete":
-            tool_calls = build_tool_call_records(supervisor_result.raw_results)
-            iteration_record = IterationRecord(
-                iteration=iteration,
-                new_candidate_count=0,
-                accepted_candidate_count=len(ledger.selected),
-                rejected_candidate_count=len(ledger.rejected),
-                coverage=iteration_history[-1].coverage if iteration_history else 0.0,
-                coverage_delta=0.0,
-                uncovered_subtopics=uncovered_subtopics or [],
-                estimated_cost_usd=supervisor_result.budget.estimated_cost_usd,
-                tool_calls=tool_calls,
-                stop_reason=StopReason.SUPERVISOR_COMPLETE,
-            )
-            iteration_history = (*iteration_history, iteration_record)
-            stop_reason = StopReason.SUPERVISOR_COMPLETE
-            break
-
-        if decision.search_actions:
-            search_result = flow.execute_searches.submit(
-                decision, config, preferences=run_state.preferences
-            ).load()
-        else:
-            search_result = SearchExecutionResult()
-
-        combined_raw_results = [
-            *supervisor_result.raw_results,
-            *search_result.raw_results,
-        ]
-        supervisor_cost = supervisor_result.budget.estimated_cost_usd
-        search_cost = search_result.budget.estimated_cost_usd
-        spent_usd = spent_usd + supervisor_cost + search_cost
-        provider_usage_summary = merge_provider_counts(
-            provider_usage_summary, combined_raw_results
-        )
-
-        candidates = flow.extract_candidates.submit(combined_raw_results).load()
-        relevance_result = flow.score_relevance.submit(candidates, plan, config).load()
-        relevance_cost = relevance_result.budget.estimated_cost_usd
-        iteration_cost = supervisor_cost + search_cost + relevance_cost
-        spent_usd = spent_usd + relevance_cost
-
-        ledger = flow.update_ledger.submit(
-            relevance_result.candidates, ledger, config=config
-        ).load()
-        ledger = flow.enrich_candidates.submit(ledger, config).load()
-        coverage = flow.score_coverage.submit(ledger, plan, config).load()
-        previous_coverage = iteration_history[-1].coverage if iteration_history else 0.0
-        coverage_delta = round(coverage.total - previous_coverage, 6)
-        uncovered_subtopics = list(coverage.uncovered_subtopics)
-        tool_calls = build_tool_call_records(combined_raw_results)
-        iteration_record = IterationRecord(
-            iteration=iteration,
-            new_candidate_count=len(candidates),
-            accepted_candidate_count=len(ledger.selected),
-            rejected_candidate_count=len(ledger.rejected),
-            coverage=coverage.total,
-            coverage_delta=coverage_delta,
-            uncovered_subtopics=uncovered_subtopics,
-            estimated_cost_usd=iteration_cost,
-            tool_calls=tool_calls,
-        )
-
-        # Wall-clock observation lives behind a checkpoint so replays stay
-        # deterministic; the decision itself is pure given its inputs.
-        wall_clock = flow.snapshot_wall_clock.submit(stamp.started_at).load()
-        decision_stop = flow.check_convergence(
-            coverage,
-            list(iteration_history),
-            spent_usd=spent_usd,
-            elapsed_seconds=wall_clock.elapsed_seconds,
-            max_iterations=config.max_iterations,
-            epsilon=config.convergence_epsilon,
-            min_coverage=config.convergence_min_coverage,
-            budget_limit_usd=config.cost_budget_usd,
-            time_limit_seconds=config.time_box_seconds,
-            new_candidate_count=iteration_record.new_candidate_count,
-        )
-        continue_reason = _continue_reason(
-            decision_stop.should_stop, uncovered_subtopics, coverage_delta
-        )
-        iteration_record = iteration_record.model_copy(
-            update={
-                "continue_reason": continue_reason,
-                "stop_reason": (
-                    decision_stop.reason if decision_stop.should_stop else None
-                ),
-            }
-        )
-        iteration_history = (*iteration_history, iteration_record)
-        flow.log(
-            iteration=iteration,
-            coverage=coverage.total,
-            coverage_delta=coverage_delta,
-            uncovered_subtopics=uncovered_subtopics,
-            new_candidate_count=iteration_record.new_candidate_count,
-            accepted_candidate_count=iteration_record.accepted_candidate_count,
-            rejected_candidate_count=iteration_record.rejected_candidate_count,
-            tool_summaries=[tc.summary for tc in tool_calls],
-            stop_reason=iteration_record.stop_reason,
-            continue_reason=continue_reason,
-            spent_usd=round(spent_usd, 6),
-        )
-        if decision_stop.should_stop:
-            # Check replan gate before accepting the stop
-            if (
-                config.max_replans > 0
-                and decision_stop.reason
-                in (StopReason.LOOP_STALL, StopReason.DIMINISHING_RETURNS)
-                and _replans_used < config.max_replans
-            ):
-                replan_decision = flow.evaluate_replan.submit(
-                    plan, coverage, list(iteration_history), config
-                ).load()
-                if replan_decision.should_replan:
-                    updates: dict[str, object] = {}
-                    if replan_decision.updated_subtopics:
-                        updates["subtopics"] = replan_decision.updated_subtopics
-                    if replan_decision.updated_queries:
-                        updates["queries"] = replan_decision.updated_queries
-                    if updates:
-                        plan = plan.model_copy(update=updates)
-                    uncovered_subtopics = list(coverage.uncovered_subtopics)
-                    _replans_used += 1
-                    flow.log(
-                        replan_triggered=True,
-                        replan_number=_replans_used,
-                        rationale=replan_decision.rationale,
-                        updated_subtopics=bool(replan_decision.updated_subtopics),
-                        updated_queries=bool(replan_decision.updated_queries),
+                # Supervisor can signal completion directly via status field.
+                if decision.status == "complete":
+                    tool_calls = build_tool_call_records(supervisor_result.raw_results)
+                    iteration_record = IterationRecord(
                         iteration=iteration,
+                        new_candidate_count=0,
+                        accepted_candidate_count=len(ledger.selected),
+                        rejected_candidate_count=len(ledger.rejected),
+                        coverage=iteration_history[-1].coverage
+                        if iteration_history
+                        else 0.0,
+                        coverage_delta=0.0,
+                        uncovered_subtopics=uncovered_subtopics or [],
+                        estimated_cost_usd=supervisor_result.budget.estimated_cost_usd,
+                        tool_calls=tool_calls,
+                        stop_reason=StopReason.SUPERVISOR_COMPLETE,
                     )
-                    continue
+                    iteration_history = (*iteration_history, iteration_record)
+                    stop_reason = StopReason.SUPERVISOR_COMPLETE
+                    break
+
+                if decision.search_actions:
+                    search_result = flow.execute_searches.submit(
+                        decision, config, preferences=run_state.preferences
+                    ).load()
                 else:
-                    flow.log(
-                        replan_triggered=False,
-                        rationale=replan_decision.rationale,
-                        iteration=iteration,
-                    )
-            # Fall back to MAX_ITERATIONS if the decision didn't name a reason.
-            stop_reason = decision_stop.reason or StopReason.MAX_ITERATIONS
-            break
+                    search_result = SearchExecutionResult()
+
+                combined_raw_results = [
+                    *supervisor_result.raw_results,
+                    *search_result.raw_results,
+                ]
+                supervisor_cost = supervisor_result.budget.estimated_cost_usd
+                search_cost = search_result.budget.estimated_cost_usd
+                spent_usd = spent_usd + supervisor_cost + search_cost
+                provider_usage_summary = merge_provider_counts(
+                    provider_usage_summary, combined_raw_results
+                )
+
+                candidates = flow.extract_candidates.submit(combined_raw_results).load()
+                relevance_result = flow.score_relevance.submit(
+                    candidates, plan, config
+                ).load()
+                relevance_cost = relevance_result.budget.estimated_cost_usd
+                iteration_cost = supervisor_cost + search_cost + relevance_cost
+                spent_usd = spent_usd + relevance_cost
+
+                ledger = flow.update_ledger.submit(
+                    relevance_result.candidates, ledger, config=config
+                ).load()
+                ledger = flow.enrich_candidates.submit(ledger, config).load()
+                coverage = flow.score_coverage.submit(ledger, plan, config).load()
+                previous_coverage = (
+                    iteration_history[-1].coverage if iteration_history else 0.0
+                )
+                coverage_delta = round(coverage.total - previous_coverage, 6)
+                uncovered_subtopics = list(coverage.uncovered_subtopics)
+                metric("iteration_coverage", coverage.total, iteration=iteration)
+                metric("iteration_cost_usd", iteration_cost, iteration=iteration)
+                metric("iteration_candidates", len(candidates), iteration=iteration)
+                tool_calls = build_tool_call_records(combined_raw_results)
+                iteration_record = IterationRecord(
+                    iteration=iteration,
+                    new_candidate_count=len(candidates),
+                    accepted_candidate_count=len(ledger.selected),
+                    rejected_candidate_count=len(ledger.rejected),
+                    coverage=coverage.total,
+                    coverage_delta=coverage_delta,
+                    uncovered_subtopics=uncovered_subtopics,
+                    estimated_cost_usd=iteration_cost,
+                    tool_calls=tool_calls,
+                )
+
+                # Wall-clock observation lives behind a checkpoint so replays stay
+                # deterministic; the decision itself is pure given its inputs.
+                wall_clock = flow.snapshot_wall_clock.submit(stamp.started_at).load()
+                decision_stop = flow.check_convergence(
+                    coverage,
+                    list(iteration_history),
+                    spent_usd=spent_usd,
+                    elapsed_seconds=wall_clock.elapsed_seconds,
+                    max_iterations=config.max_iterations,
+                    epsilon=config.convergence_epsilon,
+                    min_coverage=config.convergence_min_coverage,
+                    budget_limit_usd=config.cost_budget_usd,
+                    time_limit_seconds=config.time_box_seconds,
+                    new_candidate_count=iteration_record.new_candidate_count,
+                )
+                continue_reason = _continue_reason(
+                    decision_stop.should_stop, uncovered_subtopics, coverage_delta
+                )
+                iteration_record = iteration_record.model_copy(
+                    update={
+                        "continue_reason": continue_reason,
+                        "stop_reason": (
+                            decision_stop.reason if decision_stop.should_stop else None
+                        ),
+                    }
+                )
+                iteration_history = (*iteration_history, iteration_record)
+                flow.log(
+                    iteration=iteration,
+                    coverage=coverage.total,
+                    coverage_delta=coverage_delta,
+                    uncovered_subtopics=uncovered_subtopics,
+                    new_candidate_count=iteration_record.new_candidate_count,
+                    accepted_candidate_count=iteration_record.accepted_candidate_count,
+                    rejected_candidate_count=iteration_record.rejected_candidate_count,
+                    tool_summaries=[tc.summary for tc in tool_calls],
+                    stop_reason=iteration_record.stop_reason,
+                    continue_reason=continue_reason,
+                    spent_usd=round(spent_usd, 6),
+                )
+                if decision_stop.should_stop:
+                    # Check replan gate before accepting the stop
+                    if (
+                        config.max_replans > 0
+                        and decision_stop.reason
+                        in (StopReason.LOOP_STALL, StopReason.DIMINISHING_RETURNS)
+                        and _replans_used < config.max_replans
+                    ):
+                        replan_decision = flow.evaluate_replan.submit(
+                            plan, coverage, list(iteration_history), config
+                        ).load()
+                        if replan_decision.should_replan:
+                            updates: dict[str, object] = {}
+                            if replan_decision.updated_subtopics:
+                                updates["subtopics"] = replan_decision.updated_subtopics
+                            if replan_decision.updated_queries:
+                                updates["queries"] = replan_decision.updated_queries
+                            if updates:
+                                plan = plan.model_copy(update=updates)
+                            uncovered_subtopics = list(coverage.uncovered_subtopics)
+                            _replans_used += 1
+                            flow.log(
+                                replan_triggered=True,
+                                replan_number=_replans_used,
+                                rationale=replan_decision.rationale,
+                                updated_subtopics=bool(
+                                    replan_decision.updated_subtopics
+                                ),
+                                updated_queries=bool(replan_decision.updated_queries),
+                                iteration=iteration,
+                            )
+                            continue
+                        else:
+                            flow.log(
+                                replan_triggered=False,
+                                rationale=replan_decision.rationale,
+                                iteration=iteration,
+                            )
+                    # Fall back to MAX_ITERATIONS if the decision didn't name a reason.
+                    stop_reason = decision_stop.reason or StopReason.MAX_ITERATIONS
+                    break
 
     return IterationLoopOutput(
         ledger=ledger,
