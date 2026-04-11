@@ -38,7 +38,7 @@ def _build_classifier_agent() -> Agent[None, RequestClassification]:
         "test",
         name="classifier",
         output_type=RequestClassification,
-        system_prompt=load_prompt("classifier"),
+        instructions=load_prompt("classifier"),
     )
 
 
@@ -101,7 +101,7 @@ def _build_reviewer_agent() -> Agent[None, CritiqueResult]:
         "test",
         name="reviewer",
         output_type=CritiqueResult,
-        system_prompt=load_prompt("reviewer"),
+        instructions=load_prompt("reviewer"),
     )
 
 
@@ -151,7 +151,7 @@ def _build_grounding_judge_agent() -> Agent[None, GroundingResult]:
         "test",
         name="grounding_judge",
         output_type=GroundingResult,
-        system_prompt=load_prompt("judge_grounding"),
+        instructions=load_prompt("judge_grounding"),
     )
 
 
@@ -207,7 +207,7 @@ def _build_coherence_judge_agent() -> Agent[None, CoherenceResult]:
         "test",
         name="coherence_judge",
         output_type=CoherenceResult,
-        system_prompt=load_prompt("judge_coherence"),
+        instructions=load_prompt("judge_coherence"),
     )
 
 

@@ -134,26 +134,58 @@ class ResearchPlan(StrictBaseModel):
 
 
 class EvidenceSnippet(StrictBaseModel):
-    text: str
-    source_locator: str | None = None
+    text: str = Field(..., description="Extracted text content from the source.")
+    source_locator: str | None = Field(
+        default=None,
+        description="Page number, section anchor, or paragraph reference within the source.",
+    )
 
 
 class EvidenceCandidate(StrictBaseModel):
-    key: str
-    title: str
-    url: AnyUrl
-    snippets: list[EvidenceSnippet] = Field(default_factory=list)
-    provider: str
-    source_kind: SourceKind
-    quality_score: UnitFloat = 0.0
-    relevance_score: UnitFloat = 0.0
-    authority_score: UnitFloat = 0.0
-    freshness_score: UnitFloat = 0.0
-    matched_subtopics: list[str] = Field(default_factory=list)
-    doi: str | None = None
-    arxiv_id: str | None = None
-    raw_metadata: dict[str, object] = Field(default_factory=dict)
-    selected: bool = False
+    key: str = Field(..., description="Unique identifier for this evidence candidate.")
+    title: str = Field(..., description="Title or headline of the source document.")
+    url: AnyUrl = Field(..., description="URL of the source document.")
+    snippets: list[EvidenceSnippet] = Field(
+        default_factory=list,
+        description="Extracted text snippets from the source.",
+    )
+    provider: str = Field(
+        ...,
+        description="Search provider that returned this result (e.g. 'brave', 'arxiv').",
+    )
+    source_kind: SourceKind = Field(
+        ..., description="Classification of the source type."
+    )
+    quality_score: UnitFloat = Field(
+        default=0.0, description="Overall quality estimate (0.0 to 1.0)."
+    )
+    relevance_score: UnitFloat = Field(
+        default=0.0, description="Relevance to the research brief (0.0 to 1.0)."
+    )
+    authority_score: UnitFloat = Field(
+        default=0.0, description="Source authority estimate (0.0 to 1.0)."
+    )
+    freshness_score: UnitFloat = Field(
+        default=0.0, description="Recency score (0.0 to 1.0)."
+    )
+    matched_subtopics: list[str] = Field(
+        default_factory=list,
+        description="Plan subtopics this evidence addresses.",
+    )
+    doi: str | None = Field(
+        default=None, description="Digital Object Identifier if available."
+    )
+    arxiv_id: str | None = Field(
+        default=None, description="ArXiv paper ID if available."
+    )
+    raw_metadata: dict[str, object] = Field(
+        default_factory=dict,
+        description="Provider-specific metadata preserved for downstream processing.",
+    )
+    selected: bool = Field(
+        default=False,
+        description="True if this candidate was selected for the final deliverable.",
+    )
 
     @model_validator(mode="after")
     def validate_raw_metadata(self) -> "EvidenceCandidate":
@@ -206,12 +238,26 @@ class EvidenceLedger(StrictBaseModel):
 
 
 class SelectionItem(StrictBaseModel):
-    candidate_key: str
-    rationale: str
-    bridge_note: str | None = None
-    matched_subtopics: list[str] = Field(default_factory=list)
-    reading_time_minutes: StrictInt | None = None
-    ordering_rationale: str | None = None
+    candidate_key: str = Field(
+        ..., description="Key of the EvidenceCandidate this item refers to."
+    )
+    rationale: str = Field(
+        ..., description="Why this candidate was selected for the deliverable."
+    )
+    bridge_note: str | None = Field(
+        default=None,
+        description="How this item connects to adjacent items in reading order.",
+    )
+    matched_subtopics: list[str] = Field(
+        default_factory=list, description="Subtopics this selection covers."
+    )
+    reading_time_minutes: StrictInt | None = Field(
+        default=None, description="Estimated reading time in minutes."
+    )
+    ordering_rationale: str | None = Field(
+        default=None,
+        description="Why this item appears at this position in the reading order.",
+    )
 
     @model_validator(mode="after")
     def validate_reading_time(self) -> "SelectionItem":
@@ -523,17 +569,25 @@ class CoverageScore(StrictBaseModel):
 
 
 class ToolCallRecord(StrictBaseModel):
-    tool_name: str
-    status: str
-    provider: str | None = None
-    summary: str | None = None
+    tool_name: str = Field(..., description="Name of the tool that was invoked.")
+    status: str = Field(..., description="Outcome status: 'ok' or 'error'.")
+    provider: str | None = Field(
+        default=None, description="Search provider that handled the call."
+    )
+    summary: str | None = Field(
+        default=None, description="Human-readable one-line summary of the call outcome."
+    )
 
 
 class IterationBudget(StrictBaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    estimated_cost_usd: float = 0.0
+    input_tokens: int = Field(default=0, description="Number of input tokens consumed.")
+    output_tokens: int = Field(
+        default=0, description="Number of output tokens generated."
+    )
+    total_tokens: int = Field(default=0, description="Sum of input and output tokens.")
+    estimated_cost_usd: float = Field(
+        default=0.0, description="Estimated cost in USD for this budget period."
+    )
 
     @model_validator(mode="after")
     def validate_non_negative(self) -> "IterationBudget":
@@ -551,20 +605,36 @@ class IterationBudget(StrictBaseModel):
 
 
 class RawToolResult(StrictBaseModel):
-    tool_name: str
-    provider: str
-    payload: dict
-    ok: bool = True
-    error: str | None = None
+    tool_name: str = Field(
+        ..., description="Name of the tool that produced this result."
+    )
+    provider: str = Field(
+        ..., description="Search provider or tool backend identifier."
+    )
+    payload: dict = Field(..., description="Raw result payload from the tool.")
+    ok: bool = Field(default=True, description="True if the tool call succeeded.")
+    error: str | None = Field(
+        default=None, description="Error message if the tool call failed."
+    )
 
 
 class SearchAction(StrictBaseModel):
-    query: str
-    rationale: str
-    preferred_providers: list[str] = Field(default_factory=list)
-    preferred_source_kinds: list[SourceKind] = Field(default_factory=list)
-    recency_days: StrictInt | None = None
-    max_results: StrictInt | None = None
+    query: str = Field(..., description="The search query string to execute.")
+    rationale: str = Field(
+        ..., description="Why this query was chosen and what gap it targets."
+    )
+    preferred_providers: list[str] = Field(
+        default_factory=list, description="Provider names to prefer for this query."
+    )
+    preferred_source_kinds: list[SourceKind] = Field(
+        default_factory=list, description="Source types to prefer."
+    )
+    recency_days: StrictInt | None = Field(
+        default=None, description="Limit results to the last N days."
+    )
+    max_results: StrictInt | None = Field(
+        default=None, description="Maximum number of results to return."
+    )
 
     @model_validator(mode="after")
     def validate_limits(self) -> "SearchAction":
