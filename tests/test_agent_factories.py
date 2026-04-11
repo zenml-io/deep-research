@@ -83,7 +83,12 @@ def _install_agent_stubs(monkeypatch):
 
 
 def _load_module(name: str):
-    """Import a module after clearing its cached copy from sys.modules."""
+    """Import a module after clearing its cached copy from sys.modules.
+
+    Also clears the ``_kitaru`` adapter wrapper so its top-level import of
+    ``kitaru.adapters.pydantic_ai`` re-executes against the current stubs.
+    """
+    sys.modules.pop("deep_research.agents._kitaru", None)
     sys.modules.pop(name, None)
     return importlib.import_module(name)
 
@@ -192,42 +197,20 @@ def test_agent_factories_build_reviewer_and_judges(monkeypatch) -> None:
     assert wrap_calls[2]["agent"].kwargs["output_type"].__name__ == "CoherenceResult"
 
 
-def test_agent_factories_fall_back_when_kitaru_adapter_import_is_unavailable(
+def test_agent_factories_raise_when_kitaru_adapter_import_is_unavailable(
     monkeypatch,
 ) -> None:
-    prompt_calls = []
-
-    class FakeAgent:
-        def __init__(self, model_name, **kwargs):
-            self.model_name = model_name
-            self.kwargs = kwargs
-
-    def load_prompt(name: str) -> str:
-        prompt_calls.append(name)
-        return f"prompt:{name}"
-
-    monkeypatch.setitem(
-        sys.modules, "pydantic_ai", types.SimpleNamespace(Agent=FakeAgent)
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "deep_research.prompts.loader",
-        types.SimpleNamespace(load_prompt=load_prompt),
-    )
+    """After removing the defensive fallback, a missing Kitaru adapter must
+    propagate as an ``ImportError`` instead of silently returning an unwrapped
+    agent.
+    """
     monkeypatch.delitem(sys.modules, "kitaru.adapters", raising=False)
+    monkeypatch.delitem(sys.modules, "kitaru.adapters.pydantic_ai", raising=False)
     monkeypatch.delitem(sys.modules, "kitaru", raising=False)
     monkeypatch.delitem(sys.modules, "deep_research.agents._kitaru", raising=False)
     monkeypatch.delitem(sys.modules, "deep_research.agents.classifier", raising=False)
 
-    module = _load_module("deep_research.agents.classifier")
+    import pytest
 
-    agent = module.build_classifier_agent(model_name="fallback-model")
-
-    assert isinstance(agent, FakeAgent)
-    assert agent.model_name == "fallback-model"
-    assert agent.kwargs == {
-        "name": "classifier",
-        "output_type": module.RequestClassification,
-        "instructions": "prompt:classifier",
-    }
-    assert prompt_calls == ["classifier"]
+    with pytest.raises(ImportError):
+        _load_module("deep_research.agents.classifier")

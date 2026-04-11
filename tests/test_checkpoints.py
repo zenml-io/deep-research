@@ -100,7 +100,7 @@ def _install_supervisor_factory_dependency_stubs(monkeypatch):
 
 def _load_supervisor_factory_module():
     """Import the supervisor agent factory after clearing its cached module."""
-    _clear_modules("deep_research.agents.supervisor")
+    _clear_modules("deep_research.agents._kitaru", "deep_research.agents.supervisor")
     return importlib.import_module("deep_research.agents.supervisor")
 
 
