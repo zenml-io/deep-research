@@ -514,7 +514,7 @@ class CoverageScore(StrictBaseModel):
     )
     total: UnitFloat = Field(
         ...,
-        description="Weighted average of subtopic_coverage, source_diversity, and evidence_density.",
+        description="Simple average of subtopic_coverage, source_diversity, and evidence_density, rounded to 4 decimal places.",
     )
     uncovered_subtopics: list[str] = Field(
         default_factory=list,

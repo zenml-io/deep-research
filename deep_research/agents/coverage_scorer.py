@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
 from pydantic_ai import Agent
@@ -8,7 +10,7 @@ from deep_research.prompts.loader import load_prompt
 
 
 @lru_cache(maxsize=4)
-def build_coverage_scorer_agent(model_name: str):
+def build_coverage_scorer_agent(model_name: str) -> Agent[None, CoverageScore]:
     """Create a Kitaru-wrapped PydanticAI agent that scores evidence coverage."""
     return wrap_agent(
         Agent(
