@@ -20,6 +20,7 @@ from deep_research.config import ResearchConfig
 from deep_research.enums import DeliverableMode, StopReason, Tier
 from deep_research.models import (
     CoherenceResult,
+    CoverageScore,
     CritiqueResult,
     EvidenceLedger,
     GroundingResult,
@@ -281,12 +282,33 @@ def run_iteration_loop(
         [config.supervisor_model] * config.council_size if config.council_mode else []
     )
     stop_reason = StopReason.MAX_ITERATIONS
+    _replans_used = 0
 
     for iteration in range(config.max_iterations):
         supervisor_result = _run_supervisor_turn(
             plan, ledger, iteration, run_state, uncovered_subtopics, council_models
         )
         decision = supervisor_result.decision
+
+        # Supervisor can signal completion directly via status field.
+        if decision.status == "complete":
+            tool_calls = build_tool_call_records(supervisor_result.raw_results)
+            iteration_record = IterationRecord(
+                iteration=iteration,
+                new_candidate_count=0,
+                accepted_candidate_count=len(ledger.selected),
+                rejected_candidate_count=len(ledger.rejected),
+                coverage=iteration_history[-1].coverage if iteration_history else 0.0,
+                coverage_delta=0.0,
+                uncovered_subtopics=uncovered_subtopics or [],
+                estimated_cost_usd=supervisor_result.budget.estimated_cost_usd,
+                tool_calls=tool_calls,
+                stop_reason=StopReason.SUPERVISOR_COMPLETE,
+            )
+            iteration_history = (*iteration_history, iteration_record)
+            stop_reason = StopReason.SUPERVISOR_COMPLETE
+            break
+
         if decision.search_actions:
             search_result = flow.execute_searches.submit(
                 decision, config, preferences=run_state.preferences
@@ -373,6 +395,28 @@ def run_iteration_loop(
             spent_usd=round(spent_usd, 6),
         )
         if decision_stop.should_stop:
+            # Check replan gate before accepting the stop
+            if (
+                config.max_replans > 0
+                and decision_stop.reason
+                in (StopReason.LOOP_STALL, StopReason.DIMINISHING_RETURNS)
+                and _replans_used < config.max_replans
+            ):
+                replan_decision = flow.evaluate_replan.submit(
+                    plan, coverage, list(iteration_history), config
+                ).load()
+                if replan_decision.should_replan:
+                    if replan_decision.updated_subtopics:
+                        plan = plan.model_copy(
+                            update={"subtopics": replan_decision.updated_subtopics}
+                        )
+                    if replan_decision.updated_queries:
+                        plan = plan.model_copy(
+                            update={"queries": replan_decision.updated_queries}
+                        )
+                    uncovered_subtopics = list(coverage.uncovered_subtopics)
+                    _replans_used += 1
+                    continue
             # Fall back to MAX_ITERATIONS if the decision didn't name a reason.
             stop_reason = decision_stop.reason or StopReason.MAX_ITERATIONS
             break

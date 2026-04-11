@@ -19,6 +19,7 @@ class TierConfig(BaseModel):
     judge_enabled: bool = False
     allows_council: bool = False
     requires_plan_approval: bool = True
+    max_replans: int = 0
 
 
 class ResearchSettings(BaseSettings):
@@ -122,6 +123,7 @@ class ResearchConfig(BaseModel):
     max_results_per_query: int = 10
     max_fetch_candidates_per_iteration: int = 5
     max_fetched_chars_per_candidate: int = 4000
+    max_replans: int = 0
 
     @classmethod
     def for_tier(
@@ -147,6 +149,7 @@ class ResearchConfig(BaseModel):
                 critique_enabled=True,
                 judge_enabled=True,
                 allows_council=True,
+                max_replans=1,
             ),
             Tier.CUSTOM: TierConfig(
                 max_iterations=settings.default_max_iterations,
@@ -194,4 +197,5 @@ class ResearchConfig(BaseModel):
             max_results_per_query=settings.max_results_per_query,
             max_fetch_candidates_per_iteration=settings.max_fetch_candidates_per_iteration,
             max_fetched_chars_per_candidate=settings.max_fetched_chars_per_candidate,
+            max_replans=base.max_replans,
         )

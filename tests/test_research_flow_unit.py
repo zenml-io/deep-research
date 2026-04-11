@@ -13,6 +13,7 @@ from deep_research.models import (
     GroundingResult,
     IterationBudget,
     RawToolResult,
+    ReplanDecision,
     RenderCheckpointResult,
     RenderPayload,
     RequestClassification,
@@ -2731,3 +2732,459 @@ def test_research_flow_council_submission_ids_include_iteration(monkeypatch) -> 
         "council_1_0",
         "council_1_1",
     ]
+
+
+def test_research_flow_supervisor_complete_stops_loop_immediately(monkeypatch) -> None:
+    """When the supervisor signals status='complete', the loop stops immediately."""
+    module = _load_research_flow_module()
+    supervisor_calls = []
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda *args, **kwargs: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: (
+                supervisor_calls.append(1)
+                or SupervisorCheckpointResult(
+                    decision=SupervisorDecision(
+                        rationale="enough evidence gathered",
+                        search_actions=[],
+                        status="complete",
+                    ),
+                    raw_results=[],
+                    budget=IterationBudget(estimated_cost_usd=0.1),
+                )
+            )
+        ),
+    )
+    # These should NOT be called when status is "complete"
+    monkeypatch.setattr(
+        module,
+        "extract_candidates",
+        _as_checkpoint(
+            lambda raw_results: (_ for _ in ()).throw(AssertionError("should not run"))
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "update_ledger",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "enrich_candidates",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "score_coverage",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run")),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "rank_evidence",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_reading_path",
+        _as_checkpoint(lambda *args, **kwargs: _render_result("reading_path", "# RP")),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_backing_report",
+        _as_checkpoint(
+            lambda *args, **kwargs: _render_result("backing_report", "# BR")
+        ),
+    )
+    monkeypatch.setattr(
+        module, "assemble_package", _as_checkpoint(lambda **kwargs: kwargs)
+    )
+
+    package = module.research_flow.run("brief")
+
+    assert len(supervisor_calls) == 1
+    assert package["run_summary"].stop_reason is module.StopReason.SUPERVISOR_COMPLETE
+    records = package["iteration_trace"].iterations
+    assert len(records) == 1
+    assert records[0].stop_reason is module.StopReason.SUPERVISOR_COMPLETE
+
+
+def test_research_flow_replan_gate_triggers_on_stall(monkeypatch) -> None:
+    """When max_replans > 0 and convergence stalls, the replan gate fires."""
+    module = _load_research_flow_module()
+    replan_calls = []
+    supervisor_call_count = []
+
+    # First iteration: stall → replan triggers → continues
+    # Second iteration: converge
+    supervisor_decisions = iter(
+        [
+            SupervisorDecision(rationale="search", search_actions=[]),
+            SupervisorDecision(rationale="search more", search_actions=[]),
+        ]
+    )
+    coverages = iter(
+        [
+            types.SimpleNamespace(total=0.30, uncovered_subtopics=["gaps"]),
+            types.SimpleNamespace(total=0.30, uncovered_subtopics=["gaps"]),
+            types.SimpleNamespace(total=0.85, uncovered_subtopics=[]),
+        ]
+    )
+    convergence_decisions = iter(
+        [
+            types.SimpleNamespace(
+                should_stop=True, reason=module.StopReason.LOOP_STALL
+            ),
+            types.SimpleNamespace(should_stop=True, reason=module.StopReason.CONVERGED),
+        ]
+    )
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.DEEP,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda *args, **kwargs: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["original-topic"],
+                queries=["original-query"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: (
+                supervisor_call_count.append(1)
+                or SupervisorCheckpointResult(
+                    decision=next(supervisor_decisions),
+                    raw_results=[],
+                    budget=IterationBudget(),
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "extract_candidates", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[], budget=IterationBudget()
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "update_ledger",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "enrich_candidates",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "score_coverage",
+        _as_checkpoint(lambda ledger, plan, config: next(coverages)),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: next(convergence_decisions),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_replan",
+        _as_checkpoint(
+            lambda plan, coverage, iteration_history, config: (
+                replan_calls.append(
+                    {
+                        "subtopics": plan.subtopics
+                        if hasattr(plan, "subtopics")
+                        else [],
+                    }
+                )
+                or ReplanDecision(
+                    should_replan=True,
+                    rationale="Coverage stalled, trying different approach",
+                    updated_subtopics=["new-topic-a", "new-topic-b"],
+                    updated_queries=["new-query-1"],
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "rank_evidence",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_reading_path",
+        _as_checkpoint(lambda *args, **kwargs: _render_result("reading_path", "# RP")),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_backing_report",
+        _as_checkpoint(
+            lambda *args, **kwargs: _render_result("backing_report", "# BR")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "critique_reports",
+        _as_checkpoint(
+            lambda *args, **kwargs: CritiqueCheckpointResult(
+                critique=CritiqueResult(dimensions=[], summary="ok"),
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "apply_revisions",
+        _as_checkpoint(lambda renders, critique, plan: renders),
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_grounding",
+        _as_checkpoint(
+            lambda *args, **kwargs: GroundingCheckpointResult(
+                grounding=GroundingResult(score=1.0, verdicts=[]),
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_coherence",
+        _as_checkpoint(
+            lambda *args, **kwargs: CoherenceCheckpointResult(
+                coherence=CoherenceResult(
+                    relevance=1.0,
+                    logical_flow=1.0,
+                    completeness=1.0,
+                    consistency=1.0,
+                    summary="coherent",
+                ),
+                budget=IterationBudget(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "assemble_package", _as_checkpoint(lambda **kwargs: kwargs)
+    )
+
+    package = module.research_flow.run(
+        "brief",
+        config=module.ResearchConfig.for_tier(module.Tier.DEEP),
+    )
+
+    # Replan was called once
+    assert len(replan_calls) == 1
+    # The plan's subtopics were the original ones when replan was called
+    assert replan_calls[0]["subtopics"] == ["original-topic"]
+    # Supervisor was called twice (once before stall → replan, once after)
+    assert len(supervisor_call_count) == 2
+    # Final stop reason is CONVERGED (from second iteration)
+    assert package["run_summary"].stop_reason is module.StopReason.CONVERGED
+
+
+def test_research_flow_replan_gate_skipped_when_max_replans_zero(monkeypatch) -> None:
+    """When max_replans=0, the replan gate is not invoked even on stall."""
+    module = _load_research_flow_module()
+
+    monkeypatch.setattr(module, "wait", lambda **kwargs: True)
+    monkeypatch.setattr(
+        module,
+        "classify_request",
+        _as_checkpoint(
+            lambda *args, **kwargs: RequestClassification(
+                audience_mode="technical",
+                freshness_mode="current",
+                recommended_tier=module.Tier.STANDARD,
+                needs_clarification=False,
+                clarification_question=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_plan",
+        _as_checkpoint(
+            lambda *args, **kwargs: ResearchPlan(
+                goal="goal",
+                key_questions=["k"],
+                subtopics=["status"],
+                queries=["q"],
+                sections=["Summary"],
+                success_criteria=["c"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_supervisor",
+        _as_checkpoint(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
+                raw_results=[], budget=IterationBudget()
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "extract_candidates", _as_checkpoint(lambda raw_results: [])
+    )
+    monkeypatch.setattr(
+        module,
+        "score_relevance",
+        _as_checkpoint(
+            lambda candidates, plan, config: RelevanceCheckpointResult(
+                candidates=[], budget=IterationBudget()
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "update_ledger",
+        _as_checkpoint(lambda scored, ledger, config=None: ledger),
+    )
+    monkeypatch.setattr(
+        module,
+        "enrich_candidates",
+        _as_checkpoint(lambda ledger, config: ledger),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "score_coverage",
+        _as_checkpoint(
+            lambda ledger, plan, config: CoverageScore(
+                subtopic_coverage=0.3,
+                source_diversity=0.3,
+                evidence_density=0.3,
+                total=0.3,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "check_convergence",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            should_stop=True, reason=module.StopReason.LOOP_STALL
+        ),
+    )
+    # evaluate_replan should NOT be called
+    monkeypatch.setattr(
+        module,
+        "evaluate_replan",
+        _as_checkpoint(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not run")
+            )
+        ),
+    )
+    monkeypatch.setattr(module, "log", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "rank_evidence",
+        _as_checkpoint(lambda ledger, plan, config=None: SelectionGraph(items=[])),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_reading_path",
+        _as_checkpoint(lambda *args, **kwargs: _render_result("reading_path", "# RP")),
+    )
+    monkeypatch.setattr(
+        module,
+        "write_backing_report",
+        _as_checkpoint(
+            lambda *args, **kwargs: _render_result("backing_report", "# BR")
+        ),
+    )
+    monkeypatch.setattr(
+        module, "assemble_package", _as_checkpoint(lambda **kwargs: kwargs)
+    )
+
+    package = module.research_flow.run("brief")
+
+    assert package["run_summary"].stop_reason is module.StopReason.LOOP_STALL

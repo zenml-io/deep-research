@@ -406,3 +406,87 @@ def test_check_convergence_rejects_uncovered_subtopics_override_argument() -> No
             time_limit_seconds=60,
             uncovered_subtopics=(),
         )
+
+
+def test_check_convergence_never_returns_supervisor_complete() -> None:
+    """SUPERVISOR_COMPLETE is handled in the iteration loop, not by check_convergence."""
+    all_reasons = set()
+    # Collect all possible stop reasons from representative scenarios
+    scenarios = [
+        # Budget exhaustion
+        dict(
+            current=CoverageScore(
+                subtopic_coverage=0.5,
+                source_diversity=0.5,
+                evidence_density=0.5,
+                total=0.5,
+            ),
+            history=[],
+            spent_usd=1.0,
+            elapsed_seconds=10,
+            max_iterations=5,
+            epsilon=0.05,
+            min_coverage=0.70,
+            budget_limit_usd=1.0,
+            time_limit_seconds=600,
+        ),
+        # Time exhaustion
+        dict(
+            current=CoverageScore(
+                subtopic_coverage=0.5,
+                source_diversity=0.5,
+                evidence_density=0.5,
+                total=0.5,
+            ),
+            history=[],
+            spent_usd=0.01,
+            elapsed_seconds=600,
+            max_iterations=5,
+            epsilon=0.05,
+            min_coverage=0.70,
+            budget_limit_usd=1.0,
+            time_limit_seconds=600,
+        ),
+        # Converged
+        dict(
+            current=CoverageScore(
+                subtopic_coverage=0.8,
+                source_diversity=0.7,
+                evidence_density=0.7,
+                total=0.733,
+            ),
+            history=[IterationRecord(iteration=0, coverage=0.68)],
+            spent_usd=0.01,
+            elapsed_seconds=10,
+            max_iterations=5,
+            epsilon=0.05,
+            min_coverage=0.70,
+            budget_limit_usd=1.0,
+            time_limit_seconds=600,
+        ),
+        # Loop stall
+        dict(
+            current=CoverageScore(
+                subtopic_coverage=0.62,
+                source_diversity=0.58,
+                evidence_density=0.61,
+                total=0.60,
+            ),
+            history=[IterationRecord(iteration=0, coverage=0.60)],
+            spent_usd=0.01,
+            elapsed_seconds=10,
+            max_iterations=5,
+            epsilon=0.05,
+            min_coverage=0.70,
+            budget_limit_usd=1.0,
+            time_limit_seconds=600,
+        ),
+    ]
+    for kwargs in scenarios:
+        current = kwargs.pop("current")
+        history = kwargs.pop("history")
+        decision = check_convergence(current, history, **kwargs)
+        if decision.reason is not None:
+            all_reasons.add(decision.reason)
+
+    assert StopReason.SUPERVISOR_COMPLETE not in all_reasons

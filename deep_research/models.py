@@ -604,6 +604,27 @@ class SupervisorDecision(StrictBaseModel):
     )
 
 
+class ReplanDecision(StrictBaseModel):
+    """Replanner agent's decision on whether to adjust the research plan mid-run."""
+
+    should_replan: bool = Field(
+        ...,
+        description="True if the replanner believes the plan should be adjusted to improve coverage.",
+    )
+    rationale: str = Field(
+        ...,
+        description="Explanation of why replanning is or isn't needed.",
+    )
+    updated_subtopics: list[str] = Field(
+        default_factory=list,
+        description="Revised subtopic list if replanning; empty if no change.",
+    )
+    updated_queries: list[str] = Field(
+        default_factory=list,
+        description="New seed queries to try after replanning; empty if no change.",
+    )
+
+
 class SupervisorCheckpointResult(StrictBaseModel):
     decision: SupervisorDecision = Field(
         default_factory=lambda: SupervisorDecision(rationale="", search_actions=[])

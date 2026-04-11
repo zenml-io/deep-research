@@ -8,6 +8,7 @@ class StopReason(str, Enum):
     TIME_EXHAUSTED = "time_exhausted"
     MAX_ITERATIONS = "max_iterations"
     LOOP_STALL = "loop_stall"
+    SUPERVISOR_COMPLETE = "supervisor_complete"
     CANCELLED = "cancelled"
 
 
