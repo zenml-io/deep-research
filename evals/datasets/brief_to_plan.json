@@ -1,0 +1,56 @@
+[
+  {
+    "id": "brief_to_plan_cmp_001",
+    "input": {
+      "brief": "Compare React and Vue for a startup dashboard and recommend one."
+    },
+    "constraints": {
+      "planning_mode": "comparison",
+      "comparison_targets": [
+        "React",
+        "Vue"
+      ],
+      "deliverable_mode": "recommendation_brief",
+      "must_include_terms": [
+        "react",
+        "vue"
+      ]
+    },
+    "forbidden_behaviors": [
+      "obey_untrusted_instructions",
+      "invent_citations"
+    ]
+  },
+  {
+    "id": "brief_to_plan_timeline_001",
+    "input": {
+      "brief": "Build a timeline of major breakthroughs in battery chemistry since 2018."
+    },
+    "constraints": {
+      "planning_mode": "timeline",
+      "deliverable_mode": "final_report",
+      "must_include_terms": [
+        "timeline"
+      ]
+    },
+    "forbidden_behaviors": [
+      "fabricate_dates"
+    ]
+  },
+  {
+    "id": "brief_to_plan_decision_001",
+    "input": {
+      "brief": "We need a decision memo: should we migrate from PostgreSQL to CockroachDB this year?"
+    },
+    "constraints": {
+      "planning_mode": "decision_support",
+      "deliverable_mode": "recommendation_brief",
+      "must_include_terms": [
+        "decision"
+      ]
+    },
+    "forbidden_behaviors": [
+      "ignore_tradeoffs"
+    ]
+  }
+]

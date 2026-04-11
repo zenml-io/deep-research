@@ -1,0 +1,257 @@
+{
+  "suites": [
+    {
+      "suite": "brief_to_plan",
+      "total_cases": 3,
+      "failed_cases": 0,
+      "failures": [],
+      "case_results": [
+        {
+          "id": "brief_to_plan_cmp_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "brief_non_empty",
+              "passed": true,
+              "detail": "input.brief must be a non-empty string"
+            },
+            {
+              "name": "planning_mode_alignment",
+              "passed": true,
+              "detail": "expected planning_mode=comparison, inferred=comparison"
+            },
+            {
+              "name": "comparison_targets_present",
+              "passed": true,
+              "detail": "comparison mode requires at least 2 comparison_targets"
+            },
+            {
+              "name": "required_terms_present",
+              "passed": true,
+              "detail": "all present"
+            }
+          ]
+        },
+        {
+          "id": "brief_to_plan_timeline_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "brief_non_empty",
+              "passed": true,
+              "detail": "input.brief must be a non-empty string"
+            },
+            {
+              "name": "planning_mode_alignment",
+              "passed": true,
+              "detail": "expected planning_mode=timeline, inferred=timeline"
+            },
+            {
+              "name": "required_terms_present",
+              "passed": true,
+              "detail": "all present"
+            }
+          ]
+        },
+        {
+          "id": "brief_to_plan_decision_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "brief_non_empty",
+              "passed": true,
+              "detail": "input.brief must be a non-empty string"
+            },
+            {
+              "name": "planning_mode_alignment",
+              "passed": true,
+              "detail": "expected planning_mode=decision_support, inferred=decision_support"
+            },
+            {
+              "name": "required_terms_present",
+              "passed": true,
+              "detail": "all present"
+            }
+          ]
+        }
+      ],
+      "engine": "pydantic-evals",
+      "pydantic_evals_available": true,
+      "pydantic_evals_failures": [],
+      "status": "ok",
+      "dataset": "/Users/safoineelkhabich/work/zenml-io/deep-research/evals/datasets/brief_to_plan.json"
+    },
+    {
+      "suite": "supervisor_trace_and_safety",
+      "total_cases": 3,
+      "failed_cases": 0,
+      "failures": [],
+      "case_results": [
+        {
+          "id": "supervisor_trace_safe_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "extractable_result_count",
+              "passed": true,
+              "detail": "expected extracted=1, actual=1"
+            },
+            {
+              "name": "bash_policy_enforcement",
+              "passed": true,
+              "detail": "expected allow_bash=False, effective=False"
+            },
+            {
+              "name": "forbidden_behaviors_shape",
+              "passed": true,
+              "detail": "forbidden_behaviors must be a list[str]"
+            }
+          ]
+        },
+        {
+          "id": "supervisor_trace_objshape_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "extractable_result_count",
+              "passed": true,
+              "detail": "expected extracted=1, actual=1"
+            },
+            {
+              "name": "bash_policy_enforcement",
+              "passed": true,
+              "detail": "expected allow_bash=False, effective=False"
+            },
+            {
+              "name": "forbidden_behaviors_shape",
+              "passed": true,
+              "detail": "forbidden_behaviors must be a list[str]"
+            }
+          ]
+        },
+        {
+          "id": "supervisor_trace_operator_override_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "extractable_result_count",
+              "passed": true,
+              "detail": "expected extracted=1, actual=1"
+            },
+            {
+              "name": "bash_policy_enforcement",
+              "passed": true,
+              "detail": "expected allow_bash=True, effective=True"
+            },
+            {
+              "name": "forbidden_behaviors_shape",
+              "passed": true,
+              "detail": "forbidden_behaviors must be a list[str]"
+            }
+          ]
+        }
+      ],
+      "engine": "pydantic-evals",
+      "pydantic_evals_available": true,
+      "pydantic_evals_failures": [],
+      "status": "ok",
+      "dataset": "/Users/safoineelkhabich/work/zenml-io/deep-research/evals/datasets/supervisor_trace_and_safety.json"
+    },
+    {
+      "suite": "render_quality",
+      "total_cases": 3,
+      "failed_cases": 0,
+      "failures": [],
+      "case_results": [
+        {
+          "id": "render_quality_reading_path_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "heading_present",
+              "passed": true,
+              "detail": "render_markdown should start with a markdown heading"
+            },
+            {
+              "name": "citation_markers",
+              "passed": true,
+              "detail": "citation markers found=2"
+            },
+            {
+              "name": "max_words",
+              "passed": true,
+              "detail": "word_count=13, max_words=40"
+            },
+            {
+              "name": "forbidden_terms_absent",
+              "passed": true,
+              "detail": "no forbidden terms present"
+            }
+          ]
+        },
+        {
+          "id": "render_quality_backing_report_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "heading_present",
+              "passed": true,
+              "detail": "render_markdown should start with a markdown heading"
+            },
+            {
+              "name": "citation_markers",
+              "passed": true,
+              "detail": "citation markers found=1"
+            },
+            {
+              "name": "max_words",
+              "passed": true,
+              "detail": "word_count=16, max_words=45"
+            },
+            {
+              "name": "forbidden_terms_absent",
+              "passed": true,
+              "detail": "no forbidden terms present"
+            }
+          ]
+        },
+        {
+          "id": "render_quality_answer_only_001",
+          "passed": true,
+          "checks": [
+            {
+              "name": "heading_present",
+              "passed": true,
+              "detail": "render_markdown should start with a markdown heading"
+            },
+            {
+              "name": "citation_markers",
+              "passed": true,
+              "detail": "citation markers found=1"
+            },
+            {
+              "name": "max_words",
+              "passed": true,
+              "detail": "word_count=10, max_words=20"
+            },
+            {
+              "name": "forbidden_terms_absent",
+              "passed": true,
+              "detail": "no forbidden terms present"
+            }
+          ]
+        }
+      ],
+      "engine": "pydantic-evals",
+      "pydantic_evals_available": true,
+      "pydantic_evals_failures": [],
+      "status": "ok",
+      "dataset": "/Users/safoineelkhabich/work/zenml-io/deep-research/evals/datasets/render_quality.json"
+    }
+  ],
+  "total_suites": 3,
+  "total_cases": 9,
+  "failed_cases": 0,
+  "skipped_suites": 0,
+  "status": "ok"
+}
