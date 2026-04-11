@@ -30,15 +30,19 @@ def _load_research_flow_module():
     loads the module under lightweight stand-ins instead of the full runtime stack.
     """
 
-    def checkpoint(*, type):
-        def decorator(func):
-            func._checkpoint_type = type
-            func.submit = lambda *args, **kwargs: types.SimpleNamespace(
-                load=lambda: func(*args, **kwargs)
-            )
-            return func
+    def checkpoint(func=None, *, type=None, retries=0, runtime=None):
+        """Stub matching kitaru's overloaded ``@checkpoint`` / ``@checkpoint(...)``."""
 
-        return decorator
+        def _wrap(target):
+            target._checkpoint_type = type
+            target.submit = lambda *args, **kwargs: types.SimpleNamespace(
+                load=lambda: target(*args, **kwargs)
+            )
+            return target
+
+        if func is not None:
+            return _wrap(func)
+        return _wrap
 
     def flow(func):
         def run(*args, **kwargs):

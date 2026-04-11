@@ -4,9 +4,9 @@ These helpers stay Kitaru-free so lazy package IO can materialize renders withou
 importing checkpoint-decorated modules. Checkpoint wrappers should live elsewhere.
 """
 
-import json
 import re
 
+from deep_research.agent_io import serialize_prompt_payload
 from deep_research.config import ModelPricing
 from deep_research.enums import DeliverableMode
 from deep_research.flow.costing import budget_from_agent_result
@@ -25,12 +25,7 @@ def prompt_for_mode(
     base_prompt_name: str,
     preferences: ResearchPreferences | None,
 ) -> str:
-    """Load the writer prompt, optionally prepending preferences context.
-
-    For research_package mode or when no preferences exist, the base prompt is
-    returned unchanged.  For other modes, a preamble derived from preferences is
-    prepended so the writer LLM adapts its output structure.
-    """
+    """Load trusted mode-specific guidance for writer materialization."""
     base_prompt = load_prompt(base_prompt_name)
     if preferences is None:
         return base_prompt
@@ -81,14 +76,19 @@ def materialize_render_payload(
 
     agent = build_writer_agent(writer_model)
     prompt = {
-        "render_prompt": prompt_for_mode(prompt_name, preferences),
-        "render_name": scaffold.name,
-        "citation_map": scaffold.citation_map,
-        "structured_content": scaffold.structured_content,
+        "trusted_render_guidance": prompt_for_mode(prompt_name, preferences),
+        "trusted_context": {
+            "render_name": scaffold.name,
+            "citation_map": scaffold.citation_map,
+            "preferences": (
+                preferences.model_dump(mode="json") if preferences is not None else None
+            ),
+        },
+        "untrusted_render_input": scaffold.structured_content,
     }
-    if preferences is not None:
-        prompt["preferences"] = preferences.model_dump(mode="json")
-    result = agent.run_sync(json.dumps(prompt, indent=2))
+    result = agent.run_sync(
+        serialize_prompt_payload(prompt, label="writer render payload")
+    )
     render = scaffold.model_copy(
         update={"content_markdown": result.output.content_markdown}
     )

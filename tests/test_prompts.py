@@ -8,6 +8,22 @@ from deep_research.prompts.loader import load_prompt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PROMPT_NAMES = [
+    "aggregator",
+    "classifier",
+    "curator",
+    "judge_coherence",
+    "judge_grounding",
+    "planner",
+    "question_generator",
+    "relevance_scorer",
+    "reviewer",
+    "supervisor",
+    "writer",
+    "writer_backing_report",
+    "writer_full_report",
+    "writer_reading_path",
+]
 
 
 def test_load_prompt_returns_markdown_contents() -> None:
@@ -25,6 +41,14 @@ def test_load_writer_prompts_returns_expected_contents() -> None:
     assert "ordered reading guide" in reading_path_prompt.lower()
     assert "analytical backing report" in backing_report_prompt.lower()
     assert "sectioned final report" in full_report_prompt.lower()
+
+
+def test_prompt_corpus_includes_trust_model_language() -> None:
+    for name in PROMPT_NAMES:
+        prompt = load_prompt(name).lower()
+        assert "trusted" in prompt, f"missing trusted guidance in {name}"
+        assert "untrusted" in prompt, f"missing untrusted guidance in {name}"
+        assert "instruction" in prompt, f"missing instruction guidance in {name}"
 
 
 def test_load_prompt_rejects_unknown_name() -> None:
@@ -71,6 +95,7 @@ def test_load_prompt_from_installed_wheel(tmp_path) -> None:
                 "from deep_research.prompts.loader import load_prompt; "
                 'prompt = load_prompt("planner"); '
                 'assert "research" in prompt.lower(); '
+                'assert "trusted" in prompt.lower(); '
                 'assert "ordered reading guide" in load_prompt("writer_reading_path").lower(); '
                 'assert "analytical backing report" in load_prompt("writer_backing_report").lower(); '
                 'assert "sectioned final report" in load_prompt("writer_full_report").lower()'

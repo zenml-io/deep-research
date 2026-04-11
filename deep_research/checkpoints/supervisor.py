@@ -1,3 +1,5 @@
+import inspect
+
 from kitaru import checkpoint
 
 from deep_research.agent_io import (
@@ -144,11 +146,16 @@ def execute_supervisor_turn(
         allow_supervisor_bash=config.allow_supervisor_bash,
         enabled_provider_count=len(config.enabled_providers),
     ):
-        collector = ToolResultCollector()
-        # Try hook-based approach; fall back to message scraping
-        try:
+        serialized_prompt = serialize_prompt_payload(
+            prompt, label="supervisor prompt payload"
+        )
+        sig = inspect.signature(agent.run_sync)
+        supports_hooks = "hooks" in sig.parameters
+
+        if supports_hooks:
+            collector = ToolResultCollector()
             result = agent.run_sync(
-                serialize_prompt_payload(prompt, label="supervisor prompt payload"),
+                serialized_prompt,
                 hooks={"after_tool_call": collector.hook},
             )
             raw_results = collector.results
@@ -157,11 +164,8 @@ def execute_supervisor_turn(
                 tool_return_part_count=collector.call_count,
                 normalized_result_count=len(collector.results),
             )
-        except TypeError:
-            # Hooks not supported in this PydanticAI version; fall back
-            result = agent.run_sync(
-                serialize_prompt_payload(prompt, label="supervisor prompt payload")
-            )
+        else:
+            result = agent.run_sync(serialized_prompt)
             raw_results, trace_stats = extract_mcp_raw_results_with_stats(result)
 
     if trace_stats.warnings:

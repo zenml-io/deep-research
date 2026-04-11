@@ -7,10 +7,13 @@ from deep_research.config import ResearchConfig
 from deep_research.enums import StopReason, Tier
 from deep_research.models import (
     CoherenceCheckpointResult,
+    CoherenceResult,
     CoverageScore,
     CritiqueCheckpointResult,
+    CritiqueResult,
     EvidenceLedger,
     GroundingCheckpointResult,
+    GroundingResult,
     IterationBudget,
     RawToolResult,
     RenderCheckpointResult,
@@ -24,6 +27,7 @@ from deep_research.models import (
     SelectionGraph,
     SupervisorDecision,
     SupervisorCheckpointResult,
+    ToolCallRecord,
 )
 
 
@@ -72,16 +76,22 @@ def _load_research_flow_module():
         def wait(self):
             return self._value
 
-    def checkpoint(*, type):
-        def decorator(func):
-            func._checkpoint_type = type
+    def _wrap_as_checkpoint(func):
+        def submit(*args, after=None, id=None, **kwargs):
+            result = func(*args, **kwargs)
+            return types.SimpleNamespace(load=lambda: result)
 
-            def submit(*args, after=None, id=None, **kwargs):
-                result = func(*args, **kwargs)
-                return types.SimpleNamespace(load=lambda: result)
+        func.submit = submit
+        return func
 
-            func.submit = submit
-            return func
+    def checkpoint(func=None, *, type=None, retries=0, runtime=None):
+        """Stub matching kitaru's overloaded ``@checkpoint`` / ``@checkpoint(...)``."""
+        if func is not None:
+            return _wrap_as_checkpoint(func)
+
+        def decorator(target):
+            target._checkpoint_type = type
+            return _wrap_as_checkpoint(target)
 
         return decorator
 
@@ -103,8 +113,10 @@ def _load_research_flow_module():
             pydantic_ai=types.SimpleNamespace(wrap=lambda agent, **kwargs: agent)
         )
         sys.modules["pydantic_ai"] = types.SimpleNamespace(Agent=object)
+        sys.modules.pop("deep_research.flow._pipeline", None)
         sys.modules.pop("deep_research.flow.research_flow", None)
         sys.modules.pop("deep_research.checkpoints.council", None)
+        sys.modules.pop("deep_research.checkpoints.metadata", None)
         return importlib.import_module("deep_research.flow.research_flow")
 
 
@@ -246,7 +258,7 @@ def _patch_success_path(module, monkeypatch) -> None:
         "critique_reports",
         _as_checkpoint(
             lambda *args, **kwargs: CritiqueCheckpointResult(
-                critique=module.CritiqueResult(
+                critique=CritiqueResult(
                     dimensions=[],
                     summary="critique",
                     revision_suggestions=[],
@@ -266,7 +278,7 @@ def _patch_success_path(module, monkeypatch) -> None:
         "verify_grounding",
         _as_checkpoint(
             lambda *args, **kwargs: GroundingCheckpointResult(
-                grounding=module.GroundingResult(score=1.0, verdicts=[]),
+                grounding=GroundingResult(score=1.0, verdicts=[]),
                 budget=IterationBudget(),
             )
         ),
@@ -276,7 +288,7 @@ def _patch_success_path(module, monkeypatch) -> None:
         "verify_coherence",
         _as_checkpoint(
             lambda *args, **kwargs: CoherenceCheckpointResult(
-                coherence=module.CoherenceResult(
+                coherence=CoherenceResult(
                     relevance=1.0,
                     logical_flow=1.0,
                     completeness=1.0,
@@ -333,7 +345,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         "critique_reports",
         _as_checkpoint(
             lambda *args, **kwargs: CritiqueCheckpointResult(
-                critique=module.CritiqueResult(
+                critique=CritiqueResult(
                     dimensions=[],
                     summary="critique",
                     revision_suggestions=["tighten"],
@@ -353,7 +365,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         "verify_grounding",
         _as_checkpoint(
             lambda *args, **kwargs: GroundingCheckpointResult(
-                grounding=module.GroundingResult(score=1.0, verdicts=[]),
+                grounding=GroundingResult(score=1.0, verdicts=[]),
                 budget=IterationBudget(estimated_cost_usd=0.3),
             )
         ),
@@ -363,7 +375,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
         "verify_coherence",
         _as_checkpoint(
             lambda *args, **kwargs: CoherenceCheckpointResult(
-                coherence=module.CoherenceResult(
+                coherence=CoherenceResult(
                     relevance=1.0,
                     logical_flow=1.0,
                     completeness=1.0,
@@ -390,7 +402,7 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     assert record.coverage_delta == 1.0
     assert record.uncovered_subtopics == []
     assert record.tool_calls == [
-        module.ToolCallRecord(
+        ToolCallRecord(
             tool_name="search",
             status="ok",
             provider="test",
@@ -554,13 +566,13 @@ def test_research_flow_combines_supervisor_and_builtin_search_results(
         "semantic_scholar": 1,
     }
     assert result.iteration_trace.iterations[0].tool_calls == [
-        module.ToolCallRecord(
+        ToolCallRecord(
             tool_name="mcp_search",
             status="ok",
             provider="openai",
             summary="mcp_search via openai succeeded",
         ),
-        module.ToolCallRecord(
+        ToolCallRecord(
             tool_name="provider_search",
             status="ok",
             provider="semantic_scholar",

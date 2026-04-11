@@ -13,6 +13,7 @@ def build_supervisor_surface(
     *,
     uncovered_subtopics: list[str] | None,
     tool_timeout_sec: int,
+    allow_bash_tool: bool = False,
     mcp_servers: list[MCPServerConfig] | None = None,
 ) -> tuple[list[Any], list[Any]]:
     """Build the direct provider surface for supervisor execution."""
@@ -28,11 +29,16 @@ def build_supervisor_surface(
             return list(uncovered_subtopics)
         return read_gaps(plan, ledger)
 
-    def run_bash_tool(command: str) -> RawToolResult:
-        """Execute an allow-listed shell command and return stdout/stderr."""
-        return run_bash(command, timeout_sec=tool_timeout_sec)
+    tools = [read_plan_tool, read_gaps_tool]
 
-    tools = [read_plan_tool, read_gaps_tool, run_bash_tool]
+    if allow_bash_tool:
+
+        def run_bash_tool(command: str) -> RawToolResult:
+            """Execute an allow-listed shell command and return stdout/stderr."""
+            return run_bash(command, timeout_sec=tool_timeout_sec)
+
+        tools.append(run_bash_tool)
+
     return toolsets, tools
 
 

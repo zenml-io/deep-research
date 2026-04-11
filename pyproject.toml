@@ -10,9 +10,15 @@ dependencies = [
   "kitaru",
   "pydantic>=2",
   "pydantic-ai",
+  "logfire",
   "pydantic-settings",
   "httpx>=0.27",
   "arxiv>=2.1.3",
+]
+
+[project.optional-dependencies]
+evals = [
+  "pydantic-evals[logfire]",
 ]
 
 [tool.setuptools.packages.find]

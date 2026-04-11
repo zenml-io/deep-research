@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 
@@ -98,8 +99,11 @@ def test_render_reading_path_checkpoint_materializes_writer_prose(monkeypatch) -
         "deep_research.renderers.materialization"
     )
 
+    captured = {}
+
     class FakeAgent:
         def run_sync(self, prompt):
+            captured["prompt"] = json.loads(prompt)
             return types.SimpleNamespace(
                 output=RenderProse(content_markdown="# Reading Path\n\nUse [1].")
             )
@@ -124,6 +128,15 @@ def test_render_reading_path_checkpoint_materializes_writer_prose(monkeypatch) -
 
     assert result.render.content_markdown.startswith("# Reading Path")
     assert result.render.citation_map == {"[1]": "source-1"}
+    assert captured["prompt"]["trusted_render_guidance"] == "prompt:writer_reading_path"
+    assert captured["prompt"]["trusted_context"]["render_name"] == "reading_path"
+    assert captured["prompt"]["trusted_context"]["citation_map"] == {"[1]": "source-1"}
+    assert captured["prompt"]["untrusted_render_input"]["goal"] == "Explain the topic"
+    assert captured["prompt"]["untrusted_render_input"]["key_questions"] == ["What changed?"]
+    assert captured["prompt"]["untrusted_render_input"]["gap_coverage_summary"] == []
+    assert captured["prompt"]["untrusted_render_input"]["items"][0]["candidate_key"] == "source-1"
+    assert captured["prompt"]["untrusted_render_input"]["items"][0]["rationale"] == "Start here"
+    assert captured["prompt"]["untrusted_render_input"]["items"][0]["citation"] == "[1]"
 
 
 def test_render_checkpoint_uses_writer_pricing_for_budget(monkeypatch) -> None:

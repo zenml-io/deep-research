@@ -157,3 +157,19 @@ def test_tool_result_collector_handles_multiple_calls() -> None:
     assert collector.results[0] is raw1
     assert collector.results[1] is raw2
     assert collector.call_count == 3
+
+
+def test_tool_result_collector_handles_flat_shape_results() -> None:
+    collector = ToolResultCollector()
+    flat_result = {
+        "results": [{"title": "test"}],
+        "source_kind": "web",
+        "provider": "tavily",
+    }
+
+    collector.hook("search", flat_result)
+
+    assert len(collector.results) == 1
+    assert collector.results[0].tool_name == "search"
+    assert collector.results[0].provider == "tavily"
+    assert collector.results[0].payload == flat_result

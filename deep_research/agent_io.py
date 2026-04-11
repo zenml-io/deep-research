@@ -48,6 +48,18 @@ class ToolResultCollector:
                         error=mapping.get("error"),
                     )
                 )
+                return
+            # Flat shapes: {"results": [...], "source_kind": "web"} etc.
+            if any(key in mapping for key in ("results", "items", "source_kind")):
+                self.results.append(
+                    RawToolResult(
+                        tool_name=str(mapping.get("tool_name") or tool_name),
+                        provider=str(mapping.get("provider") or "mcp"),
+                        payload=dict(mapping),
+                        ok=bool(mapping.get("ok", True)),
+                        error=mapping.get("error"),
+                    )
+                )
 
 
 def serialize_prompt_payload(payload: object, *, label: str = "agent prompt") -> str:

@@ -655,9 +655,15 @@ dependencies = [
     { name = "arxiv" },
     { name = "httpx" },
     { name = "kitaru" },
+    { name = "logfire" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
+]
+
+[package.optional-dependencies]
+evals = [
+    { name = "pydantic-evals", extra = ["logfire"] },
 ]
 
 [package.metadata]
@@ -665,10 +671,13 @@ requires-dist = [
     { name = "arxiv", specifier = ">=2.1.3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "kitaru" },
+    { name = "logfire" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-ai" },
+    { name = "pydantic-evals", extras = ["logfire"], marker = "extra == 'evals'" },
     { name = "pydantic-settings" },
 ]
+provides-extras = ["evals"]
 
 [[package]]
 name = "distro"
@@ -2461,6 +2470,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/45/45/8d28e7d5d47f32602fb80df311705f7719e2fd79b3cfd36dcc1019e3bba6/pydantic_evals-1.31.0.tar.gz", hash = "sha256:c339f12900cce4a1b9cd532f185601f624da49776b5d226f3f2d429f34440929", size = 47164, upload-time = "2025-12-12T00:46:37.442Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/ad/cf77dde7ad2653b5156f70567074e6e385ca00ba7d44c83fc649c25904e4/pydantic_evals-1.31.0-py3-none-any.whl", hash = "sha256:0d0e9e120cb40311fc7776c1433ad3281493ed4b06f43af33cc0ef4a19d7b86d", size = 56341, upload-time = "2025-12-12T00:46:29.155Z" },
+]
+
+[package.optional-dependencies]
+logfire = [
+    { name = "logfire" },
 ]
 
 [[package]]

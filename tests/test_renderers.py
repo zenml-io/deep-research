@@ -42,16 +42,22 @@ def _install_kitaru_stub() -> None:
     helpers, so these stubs avoid pulling in the real runtime integration stack.
     """
 
-    def checkpoint(*, type):
-        def decorator(func):
-            func._checkpoint_type = type
+    def _wrap_as_checkpoint(func):
+        def submit(*args, after=None, id=None, **kwargs):
+            result = func(*args, **kwargs)
+            return types.SimpleNamespace(load=lambda: result)
 
-            def submit(*args, after=None, id=None, **kwargs):
-                result = func(*args, **kwargs)
-                return types.SimpleNamespace(load=lambda: result)
+        func.submit = submit
+        return func
 
-            func.submit = submit
-            return func
+    def checkpoint(func=None, *, type=None, retries=0, runtime=None):
+        """Stub matching kitaru's overloaded ``@checkpoint`` / ``@checkpoint(...)``."""
+        if func is not None:
+            return _wrap_as_checkpoint(func)
+
+        def decorator(target):
+            target._checkpoint_type = type
+            return _wrap_as_checkpoint(target)
 
         return decorator
 
@@ -98,6 +104,8 @@ def _load_module(module_name: str):
     with _preserve_modules("kitaru", "kitaru.adapters", "pydantic_ai"):
         _install_kitaru_stub()
         sys.modules.pop(module_name, None)
+        sys.modules.pop("deep_research.flow._pipeline", None)
+        sys.modules.pop("deep_research.flow.research_flow", None)
         # Clear checkpoint modules so they get re-imported with the stub decorator
         for key in list(sys.modules):
             if key.startswith("deep_research.checkpoints."):

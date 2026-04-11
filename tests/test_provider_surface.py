@@ -23,6 +23,7 @@ def test_build_supervisor_surface_returns_local_tools_and_mcp_toolsets() -> None
         EvidenceLedger(entries=[]),
         uncovered_subtopics=["status"],
         tool_timeout_sec=45,
+        allow_bash_tool=True,
         mcp_servers=[MCPServerConfig(id="brave", factory=lambda: sentinel_toolset)],
     )
 
@@ -31,6 +32,20 @@ def test_build_supervisor_surface_returns_local_tools_and_mcp_toolsets() -> None
         "read_plan_tool",
         "read_gaps_tool",
         "run_bash_tool",
+    }
+
+
+def test_build_supervisor_surface_excludes_bash_tool_by_default() -> None:
+    _, tools = build_supervisor_surface(
+        _sample_plan(),
+        EvidenceLedger(entries=[]),
+        uncovered_subtopics=["status"],
+        tool_timeout_sec=45,
+    )
+
+    assert {tool.__name__ for tool in tools} == {
+        "read_plan_tool",
+        "read_gaps_tool",
     }
 
 

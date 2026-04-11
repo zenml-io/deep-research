@@ -199,6 +199,7 @@ All settings use the `RESEARCH_` prefix and are loaded via Pydantic Settings.
 | `RESEARCH_CONVERGENCE_MIN_COVERAGE` | `0.60` | Minimum acceptable coverage |
 | `RESEARCH_CONVERGENCE_EPSILON` | `0.05` | Minimum coverage delta to continue |
 | `RESEARCH_MAX_TOOL_CALLS_PER_CYCLE` | `5` | Max tool calls per iteration |
+| `RESEARCH_ALLOW_SUPERVISOR_BASH` | `false` | Opt-in exposure of the local `run_bash` supervisor tool |
 | `RESEARCH_ENABLED_PROVIDERS` | `arxiv,semantic_scholar` | Built-in search providers |
 
 ### Provider API Keys
@@ -214,6 +215,19 @@ At least one LLM provider key must be configured. Built-in search providers (arX
 | Exa | `EXA_API_KEY` | No |
 | Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | No |
 
+## Observability
+
+Logfire bootstrap is enabled automatically at runtime when the `logfire` SDK is installed. The engine configures Logfire with `include_content=True` for PydanticAI spans and extra scrubbing patterns for common credential fields, then falls back cleanly if Logfire is unavailable.
+
+To send traces to Logfire locally, authenticate and select a project:
+
+```bash
+uv run logfire auth
+uv run logfire projects use
+```
+
+Note: per the official Logfire docs, scrubbing does **not** redact PydanticAI message-content attributes such as prompts, completions, and tool-call content. Because this slice intentionally enables content capture, only use it in environments where that content is acceptable to export.
+
 ## Testing
 
 ```bash
@@ -221,6 +235,60 @@ uv run pytest tests/ -v
 ```
 
 265 tests covering models, evidence pipeline, convergence logic, checkpoints, renderers, agent factories, flow orchestration, and real agent behavior with PydanticAI's `TestModel`.
+
+## Offline Eval Harness (Foundation)
+
+The offline eval harness lives in top-level `evals/` and is intentionally separate from runtime package code.
+
+- Install eval-only dependencies:
+
+```bash
+uv sync --extra evals
+```
+
+- Run baseline suites (all three):
+
+```bash
+uv run python -m evals.runner
+```
+
+- Run a single suite:
+
+```bash
+uv run python -m evals.runner --suite brief_to_plan
+```
+
+- Write a baseline artifact for later comparison:
+
+```bash
+uv run python -m evals.runner --write-baseline
+```
+
+This writes timestamped JSON and `artifacts/evals/baseline-latest.json`.
+
+- Enable opt-in `LLMJudge` scoring on top of deterministic checks:
+
+```bash
+uv run python -m evals.runner --use-llm-judge
+```
+
+- Override the judge model or concurrency:
+
+```bash
+uv run python -m evals.runner --use-llm-judge --judge-model openai:gpt-4o-mini --judge-max-concurrency 2
+```
+
+- Export judge runs to Logfire for trace inspection:
+
+```bash
+LOGFIRE_TOKEN=... uv run python -m evals.runner --use-llm-judge --enable-logfire
+```
+
+When Logfire is enabled, eval traces are emitted with service name `deep-research-evals`, so failed cases can be inspected in the Logfire UI with their evaluation metadata and any task spans produced during the run.
+
+If `pydantic-evals` is not installed, suites degrade to native checks and print guidance (`uv sync --extra evals`) instead of failing unrelated tests. If `LLMJudge` mode is requested without the extra installed, the runner reports `judge_mode: skipped_unavailable` and keeps deterministic results intact.
+
+By default, `pytest` still targets `tests/` only. Live eval execution is not part of default test runs.
 
 ## Design Principles
 
