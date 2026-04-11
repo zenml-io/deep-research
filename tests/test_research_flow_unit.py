@@ -20,6 +20,7 @@ from deep_research.models import (
     ResearchPlan,
     ResearchPreferences,
     RelevanceCheckpointResult,
+    RevisionCheckpointResult,
     SearchAction,
     SearchExecutionResult,
     SelectionGraph,
@@ -259,7 +260,11 @@ def test_research_flow_uses_council_path_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -555,7 +560,11 @@ def test_research_flow_recomputes_tier_after_clarification(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -716,7 +725,11 @@ def test_research_flow_rebuilds_default_config_after_clarification_tier_change(
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -1807,7 +1820,11 @@ def test_research_flow_runs_critique_and_judges_when_enabled(monkeypatch) -> Non
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -3023,7 +3040,11 @@ def test_research_flow_replan_gate_triggers_on_stall(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,

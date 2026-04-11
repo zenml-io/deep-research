@@ -22,6 +22,7 @@ from deep_research.models import (
     ResearchPreferences,
     RelevanceCheckpointResult,
     RequestClassification,
+    RevisionCheckpointResult,
     SearchAction,
     SearchExecutionResult,
     SelectionGraph,
@@ -271,7 +272,11 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -358,7 +363,11 @@ def test_research_flow_returns_package(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "apply_revisions",
-        _as_checkpoint(lambda renders, critique, plan: renders),
+        _as_checkpoint(
+            lambda renders, critique, plan, config: RevisionCheckpointResult(
+                renders=renders
+            )
+        ),
     )
     monkeypatch.setattr(
         module,

@@ -18,6 +18,7 @@ from deep_research.models import (
     IterationBudget,
     IterationTrace,
     RawToolResult,
+    RenderProse,
     RequestClassification,
     RenderPayload,
     ResearchPlan,
@@ -189,6 +190,10 @@ def _install_agent_builder_stubs(monkeypatch):
         consistency=0.95,
         summary="Coherent overall.",
     )
+    writer_output = RenderProse(
+        content_markdown="# Revised Content\nRevised based on critique.",
+        render_label="revised",
+    )
 
     def build_factory(output, bucket):
         def builder(model_name, *args, **kwargs):
@@ -205,6 +210,7 @@ def _install_agent_builder_stubs(monkeypatch):
     reviewer_calls = []
     grounding_calls = []
     coherence_calls = []
+    writer_calls = []
 
     monkeypatch.setitem(
         sys.modules,
@@ -262,6 +268,13 @@ def _install_agent_builder_stubs(monkeypatch):
             ),
         ),
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.writer",
+        types.SimpleNamespace(
+            build_writer_agent=build_factory(writer_output, writer_calls)
+        ),
+    )
 
     return {
         "run_calls": calls,
@@ -273,6 +286,7 @@ def _install_agent_builder_stubs(monkeypatch):
         "reviewer_calls": reviewer_calls,
         "grounding_calls": grounding_calls,
         "coherence_calls": coherence_calls,
+        "writer_calls": writer_calls,
     }
 
 
@@ -887,11 +901,13 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
         EvidenceLedger(entries=[]),
         config,
     )
-    revised = revise_module.apply_revisions(
+    revision_result = revise_module.apply_revisions(
         renders,
         critique_result.critique,
         _sample_plan(),
+        config,
     )
+    revised = revision_result.renders
     grounding_result = grounding_module.verify_grounding(
         revised,
         EvidenceLedger(entries=[]),
@@ -905,8 +921,13 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
 
     assert critique_result.critique.summary == "Review summary"
     assert critique_result.budget.estimated_cost_usd == 0.0
+    assert revision_result.budget.estimated_cost_usd == 0.0
     assert revised[0].name == "reading_path"
+    assert (
+        revised[0].content_markdown == "# Revised Content\nRevised based on critique."
+    )
     assert revised[0].structured_content["critique_summary"] == "Review summary"
+    assert revised[0].structured_content["revision_applied"] is True
     assert grounding_result.grounding.score == 1.0
     assert grounding_result.budget.estimated_cost_usd == 0.0
     assert coherence_result.coherence.summary == "Coherent overall."
@@ -921,7 +942,7 @@ def test_review_and_judge_checkpoints_use_configured_models(monkeypatch) -> None
         {"model_name": "judge-model", "args": (), "kwargs": {}}
     ]
     assert ("critique_reports", "llm_call") in decorated
-    assert ("apply_revisions", "tool_call") in decorated
+    assert ("apply_revisions", "llm_call") in decorated
     assert ("verify_grounding", "llm_call") in decorated
     assert ("verify_coherence", "llm_call") in decorated
 

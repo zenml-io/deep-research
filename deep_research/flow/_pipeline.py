@@ -557,11 +557,16 @@ def run_critique_if_enabled(
         renders, plan, selection, ledger, config
     ).load()
     critique_result = critique_checkpoint.critique
-    revised = flow.apply_revisions.submit(renders, critique_result, plan).load()
+    revision_checkpoint = flow.apply_revisions.submit(
+        renders, critique_result, plan, config
+    ).load()
     return CritiqueBundle(
-        renders=revised,
+        renders=revision_checkpoint.renders,
         critique_result=critique_result,
-        spent_usd=critique_checkpoint.budget.estimated_cost_usd,
+        spent_usd=(
+            critique_checkpoint.budget.estimated_cost_usd
+            + revision_checkpoint.budget.estimated_cost_usd
+        ),
     )
 
 

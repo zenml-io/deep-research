@@ -454,6 +454,11 @@ class RenderProse(StrictBaseModel):
     )
 
 
+class RevisionCheckpointResult(StrictBaseModel):
+    renders: list[RenderPayload]
+    budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+
+
 class RenderCheckpointResult(StrictBaseModel):
     render: RenderPayload
     budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
