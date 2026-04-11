@@ -1,19 +1,24 @@
-import json
-from collections.abc import Mapping
-
 from kitaru import checkpoint
 
+from deep_research.agent_io import (
+    ToolResultCollector,
+    ToolTraceExtractionStats,
+    extract_tool_results,
+    extract_tool_results_with_stats,
+    serialize_prompt_payload,
+)
 from deep_research.config import ModelPricing, ResearchConfig
 from deep_research.enums import DeliverableMode, PlanningMode
 from deep_research.flow.costing import budget_from_agent_result
-from deep_research.models import ResearchPreferences
-from deep_research.providers import build_supervisor_surface
 from deep_research.models import (
     EvidenceLedger,
     RawToolResult,
     ResearchPlan,
+    ResearchPreferences,
     SupervisorCheckpointResult,
 )
+from deep_research.observability import bootstrap_logfire, span, warning
+from deep_research.providers import build_supervisor_surface
 
 
 def build_supervisor_guidance(preferences: ResearchPreferences) -> str:
@@ -80,52 +85,13 @@ def build_supervisor_guidance(preferences: ResearchPreferences) -> str:
 
 
 def extract_mcp_raw_results(result: object) -> list[RawToolResult]:
-    raw_results: list[RawToolResult] = []
-    all_messages = getattr(result, "all_messages", None)
-    if not callable(all_messages):
-        return raw_results
+    return extract_tool_results(result)
 
-    for message in all_messages():
-        for part in getattr(message, "parts", []):
-            if getattr(part, "part_kind", None) != "tool-return":
-                continue
-            content = getattr(part, "content", None)
-            if isinstance(content, RawToolResult):
-                raw_results.append(content)
-                continue
-            if not isinstance(content, Mapping):
-                continue
 
-            payload = content.get("payload")
-            if isinstance(payload, Mapping):
-                raw_results.append(
-                    RawToolResult(
-                        tool_name=str(
-                            content.get("tool_name")
-                            or getattr(part, "tool_name", "tool")
-                        ),
-                        provider=str(content.get("provider") or "mcp"),
-                        payload=dict(payload),
-                        ok=bool(content.get("ok", True)),
-                        error=content.get("error"),
-                    )
-                )
-                continue
-
-            if "results" in content or "items" in content or "source_kind" in content:
-                raw_results.append(
-                    RawToolResult(
-                        tool_name=str(
-                            content.get("tool_name")
-                            or getattr(part, "tool_name", "tool")
-                        ),
-                        provider=str(content.get("provider") or "mcp"),
-                        payload=dict(content),
-                        ok=bool(content.get("ok", True)),
-                        error=content.get("error"),
-                    )
-                )
-    return raw_results
+def extract_mcp_raw_results_with_stats(
+    result: object,
+) -> tuple[list[RawToolResult], ToolTraceExtractionStats]:
+    return extract_tool_results_with_stats(result)
 
 
 def execute_supervisor_turn(
@@ -139,6 +105,8 @@ def execute_supervisor_turn(
 ) -> SupervisorCheckpointResult:
     from deep_research.agents.supervisor import build_supervisor_agent
 
+    bootstrap_logfire()
+
     if uncovered_subtopics is None:
         uncovered_subtopics = list(plan.subtopics)
     toolsets, tools = build_supervisor_surface(
@@ -146,6 +114,7 @@ def execute_supervisor_turn(
         ledger,
         uncovered_subtopics=uncovered_subtopics,
         tool_timeout_sec=config.tool_timeout_sec,
+        allow_bash_tool=config.allow_supervisor_bash,
     )
     agent = build_supervisor_agent(
         config.supervisor_model,
@@ -161,16 +130,55 @@ def execute_supervisor_turn(
         "max_tool_calls": config.max_tool_calls_per_cycle,
         "tool_timeout_sec": config.tool_timeout_sec,
         "enabled_providers": config.enabled_providers,
+        "allow_supervisor_bash": config.allow_supervisor_bash,
     }
     if brief is not None:
         prompt["user_brief"] = brief
     if preferences is not None:
         prompt["preferences"] = preferences.model_dump(mode="json")
         prompt["guidance"] = build_supervisor_guidance(preferences)
-    result = agent.run_sync(json.dumps(prompt, indent=2))
+
+    with span(
+        "supervisor turn",
+        iteration=iteration,
+        allow_supervisor_bash=config.allow_supervisor_bash,
+        enabled_provider_count=len(config.enabled_providers),
+    ):
+        collector = ToolResultCollector()
+        # Try hook-based approach; fall back to message scraping
+        try:
+            result = agent.run_sync(
+                serialize_prompt_payload(prompt, label="supervisor prompt payload"),
+                hooks={"after_tool_call": collector.hook},
+            )
+            raw_results = collector.results
+            trace_stats = ToolTraceExtractionStats(
+                trace_available=True,
+                tool_return_part_count=collector.call_count,
+                normalized_result_count=len(collector.results),
+            )
+        except TypeError:
+            # Hooks not supported in this PydanticAI version; fall back
+            result = agent.run_sync(
+                serialize_prompt_payload(prompt, label="supervisor prompt payload")
+            )
+            raw_results, trace_stats = extract_mcp_raw_results_with_stats(result)
+
+    if trace_stats.warnings:
+        warning(
+            "Supervisor tool trace extraction degraded",
+            iteration=iteration,
+            trace_available=trace_stats.trace_available,
+            message_count=trace_stats.message_count,
+            tool_return_part_count=trace_stats.tool_return_part_count,
+            normalized_result_count=trace_stats.normalized_result_count,
+            dropped_part_count=trace_stats.dropped_part_count,
+            warnings=trace_stats.warnings,
+        )
+
     return SupervisorCheckpointResult(
         decision=result.output,
-        raw_results=extract_mcp_raw_results(result),
+        raw_results=raw_results,
         budget=budget_from_agent_result(
             result,
             ModelPricing.model_validate(config.supervisor_pricing),
