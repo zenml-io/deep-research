@@ -406,17 +406,30 @@ def run_iteration_loop(
                     plan, coverage, list(iteration_history), config
                 ).load()
                 if replan_decision.should_replan:
+                    updates: dict[str, object] = {}
                     if replan_decision.updated_subtopics:
-                        plan = plan.model_copy(
-                            update={"subtopics": replan_decision.updated_subtopics}
-                        )
+                        updates["subtopics"] = replan_decision.updated_subtopics
                     if replan_decision.updated_queries:
-                        plan = plan.model_copy(
-                            update={"queries": replan_decision.updated_queries}
-                        )
+                        updates["queries"] = replan_decision.updated_queries
+                    if updates:
+                        plan = plan.model_copy(update=updates)
                     uncovered_subtopics = list(coverage.uncovered_subtopics)
                     _replans_used += 1
+                    flow.log(
+                        replan_triggered=True,
+                        replan_number=_replans_used,
+                        rationale=replan_decision.rationale,
+                        updated_subtopics=bool(replan_decision.updated_subtopics),
+                        updated_queries=bool(replan_decision.updated_queries),
+                        iteration=iteration,
+                    )
                     continue
+                else:
+                    flow.log(
+                        replan_triggered=False,
+                        rationale=replan_decision.rationale,
+                        iteration=iteration,
+                    )
             # Fall back to MAX_ITERATIONS if the decision didn't name a reason.
             stop_reason = decision_stop.reason or StopReason.MAX_ITERATIONS
             break
