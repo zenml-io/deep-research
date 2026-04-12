@@ -1,14 +1,17 @@
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from deep_research.config import ResearchConfig
 from deep_research.enums import Tier
 from deep_research.models import SearchAction
 from deep_research.providers.search import ProviderRegistry
+from deep_research.providers.search._http import RetryPolicy, request_with_retry
 from deep_research.providers.search.arxiv_provider import ArxivSearchProvider
 from deep_research.providers.search.brave import BraveSearchProvider
 from deep_research.providers.search.exa_provider import ExaSearchProvider
+from deep_research.providers.search.fetcher import fetch_url_content
 from deep_research.providers.search.semantic_scholar import SemanticScholarProvider
 
 
@@ -90,6 +93,100 @@ def test_brave_provider_maps_results_into_raw_tool_result(monkeypatch) -> None:
     assert results[0].provider == "brave"
     assert results[0].payload["source_kind"] == "web"
     assert results[0].payload["results"][0]["title"] == "Brave result"
+
+
+def test_request_with_retry_retries_retryable_status_codes(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.request = httpx.Request("GET", "https://example.com")
+
+        def raise_for_status(self) -> None:
+            if self.status_code < 400:
+                return None
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=self.request,
+                response=response,
+            )
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get(self, url: str, **kwargs):
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(503, {"attempt": 1})
+            return FakeResponse(200, {"attempt": 2})
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+
+    client = FakeClient()
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://example.com",
+        retry_policy=RetryPolicy(max_retries=3, backoff_base_seconds=0.5),
+    )
+
+    assert response.json()["attempt"] == 2
+    assert client.calls == 2
+    assert delays == [0.5]
+
+
+def test_request_with_retry_stops_on_non_retryable_status_code(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.request = httpx.Request("GET", "https://example.com")
+
+        def raise_for_status(self) -> None:
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "bad request",
+                request=self.request,
+                response=response,
+            )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get(self, url: str, **kwargs):
+            del kwargs
+            self.calls += 1
+            return FakeResponse(400)
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+
+    client = FakeClient()
+    with pytest.raises(httpx.HTTPStatusError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://example.com",
+            retry_policy=RetryPolicy(max_retries=3, backoff_base_seconds=0.5),
+        )
+
+    assert client.calls == 1
+    assert delays == []
 
 
 def test_arxiv_provider_maps_results_into_raw_tool_result(monkeypatch) -> None:
@@ -202,6 +299,55 @@ def test_arxiv_provider_normalizes_library_failures(monkeypatch) -> None:
     assert "arxiv unavailable" in results[0].error
 
 
+def test_arxiv_provider_retries_client_results_iteration(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeAuthor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class FakePaper:
+        title = "Arxiv paper"
+        entry_id = "https://arxiv.org/abs/2401.00001"
+        summary = "Paper summary"
+        published = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+        authors = [FakeAuthor("Author One")]
+
+        def get_short_id(self) -> str:
+            return "2401.00001"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def results(self, search):
+            del search
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary arxiv failure")
+            return [FakePaper()]
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.arxiv_provider.arxiv.Client",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.arxiv_provider.arxiv.Search",
+        lambda query, max_results: {"query": query, "max_results": max_results},
+    )
+
+    provider = ArxivSearchProvider()
+    results = provider.search(["alignment survey"])
+
+    assert results[0].ok is True
+    assert results[0].payload["results"][0]["arxiv_id"] == "2401.00001"
+    assert delays == [0.5]
+
+
 def test_semantic_scholar_provider_maps_results_into_raw_tool_result(
     monkeypatch,
 ) -> None:
@@ -238,6 +384,132 @@ def test_semantic_scholar_provider_maps_results_into_raw_tool_result(
     assert results[0].provider == "semantic_scholar"
     assert results[0].payload["source_kind"] == "paper"
     assert results[0].payload["results"][0]["doi"] == "10.1000/test"
+
+
+def test_semantic_scholar_provider_retries_retryable_http_errors(
+    monkeypatch,
+) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.request = httpx.Request("GET", "https://api.semanticscholar.org")
+
+        def raise_for_status(self) -> None:
+            if self.status_code < 400:
+                return None
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=self.request,
+                response=response,
+            )
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def get(self, url: str, **kwargs):
+            del url, kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(500, {"data": []})
+            return FakeResponse(
+                200,
+                {
+                    "data": [
+                        {
+                            "title": "Recovered paper",
+                            "url": "https://example.com/paper",
+                            "abstract": "Abstract",
+                            "citationCount": 10,
+                            "externalIds": {},
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.semantic_scholar.build_client",
+        lambda timeout=20: FakeClient(),
+    )
+
+    provider = SemanticScholarProvider(api_key="")
+    results = provider.search(["alignment survey"], recency_days=None)
+
+    assert results[0].payload["results"][0]["title"] == "Recovered paper"
+    assert delays == [0.5]
+
+
+def test_brave_provider_retries_retryable_http_errors(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.request = httpx.Request("GET", "https://api.search.brave.com")
+
+        def raise_for_status(self) -> None:
+            if self.status_code < 400:
+                return None
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=self.request,
+                response=response,
+            )
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def get(self, url: str, **kwargs):
+            del url, kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(502, {"web": {"results": []}})
+            return FakeResponse(
+                200,
+                {
+                    "web": {
+                        "results": [
+                            {
+                                "title": "Recovered brave result",
+                                "url": "https://example.com/brave",
+                                "description": "Snippet",
+                            }
+                        ]
+                    }
+                },
+            )
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.brave.build_client",
+        lambda timeout=20: FakeClient(),
+    )
+
+    provider = BraveSearchProvider(api_key="secret")
+    results = provider.search(["rlhf alternatives"])
+
+    assert results[0].payload["results"][0]["title"] == "Recovered brave result"
+    assert delays == [0.5]
 
 
 def test_semantic_scholar_provider_filters_stale_results_when_recency_days_is_set(
@@ -359,6 +631,66 @@ def test_exa_provider_sends_iso_start_published_date(monkeypatch) -> None:
     assert parsed.tzinfo == UTC
 
 
+def test_exa_provider_retries_retryable_http_errors(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.request = httpx.Request("POST", "https://api.exa.ai/search")
+
+        def raise_for_status(self) -> None:
+            if self.status_code < 400:
+                return None
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=self.request,
+                response=response,
+            )
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def post(self, url: str, **kwargs):
+            del url, kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(503, {"results": []})
+            return FakeResponse(
+                200,
+                {
+                    "results": [
+                        {
+                            "title": "Recovered exa result",
+                            "url": "https://example.com/exa",
+                            "text": "Recovered snippet",
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.exa_provider.build_client",
+        lambda timeout=20: FakeClient(),
+    )
+
+    provider = ExaSearchProvider(api_key="secret")
+    results = provider.search(["recent rlhf alternatives"])
+
+    assert results[0].payload["results"][0]["title"] == "Recovered exa result"
+    assert delays == [0.5]
+
+
 def test_exa_provider_normalizes_http_failures(monkeypatch) -> None:
     class FakeClient:
         def post(self, *args, **kwargs):
@@ -375,3 +707,52 @@ def test_exa_provider_normalizes_http_failures(monkeypatch) -> None:
     assert results[0].ok is False
     assert results[0].payload == {"source_kind": "web", "results": []}
     assert "exa unavailable" in results[0].error
+
+
+def test_fetcher_retries_transient_httpx_failures(monkeypatch) -> None:
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.headers = {"content-type": "text/html; charset=utf-8"}
+            self.request = httpx.Request("GET", "https://example.com")
+
+        def raise_for_status(self) -> None:
+            if self.status_code < 400:
+                return None
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=self.request,
+                response=response,
+            )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def get(self, url: str, **kwargs):
+            del url, kwargs
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.ReadTimeout("timed out")
+            return FakeResponse(200, "<html><body>Fetched text</body></html>")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "deep_research.providers.search._http.time.sleep",
+        lambda seconds: delays.append(seconds),
+    )
+    monkeypatch.setattr(
+        "deep_research.providers.search.fetcher.build_client",
+        lambda timeout=20: FakeClient(),
+    )
+
+    text = fetch_url_content("https://example.com", timeout_sec=20, max_chars=100)
+
+    assert text == "Fetched text"
+    assert delays == [0.5]

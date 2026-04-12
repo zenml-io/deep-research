@@ -7,6 +7,7 @@ import arxiv
 from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
+from deep_research.providers.search._http import DEFAULT_RETRY_POLICY, call_with_retry
 
 
 def is_recent_enough(published: datetime, recency_days: int | None) -> bool:
@@ -41,8 +42,16 @@ class ArxivSearchProvider:
         results: list[RawToolResult] = []
         for query in queries:
             try:
-                papers = client.results(
-                    arxiv.Search(query=query, max_results=max_results_per_query)
+                papers = call_with_retry(
+                    lambda: list(
+                        client.results(
+                            arxiv.Search(
+                                query=query, max_results=max_results_per_query
+                            )
+                        )
+                    ),
+                    retry_policy=DEFAULT_RETRY_POLICY,
+                    is_retryable=_is_retryable_arxiv_error,
                 )
                 items = []
                 for paper in papers:
@@ -68,3 +77,7 @@ class ArxivSearchProvider:
             except Exception as exc:
                 results.append(failure_result(self.name, "paper", exc))
         return results
+
+
+def _is_retryable_arxiv_error(exc: Exception) -> bool:
+    return not isinstance(exc, (TypeError, ValueError))

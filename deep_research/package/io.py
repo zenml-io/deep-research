@@ -82,17 +82,12 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
         package.run_summary.run_id,
         field_name="run_id",
     )
-    reserved_render_file_names = {"full_report.md"}
     render_file_names = [
         f"{sanitize_path_component(render.name, field_name='render.name')}.md"
         for render in package.renders
     ]
-    normalized_render_file_names = {
-        name.casefold() for name in [*render_file_names, *reserved_render_file_names]
-    }
-    if len(render_file_names) + len(reserved_render_file_names) != len(
-        normalized_render_file_names
-    ):
+    normalized_render_file_names = {name.casefold() for name in render_file_names}
+    if len(render_file_names) != len(normalized_render_file_names):
         raise ValueError("Duplicate render output filename")
 
     run_dir = output_dir / run_dir_name

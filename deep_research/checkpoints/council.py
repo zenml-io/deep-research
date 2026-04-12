@@ -26,6 +26,7 @@ def run_council_generator(
     model_name: str,
     config: ResearchConfig,
     uncovered_subtopics: list[str] | None = None,
+    unanswered_questions: list[str] | None = None,
     brief: str | None = None,
     preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
@@ -38,6 +39,7 @@ def run_council_generator(
             iteration,
             override_config,
             uncovered_subtopics,
+            unanswered_questions,
             brief=brief,
             preferences=preferences,
         )
@@ -52,9 +54,11 @@ def aggregate_council_results(
     budget = IterationBudget()
     merged_actions: list[SearchAction] = []
     seen_actions: set[tuple[object, ...]] = set()
+    warnings: list[str] = []
     for group in grouped_results:
         merged.extend(group.raw_results)
         budget = merge_usage(budget, group.budget)
+        warnings.extend(group.warnings)
         for action in group.decision.search_actions:
             identity = (
                 action.query.casefold(),
@@ -74,4 +78,5 @@ def aggregate_council_results(
         ),
         raw_results=merged,
         budget=budget,
+        warnings=warnings,
     )

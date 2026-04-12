@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 import zipfile
 
+import pytest
+
 from deep_research.prompts.loader import load_prompt
 
 
@@ -37,6 +39,16 @@ def test_load_writer_prompts_returns_expected_contents() -> None:
     backing_report_prompt = load_prompt("writer_backing_report")
     full_report_prompt = load_prompt("writer_full_report")
 
+    for prompt in (
+        writer_prompt,
+        reading_path_prompt,
+        backing_report_prompt,
+        full_report_prompt,
+    ):
+        lowered = prompt.lower()
+        assert "grounding rules" in lowered
+        assert "[unverified]" in lowered
+
     assert "citation" in writer_prompt.lower()
     assert "ordered reading guide" in reading_path_prompt.lower()
     assert "analytical backing report" in backing_report_prompt.lower()
@@ -63,18 +75,28 @@ def test_load_prompt_rejects_unknown_name() -> None:
 def test_load_prompt_from_installed_wheel(tmp_path) -> None:
     dist_dir = tmp_path / "dist"
     install_dir = tmp_path / "installed"
+    build_env = os.environ.copy()
+    build_env["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
+    build_env["UV_TOOL_DIR"] = str(tmp_path / "uv-tools")
+    build_env["XDG_DATA_HOME"] = str(tmp_path / "xdg-data")
 
-    subprocess.run(
-        [
-            "uv",
-            "build",
-            "--wheel",
-            "--out-dir",
-            str(dist_dir),
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-    )
+    try:
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--wheel",
+                "--out-dir",
+                str(dist_dir),
+            ],
+            check=True,
+            cwd=REPO_ROOT,
+            env=build_env,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise pytest.skip(
+            f"uv wheel build unavailable in this environment: {exc}"
+        ) from exc
 
     wheels = sorted(dist_dir.glob("*.whl"))
     assert wheels, "expected wheel to be built"
@@ -96,9 +118,14 @@ def test_load_prompt_from_installed_wheel(tmp_path) -> None:
                 'prompt = load_prompt("planner"); '
                 'assert "research" in prompt.lower(); '
                 'assert "trusted" in prompt.lower(); '
+                'assert "grounding rules" in load_prompt("writer").lower(); '
+                'assert "[unverified]" in load_prompt("writer").lower(); '
                 'assert "ordered reading guide" in load_prompt("writer_reading_path").lower(); '
+                'assert "grounding rules" in load_prompt("writer_reading_path").lower(); '
                 'assert "analytical backing report" in load_prompt("writer_backing_report").lower(); '
-                'assert "sectioned final report" in load_prompt("writer_full_report").lower()'
+                'assert "grounding rules" in load_prompt("writer_backing_report").lower(); '
+                'assert "sectioned final report" in load_prompt("writer_full_report").lower(); '
+                'assert "grounding rules" in load_prompt("writer_full_report").lower()'
             ),
         ],
         check=False,

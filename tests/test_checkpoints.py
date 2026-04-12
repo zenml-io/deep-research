@@ -559,6 +559,79 @@ def test_run_supervisor_returns_structured_decision_and_mcp_raw_results(
     assert ("run_supervisor", "llm_call") in decorated
 
 
+def test_run_supervisor_surfaces_structured_trace_warning_raw_result(
+    monkeypatch,
+) -> None:
+    _install_kitaru_checkpoint_stub(monkeypatch)
+    monkeypatch.setitem(
+        sys.modules,
+        "pydantic_ai",
+        types.SimpleNamespace(__version__="9.9.9"),
+    )
+
+    def build_supervisor_agent(model_name, *args, **kwargs):
+        def run_sync(prompt, hooks=None):
+            if hooks and "after_tool_call" in hooks:
+                hooks["after_tool_call"](
+                    "search",
+                    RawToolResult(
+                        tool_name="search",
+                        provider="mcp",
+                        payload={"source_kind": "web", "results": []},
+                    ),
+                )
+            return types.SimpleNamespace(
+                output=SupervisorDecision(rationale="Need more coverage."),
+                usage=lambda: types.SimpleNamespace(
+                    input_tokens=11,
+                    output_tokens=7,
+                    total_tokens=18,
+                ),
+                all_messages=lambda: [
+                    types.SimpleNamespace(
+                        parts=[
+                            types.SimpleNamespace(
+                                part_kind="tool-return",
+                                tool_name="search",
+                                content={"provider": "mcp", "unexpected": True},
+                            )
+                        ]
+                    )
+                ],
+            )
+
+        return types.SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.supervisor",
+        types.SimpleNamespace(build_supervisor_agent=build_supervisor_agent),
+    )
+
+    module = _import_checkpoint_module("deep_research.checkpoints.supervisor")
+    config = ResearchConfig.for_tier(Tier.STANDARD).model_copy(
+        update={
+            "supervisor_model": "supervisor-test-model",
+            "max_tool_calls_per_cycle": 4,
+            "tool_timeout_sec": 30,
+        }
+    )
+
+    result = module.run_supervisor(
+        _sample_plan(), EvidenceLedger(entries=[]), 2, config
+    )
+
+    assert result.raw_results[-1].tool_name == "supervisor_trace_warning"
+    assert result.raw_results[-1].provider == "supervisor"
+    assert result.raw_results[-1].ok is False
+    assert result.raw_results[-1].payload["iteration"] == 2
+    assert result.raw_results[-1].payload["dropped_part_count"] == 1
+    assert result.raw_results[-1].payload["warning_codes"] == [
+        "unhandled_tool_return_keys:provider,unexpected"
+    ]
+    assert result.raw_results[-1].payload["pydantic_ai_version"] == "9.9.9"
+
+
 def test_run_supervisor_builds_real_provider_surface_and_richer_prompt(
     monkeypatch,
 ) -> None:

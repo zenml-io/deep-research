@@ -1,0 +1,234 @@
+{
+  "run_summary": {
+    "run_id": "trajectory-003",
+    "brief": "Check convergence and unanswered-question handling.",
+    "tier": "deep",
+    "stop_reason": "supervisor_complete",
+    "status": "completed",
+    "estimated_cost_usd": 3.7,
+    "elapsed_seconds": 360,
+    "iteration_count": 1,
+    "provider_usage_summary": {
+      "arxiv": 1,
+      "web": 1
+    },
+    "council_enabled": false,
+    "council_size": 1,
+    "council_models": [],
+    "started_at": "2026-04-07T14:00:00Z",
+    "completed_at": "2026-04-07T14:06:00Z"
+  },
+  "research_plan": {
+    "goal": "Check convergence and unanswered-question handling.",
+    "key_questions": [
+      "When does the loop stop?",
+      "How are unanswered plan questions surfaced?",
+      "What signals replan recovery?"
+    ],
+    "subtopics": [
+      "stop conditions",
+      "plan questions",
+      "replan recovery"
+    ],
+    "queries": [
+      "loop stop reason",
+      "unanswered plan questions",
+      "replan signals"
+    ],
+    "sections": [
+      "Overview",
+      "Convergence",
+      "Conclusion"
+    ],
+    "success_criteria": [
+      "Explain stop conditions",
+      "Explain plan question handling",
+      "Explain recovery signals"
+    ],
+    "query_groups": {
+      "core": [
+        "loop stop reason",
+        "replan signals"
+      ]
+    },
+    "allowed_source_groups": [
+      "papers",
+      "web"
+    ],
+    "approval_status": "approved"
+  },
+  "evidence_ledger": {
+    "considered": [
+      {
+        "key": "stop-note",
+        "title": "Supervisor Stop Conditions",
+        "url": "https://example.com/stop-note",
+        "snippets": [
+          {
+            "text": "The loop stop reason is surfaced as supervisor_complete when the plan is answered.",
+            "source_locator": "section 3"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.9,
+        "relevance_score": 0.9,
+        "authority_score": 0.92,
+        "freshness_score": 0.5,
+        "matched_subtopics": [
+          "stop conditions"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "question-note",
+        "title": "Question Coverage Summary",
+        "url": "https://example.com/question-note",
+        "snippets": [
+          {
+            "text": "Unanswered questions are listed before the next supervisor turn.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "web",
+        "source_kind": "web",
+        "quality_score": 0.86,
+        "relevance_score": 0.87,
+        "authority_score": 0.72,
+        "freshness_score": 0.8,
+        "matched_subtopics": [
+          "plan questions"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "selected": [
+      {
+        "key": "stop-note",
+        "title": "Supervisor Stop Conditions",
+        "url": "https://example.com/stop-note",
+        "snippets": [
+          {
+            "text": "The loop stop reason is surfaced as supervisor_complete when the plan is answered.",
+            "source_locator": "section 3"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.9,
+        "relevance_score": 0.9,
+        "authority_score": 0.92,
+        "freshness_score": 0.5,
+        "matched_subtopics": [
+          "stop conditions"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "question-note",
+        "title": "Question Coverage Summary",
+        "url": "https://example.com/question-note",
+        "snippets": [
+          {
+            "text": "Unanswered questions are listed before the next supervisor turn.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "web",
+        "source_kind": "web",
+        "quality_score": 0.86,
+        "relevance_score": 0.87,
+        "authority_score": 0.72,
+        "freshness_score": 0.8,
+        "matched_subtopics": [
+          "plan questions"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "rejected": [],
+    "dedupe_log": []
+  },
+  "selection_graph": {
+    "items": [
+      {
+        "candidate_key": "stop-note",
+        "rationale": "Explains the stop condition used by the loop.",
+        "bridge_note": "Sets up the question-coverage discussion.",
+        "matched_subtopics": [
+          "stop conditions"
+        ],
+        "reading_time_minutes": 5,
+        "ordering_rationale": "Lead with the stop reason source."
+      },
+      {
+        "candidate_key": "question-note",
+        "rationale": "Explains how unanswered questions are surfaced.",
+        "bridge_note": "Shows the supervisor can continue only after gaps are explicit.",
+        "matched_subtopics": [
+          "plan questions"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Follow with the question-coverage source."
+      }
+    ],
+    "gap_coverage_summary": []
+  },
+  "iteration_trace": {
+    "iterations": [
+      {
+        "iteration": 0,
+        "new_candidate_count": 2,
+        "accepted_candidate_count": 2,
+        "rejected_candidate_count": 0,
+        "coverage": 0.88,
+        "coverage_delta": 0.88,
+        "uncovered_subtopics": [],
+        "estimated_cost_usd": 3.7,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "arxiv",
+            "summary": "search via arxiv succeeded"
+          },
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "web",
+            "summary": "search via web succeeded"
+          }
+        ],
+        "stop_reason": "supervisor_complete"
+      }
+    ]
+  },
+  "renders": [
+    {
+      "name": "full_report",
+      "content_markdown": "# Convergence and Plan Questions\n\nThe loop stops when the plan is answered, and unanswered questions are listed before the next supervisor turn. The replan recovery signal is explicit, so the trajectory harness can verify supervisor completion without replaying the flow.\n\n[1] Stop note\n[2] Question note",
+      "citation_map": {
+        "[1]": "stop-note",
+        "[2]": "question-note"
+      },
+      "structured_content": {
+        "sections": [
+          "Overview",
+          "Convergence",
+          "Conclusion"
+        ],
+        "word_count": 33
+      },
+      "generated_at": "2026-04-07T14:06:00Z"
+    }
+  ],
+  "critique_result": null,
+  "grounding_result": null,
+  "coherence_result": null,
+  "preferences": null,
+  "preference_degradations": []
+}

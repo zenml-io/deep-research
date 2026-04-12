@@ -3,7 +3,11 @@ from __future__ import annotations
 from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
-from deep_research.providers.search._http import build_client
+from deep_research.providers.search._http import (
+    DEFAULT_RETRY_POLICY,
+    build_client,
+    request_with_retry,
+)
 
 
 class BraveSearchProvider:
@@ -43,8 +47,11 @@ class BraveSearchProvider:
 
             for query in queries:
                 try:
-                    response = client.get(
+                    response = request_with_retry(
+                        client,
+                        "GET",
                         "https://api.search.brave.com/res/v1/web/search",
+                        retry_policy=DEFAULT_RETRY_POLICY,
                         headers={"X-Subscription-Token": self._api_key},
                         params={
                             "q": query,
@@ -52,7 +59,6 @@ class BraveSearchProvider:
                             **({"freshness": freshness} if freshness else {}),
                         },
                     )
-                    response.raise_for_status()
                     payload = response.json()
                     items = [
                         {

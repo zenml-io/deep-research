@@ -37,16 +37,22 @@ class ResearchSettings(BaseSettings):
     source_quality_floor: float = Field(default=0.30, ge=0.0, le=1.0)
     council_size: int = Field(default=3, gt=0)
     council_cost_budget_usd: float = Field(default=2.0, ge=0.0)
-    classifier_model: str = "google-gla:gemini-2.0-flash-lite"
-    planner_model: str = "google-gla:gemini-2.5-flash"
-    supervisor_model: str = "google-gla:gemini-2.5-flash"
-    relevance_scorer_model: str = "google-gla:gemini-2.5-flash"
-    curator_model: str = "google-gla:gemini-2.0-flash-lite"
-    writer_model: str = "google-gla:gemini-2.5-flash"
-    aggregator_model: str = "openai:gpt-4o-mini"
+    classifier_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    planner_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    supervisor_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    relevance_scorer_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    curator_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    writer_model: str = "google-gla:gemini-3.1-flash-lite-preview"
+    aggregator_model: str = "google-gla:gemini-3.1-flash-lite-preview"
     review_model: str = "anthropic:claude-sonnet-4-20250514"
     judge_model: str = "openai:gpt-4o-mini"
     coverage_scorer_model: str = "openai:gpt-4o-mini"
+    use_curator_for_selection: bool = False
+    supervisor_context_budget_chars: int = Field(default=18000, gt=0)
+    relevance_context_budget_chars: int = Field(default=16000, gt=0)
+    coverage_context_budget_chars: int = Field(default=12000, gt=0)
+    writer_context_budget_chars: int = Field(default=40000, gt=0)
+    context_snippet_budget_chars: int = Field(default=600, gt=0)
     brave_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("RESEARCH_BRAVE_API_KEY", "BRAVE_API_KEY"),
@@ -62,25 +68,25 @@ class ResearchSettings(BaseSettings):
             "SEMANTIC_SCHOLAR_API_KEY",
         ),
     )
-    enabled_providers: list[str] = Field(
-        default_factory=lambda: ["arxiv", "semantic_scholar"]
+    enabled_providers_csv: str = Field(
+        default="arxiv,exa",
+        alias="enabled_providers",
+        validation_alias=AliasChoices("RESEARCH_ENABLED_PROVIDERS", "enabled_providers"),
     )
     max_results_per_query: int = Field(default=10, gt=0)
     max_fetch_candidates_per_iteration: int = Field(default=5, gt=0)
     max_fetched_chars_per_candidate: int = Field(default=4000, gt=0)
 
-    @field_validator("enabled_providers")
-    @classmethod
-    def normalize_enabled_providers(cls, value: list[str]) -> list[str]:
-        normalized: list[str] = []
+    @property
+    def enabled_providers(self) -> list[str]:
         seen: set[str] = set()
-        for provider in value:
-            cleaned = provider.strip()
-            if not cleaned or cleaned in seen:
-                continue
-            normalized.append(cleaned)
-            seen.add(cleaned)
-        return normalized
+        result: list[str] = []
+        for item in self.enabled_providers_csv.split(","):
+            cleaned = item.strip()
+            if cleaned and cleaned not in seen:
+                result.append(cleaned)
+                seen.add(cleaned)
+        return result
 
 
 class ResearchConfig(BaseModel):
@@ -111,6 +117,12 @@ class ResearchConfig(BaseModel):
     review_model: str
     judge_model: str
     coverage_scorer_model: str
+    use_curator_for_selection: bool = False
+    supervisor_context_budget_chars: int = 18000
+    relevance_context_budget_chars: int = 16000
+    coverage_context_budget_chars: int = 12000
+    writer_context_budget_chars: int = 40000
+    context_snippet_budget_chars: int = 600
     supervisor_pricing: ModelPricing = Field(default_factory=ModelPricing)
     relevance_scorer_pricing: ModelPricing = Field(default_factory=ModelPricing)
     writer_pricing: ModelPricing = Field(default_factory=ModelPricing)
@@ -185,6 +197,14 @@ class ResearchConfig(BaseModel):
             review_model=settings.review_model,
             judge_model=settings.judge_model,
             coverage_scorer_model=settings.coverage_scorer_model,
+            use_curator_for_selection=(
+                True if tier == Tier.DEEP else settings.use_curator_for_selection
+            ),
+            supervisor_context_budget_chars=settings.supervisor_context_budget_chars,
+            relevance_context_budget_chars=settings.relevance_context_budget_chars,
+            coverage_context_budget_chars=settings.coverage_context_budget_chars,
+            writer_context_budget_chars=settings.writer_context_budget_chars,
+            context_snippet_budget_chars=settings.context_snippet_budget_chars,
             supervisor_pricing=ModelPricing(),
             relevance_scorer_pricing=ModelPricing(),
             writer_pricing=ModelPricing(),

@@ -3,12 +3,39 @@ from math import isclose
 from pydantic import BaseModel
 
 from deep_research.enums import StopReason
-from deep_research.models import CoverageScore, IterationRecord
+from deep_research.models import CoverageScore, EvidenceLedger, IterationRecord
 
 
 class StopDecision(BaseModel):
     should_stop: bool
     reason: StopReason | None = None
+
+
+def detect_source_diversity_warning(ledger: EvidenceLedger) -> str | None:
+    selected = list(ledger.selected)
+    if len(selected) < 2:
+        return None
+    provider_counts: dict[str, int] = {}
+    source_kind_counts: dict[str, int] = {}
+    for candidate in selected:
+        provider = getattr(candidate, "provider", None)
+        source_kind = getattr(getattr(candidate, "source_kind", None), "value", None)
+        if provider is not None:
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        if source_kind is not None:
+            source_kind_counts[source_kind] = source_kind_counts.get(source_kind, 0) + 1
+    threshold = 0.8
+    if provider_counts:
+        provider, provider_count = max(provider_counts.items(), key=lambda item: item[1])
+        if provider_count / len(selected) > threshold:
+            return f"source diversity warning: {provider_count}/{len(selected)} selected sources came from provider '{provider}'"
+    if source_kind_counts:
+        source_kind, source_kind_count = max(
+            source_kind_counts.items(), key=lambda item: item[1]
+        )
+        if source_kind_count / len(selected) > threshold:
+            return f"source diversity warning: {source_kind_count}/{len(selected)} selected sources share source_kind '{source_kind}'"
+    return None
 
 
 def check_convergence(
@@ -27,12 +54,13 @@ def check_convergence(
     """Decide whether the research loop should stop based on budget, time, and coverage."""
     has_explicit_gap_state = "uncovered_subtopics" in current.model_fields_set
     has_remaining_gaps = has_explicit_gap_state and bool(current.uncovered_subtopics)
+    has_unanswered_questions = bool(current.unanswered_questions)
 
     if spent_usd >= budget_limit_usd:
         return StopDecision(should_stop=True, reason=StopReason.BUDGET_EXHAUSTED)
     if elapsed_seconds >= time_limit_seconds:
         return StopDecision(should_stop=True, reason=StopReason.TIME_EXHAUSTED)
-    if current.total >= min_coverage and not has_remaining_gaps:
+    if current.total >= min_coverage and not has_remaining_gaps and not has_unanswered_questions:
         return StopDecision(should_stop=True, reason=StopReason.CONVERGED)
     if history:
         previous = history[-1]

@@ -5,7 +5,11 @@ from datetime import UTC, date, datetime, timedelta
 from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
-from deep_research.providers.search._http import build_client
+from deep_research.providers.search._http import (
+    DEFAULT_RETRY_POLICY,
+    build_client,
+    request_with_retry,
+)
 
 
 def published_on_or_after(
@@ -56,8 +60,11 @@ class SemanticScholarProvider:
             headers = {"x-api-key": self._api_key} if self._api_key else {}
             for query in queries:
                 try:
-                    response = client.get(
+                    response = request_with_retry(
+                        client,
+                        "GET",
                         "https://api.semanticscholar.org/graph/v1/paper/search",
+                        retry_policy=DEFAULT_RETRY_POLICY,
                         headers=headers,
                         params={
                             "query": query,
@@ -65,7 +72,6 @@ class SemanticScholarProvider:
                             "fields": "title,url,abstract,year,citationCount,authors,externalIds,fieldsOfStudy,isOpenAccess,publicationDate",
                         },
                     )
-                    response.raise_for_status()
                     payload = response.json()
                     items = []
                     for paper in payload.get("data", []):

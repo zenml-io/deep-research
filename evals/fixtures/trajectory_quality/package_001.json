@@ -1,0 +1,315 @@
+{
+  "run_summary": {
+    "run_id": "trajectory-001",
+    "brief": "Assess replay and curation behavior.",
+    "tier": "deep",
+    "stop_reason": "converged",
+    "status": "completed",
+    "estimated_cost_usd": 5.6,
+    "elapsed_seconds": 480,
+    "iteration_count": 2,
+    "provider_usage_summary": {
+      "arxiv": 1,
+      "docs": 1,
+      "brave": 1
+    },
+    "council_enabled": false,
+    "council_size": 1,
+    "council_models": [],
+    "started_at": "2026-04-07T12:00:00Z",
+    "completed_at": "2026-04-07T12:08:00Z"
+  },
+  "research_plan": {
+    "goal": "Assess replay and curation behavior in the deep research engine.",
+    "key_questions": [
+      "How does checkpoint replay behave?",
+      "Which sources are curated first?",
+      "What evidence appears in the final render?"
+    ],
+    "subtopics": [
+      "replay",
+      "curation",
+      "rendering"
+    ],
+    "queries": [
+      "kitaru replay checkpoint cache",
+      "curator selection graph",
+      "final report citations"
+    ],
+    "sections": [
+      "Overview",
+      "Evidence",
+      "Conclusion"
+    ],
+    "success_criteria": [
+      "Explain replay behavior",
+      "Explain curation order",
+      "Ground the final render"
+    ],
+    "query_groups": {
+      "core": [
+        "kitaru replay checkpoint cache",
+        "curator selection graph"
+      ]
+    },
+    "allowed_source_groups": [
+      "papers",
+      "web"
+    ],
+    "approval_status": "approved"
+  },
+  "evidence_ledger": {
+    "considered": [
+      {
+        "key": "replay-paper",
+        "title": "Replay Boundaries in Durable Flows",
+        "url": "https://example.com/replay-paper",
+        "snippets": [
+          {
+            "text": "Replay returns cached checkpoint output for completed steps.",
+            "source_locator": "p.2"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.96,
+        "relevance_score": 0.93,
+        "authority_score": 0.95,
+        "freshness_score": 0.4,
+        "matched_subtopics": [
+          "replay"
+        ],
+        "doi": "10.1000/replay",
+        "arxiv_id": "2501.00001",
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "curator-guide",
+        "title": "Curator Ordering Guide",
+        "url": "https://example.com/curator-guide",
+        "snippets": [
+          {
+            "text": "The curator ranks selected evidence before the render step.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.88,
+        "relevance_score": 0.9,
+        "authority_score": 0.78,
+        "freshness_score": 0.7,
+        "matched_subtopics": [
+          "curation"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "render-note",
+        "title": "Trajectory Report Notes",
+        "url": "https://example.com/report-notes",
+        "snippets": [
+          {
+            "text": "The final render cites the replay paper and the curator guide.",
+            "source_locator": "note"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.8,
+        "relevance_score": 0.84,
+        "authority_score": 0.72,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "rendering"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "selected": [
+      {
+        "key": "replay-paper",
+        "title": "Replay Boundaries in Durable Flows",
+        "url": "https://example.com/replay-paper",
+        "snippets": [
+          {
+            "text": "Replay returns cached checkpoint output for completed steps.",
+            "source_locator": "p.2"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.96,
+        "relevance_score": 0.93,
+        "authority_score": 0.95,
+        "freshness_score": 0.4,
+        "matched_subtopics": [
+          "replay"
+        ],
+        "doi": "10.1000/replay",
+        "arxiv_id": "2501.00001",
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "curator-guide",
+        "title": "Curator Ordering Guide",
+        "url": "https://example.com/curator-guide",
+        "snippets": [
+          {
+            "text": "The curator ranks selected evidence before the render step.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.88,
+        "relevance_score": 0.9,
+        "authority_score": 0.78,
+        "freshness_score": 0.7,
+        "matched_subtopics": [
+          "curation"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "render-note",
+        "title": "Trajectory Report Notes",
+        "url": "https://example.com/report-notes",
+        "snippets": [
+          {
+            "text": "The final render cites the replay paper and the curator guide.",
+            "source_locator": "note"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.8,
+        "relevance_score": 0.84,
+        "authority_score": 0.72,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "rendering"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "rejected": [],
+    "dedupe_log": []
+  },
+  "selection_graph": {
+    "items": [
+      {
+        "candidate_key": "replay-paper",
+        "rationale": "Best source for replay semantics and checkpoint persistence.",
+        "bridge_note": "Leads into the ordering discussion.",
+        "matched_subtopics": [
+          "replay"
+        ],
+        "reading_time_minutes": 6,
+        "ordering_rationale": "Start with the strongest foundational evidence."
+      },
+      {
+        "candidate_key": "curator-guide",
+        "rationale": "Explains how the curator ranks selected evidence.",
+        "bridge_note": "Connects the replay discussion to the final artifact ordering.",
+        "matched_subtopics": [
+          "curation"
+        ],
+        "reading_time_minutes": 5,
+        "ordering_rationale": "Follow the replay paper with the curation guide."
+      },
+      {
+        "candidate_key": "render-note",
+        "rationale": "Shows how the final render summarizes both prior sources.",
+        "bridge_note": "Closes the loop between evidence and output.",
+        "matched_subtopics": [
+          "rendering"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Finish with the rendered artifact."
+      }
+    ],
+    "gap_coverage_summary": []
+  },
+  "iteration_trace": {
+    "iterations": [
+      {
+        "iteration": 0,
+        "new_candidate_count": 3,
+        "accepted_candidate_count": 3,
+        "rejected_candidate_count": 0,
+        "coverage": 0.63,
+        "coverage_delta": 0.63,
+        "uncovered_subtopics": [
+          "rendering"
+        ],
+        "estimated_cost_usd": 2.6,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "arxiv",
+            "summary": "search via arxiv succeeded"
+          },
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "docs",
+            "summary": "search via docs succeeded"
+          }
+        ],
+        "continue_reason": "remaining uncovered subtopics: rendering"
+      },
+      {
+        "iteration": 1,
+        "new_candidate_count": 0,
+        "accepted_candidate_count": 3,
+        "rejected_candidate_count": 0,
+        "coverage": 0.92,
+        "coverage_delta": 0.29,
+        "uncovered_subtopics": [],
+        "estimated_cost_usd": 3.0,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "brave",
+            "summary": "search via brave succeeded"
+          }
+        ],
+        "stop_reason": "converged"
+      }
+    ]
+  },
+  "renders": [
+    {
+      "name": "full_report",
+      "content_markdown": "# Replay and Curation\n\nThe package shows replay, curation, and grounded rendering working together. Replay returns cached checkpoint output for completed steps, the curated order is explained by the curator guide, and the final render cites the replay paper and the curator guide.\n\n## Evidence\n\n- Replay support is described in the paper.\n- Curated ordering is explained in the docs.\n- The final render references both sources.\n\n[1] Replay paper\n[2] Curator guide\n[3] Render note",
+      "citation_map": {
+        "[1]": "replay-paper",
+        "[2]": "curator-guide",
+        "[3]": "render-note"
+      },
+      "structured_content": {
+        "sections": [
+          "Overview",
+          "Evidence",
+          "Conclusion"
+        ],
+        "word_count": 58
+      },
+      "generated_at": "2026-04-07T12:08:00Z"
+    }
+  ],
+  "critique_result": null,
+  "grounding_result": null,
+  "coherence_result": null,
+  "preferences": null,
+  "preference_degradations": []
+}

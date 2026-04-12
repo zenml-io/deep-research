@@ -1,0 +1,249 @@
+{
+  "run_summary": {
+    "run_id": "trajectory-002",
+    "brief": "Verify provider retries and bounded prompt context.",
+    "tier": "deep",
+    "stop_reason": "max_iterations",
+    "status": "completed",
+    "estimated_cost_usd": 4.8,
+    "elapsed_seconds": 420,
+    "iteration_count": 2,
+    "provider_usage_summary": {
+      "brave": 1,
+      "docs": 1
+    },
+    "council_enabled": false,
+    "council_size": 1,
+    "council_models": [],
+    "started_at": "2026-04-07T13:00:00Z",
+    "completed_at": "2026-04-07T13:07:00Z"
+  },
+  "research_plan": {
+    "goal": "Verify provider retries and bounded prompt context.",
+    "key_questions": [
+      "How are retryable HTTP failures handled?",
+      "How does context budgeting limit prompts?",
+      "What warning is surfaced for tool trace loss?"
+    ],
+    "subtopics": [
+      "retries",
+      "context budgeting",
+      "tool traces"
+    ],
+    "queries": [
+      "http retry policy",
+      "context budget truncation",
+      "dropped tool traces"
+    ],
+    "sections": [
+      "Overview",
+      "Reliability",
+      "Conclusion"
+    ],
+    "success_criteria": [
+      "Explain retry behavior",
+      "Explain prompt truncation",
+      "Explain trace visibility"
+    ],
+    "query_groups": {
+      "core": [
+        "http retry policy",
+        "context budget truncation"
+      ]
+    },
+    "allowed_source_groups": [
+      "web",
+      "docs"
+    ],
+    "approval_status": "approved"
+  },
+  "evidence_ledger": {
+    "considered": [
+      {
+        "key": "retry-guide",
+        "title": "Retry Policy for Search Providers",
+        "url": "https://example.com/retry-guide",
+        "snippets": [
+          {
+            "text": "Retryable HTTP failures are retried with bounded backoff.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.95,
+        "relevance_score": 0.92,
+        "authority_score": 0.86,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "retries"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "context-guide",
+        "title": "Context Budgeting Notes",
+        "url": "https://example.com/context-guide",
+        "snippets": [
+          {
+            "text": "Context budgets cap prompt size and keep new evidence separate.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.9,
+        "relevance_score": 0.89,
+        "authority_score": 0.8,
+        "freshness_score": 0.8,
+        "matched_subtopics": [
+          "context budgeting"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "selected": [
+      {
+        "key": "retry-guide",
+        "title": "Retry Policy for Search Providers",
+        "url": "https://example.com/retry-guide",
+        "snippets": [
+          {
+            "text": "Retryable HTTP failures are retried with bounded backoff.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.95,
+        "relevance_score": 0.92,
+        "authority_score": 0.86,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "retries"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "context-guide",
+        "title": "Context Budgeting Notes",
+        "url": "https://example.com/context-guide",
+        "snippets": [
+          {
+            "text": "Context budgets cap prompt size and keep new evidence separate.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.9,
+        "relevance_score": 0.89,
+        "authority_score": 0.8,
+        "freshness_score": 0.8,
+        "matched_subtopics": [
+          "context budgeting"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "rejected": [],
+    "dedupe_log": []
+  },
+  "selection_graph": {
+    "items": [
+      {
+        "candidate_key": "retry-guide",
+        "rationale": "Best source for retry behavior and transient failure handling.",
+        "bridge_note": "Links reliability handling to prompt-budget controls.",
+        "matched_subtopics": [
+          "retries"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Lead with the provider retry policy."
+      },
+      {
+        "candidate_key": "context-guide",
+        "rationale": "Explains how prompt size is bounded for repeatable runs.",
+        "bridge_note": "Shows how the loop stays deterministic under a budget.",
+        "matched_subtopics": [
+          "context budgeting"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Follow with the context-bounding notes."
+      }
+    ],
+    "gap_coverage_summary": []
+  },
+  "iteration_trace": {
+    "iterations": [
+      {
+        "iteration": 0,
+        "new_candidate_count": 2,
+        "accepted_candidate_count": 2,
+        "rejected_candidate_count": 0,
+        "coverage": 0.58,
+        "coverage_delta": 0.58,
+        "uncovered_subtopics": [
+          "tool traces"
+        ],
+        "estimated_cost_usd": 2.1,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "brave",
+            "summary": "search via brave succeeded"
+          }
+        ],
+        "continue_reason": "remaining uncovered subtopics: tool traces"
+      },
+      {
+        "iteration": 1,
+        "new_candidate_count": 0,
+        "accepted_candidate_count": 2,
+        "rejected_candidate_count": 0,
+        "coverage": 0.81,
+        "coverage_delta": 0.23,
+        "uncovered_subtopics": [],
+        "estimated_cost_usd": 2.7,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "docs",
+            "summary": "search via docs succeeded"
+          }
+        ],
+        "stop_reason": "max_iterations"
+      }
+    ]
+  },
+  "renders": [
+    {
+      "name": "full_report",
+      "content_markdown": "# Reliability and Context\n\nRetryable HTTP failures are retried with bounded backoff, context budgets cap prompt size, and trace-loss warnings stay visible in the artifact. The package is intentionally compact so the trajectory harness can verify the control loop without replaying the flow.\n\n[1] Retry guide\n[2] Context guide",
+      "citation_map": {
+        "[1]": "retry-guide",
+        "[2]": "context-guide"
+      },
+      "structured_content": {
+        "sections": [
+          "Overview",
+          "Reliability",
+          "Conclusion"
+        ],
+        "word_count": 34
+      },
+      "generated_at": "2026-04-07T13:07:00Z"
+    }
+  ],
+  "critique_result": null,
+  "grounding_result": null,
+  "coherence_result": null,
+  "preferences": null,
+  "preference_degradations": []
+}

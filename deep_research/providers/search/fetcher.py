@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 
-from deep_research.providers.search._http import build_client
+from deep_research.providers.search._http import (
+    DEFAULT_RETRY_POLICY,
+    build_client,
+    request_with_retry,
+)
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -35,8 +39,18 @@ def fetch_url_content(url: str, timeout_sec: int, max_chars: int) -> str | None:
     if url.lower().endswith(".pdf"):
         return None
 
-    response = build_client(timeout=timeout_sec).get(url)
-    response.raise_for_status()
+    client = build_client(timeout=timeout_sec)
+    try:
+        response = request_with_retry(
+            client,
+            "GET",
+            url,
+            retry_policy=DEFAULT_RETRY_POLICY,
+        )
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
 
     content_type = response.headers.get("content-type", "")
     if "html" not in content_type and "text" not in content_type:

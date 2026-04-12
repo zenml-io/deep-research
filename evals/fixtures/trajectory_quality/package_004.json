@@ -1,0 +1,381 @@
+{
+  "run_summary": {
+    "run_id": "trajectory-004",
+    "brief": "Validate grounding and source diversity warnings.",
+    "tier": "deep",
+    "stop_reason": "diminishing_returns",
+    "status": "completed",
+    "estimated_cost_usd": 6.9,
+    "elapsed_seconds": 600,
+    "iteration_count": 3,
+    "provider_usage_summary": {
+      "arxiv": 1,
+      "docs": 1,
+      "brave": 1,
+      "semantic_scholar": 1
+    },
+    "council_enabled": false,
+    "council_size": 1,
+    "council_models": [],
+    "started_at": "2026-04-07T15:00:00Z",
+    "completed_at": "2026-04-07T15:10:00Z"
+  },
+  "research_plan": {
+    "goal": "Validate grounding and source diversity warnings.",
+    "key_questions": [
+      "How are unsupported claims marked?",
+      "Why is provider diversity tracked?",
+      "Which source kinds are represented?"
+    ],
+    "subtopics": [
+      "grounding",
+      "provider diversity",
+      "source kinds"
+    ],
+    "queries": [
+      "unsupported claims unverified",
+      "provider diversity warning",
+      "source kinds selected"
+    ],
+    "sections": [
+      "Overview",
+      "Grounding",
+      "Diversity"
+    ],
+    "success_criteria": [
+      "Explain unsupported claims handling",
+      "Explain provider diversity",
+      "Explain represented source kinds"
+    ],
+    "query_groups": {
+      "core": [
+        "unsupported claims unverified",
+        "provider diversity warning"
+      ]
+    },
+    "allowed_source_groups": [
+      "papers",
+      "docs",
+      "web"
+    ],
+    "approval_status": "approved"
+  },
+  "evidence_ledger": {
+    "considered": [
+      {
+        "key": "grounding-paper",
+        "title": "Grounding Rules for Final Renders",
+        "url": "https://example.com/grounding-paper",
+        "snippets": [
+          {
+            "text": "Unsupported claims must be marked [UNVERIFIED] in the render.",
+            "source_locator": "section 4"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.97,
+        "relevance_score": 0.94,
+        "authority_score": 0.96,
+        "freshness_score": 0.6,
+        "matched_subtopics": [
+          "grounding"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "diversity-doc",
+        "title": "Provider Diversity Warning",
+        "url": "https://example.com/diversity-doc",
+        "snippets": [
+          {
+            "text": "Provider diversity is tracked to avoid single-provider convergence.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.91,
+        "relevance_score": 0.9,
+        "authority_score": 0.82,
+        "freshness_score": 0.7,
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "source-web",
+        "title": "Source Kinds in Practice",
+        "url": "https://example.com/source-web",
+        "snippets": [
+          {
+            "text": "The selected source kinds include paper, docs, and web.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.84,
+        "relevance_score": 0.88,
+        "authority_score": 0.76,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "source kinds"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "source-scholar",
+        "title": "Academic Search Completeness",
+        "url": "https://example.com/source-scholar",
+        "snippets": [
+          {
+            "text": "Academic search results broaden provider diversity when combined with web and docs.",
+            "source_locator": "section 3"
+          }
+        ],
+        "provider": "semantic_scholar",
+        "source_kind": "paper",
+        "quality_score": 0.86,
+        "relevance_score": 0.87,
+        "authority_score": 0.88,
+        "freshness_score": 0.5,
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "selected": [
+      {
+        "key": "grounding-paper",
+        "title": "Grounding Rules for Final Renders",
+        "url": "https://example.com/grounding-paper",
+        "snippets": [
+          {
+            "text": "Unsupported claims must be marked [UNVERIFIED] in the render.",
+            "source_locator": "section 4"
+          }
+        ],
+        "provider": "arxiv",
+        "source_kind": "paper",
+        "quality_score": 0.97,
+        "relevance_score": 0.94,
+        "authority_score": 0.96,
+        "freshness_score": 0.6,
+        "matched_subtopics": [
+          "grounding"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "diversity-doc",
+        "title": "Provider Diversity Warning",
+        "url": "https://example.com/diversity-doc",
+        "snippets": [
+          {
+            "text": "Provider diversity is tracked to avoid single-provider convergence.",
+            "source_locator": "section 2"
+          }
+        ],
+        "provider": "docs",
+        "source_kind": "docs",
+        "quality_score": 0.91,
+        "relevance_score": 0.9,
+        "authority_score": 0.82,
+        "freshness_score": 0.7,
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "source-web",
+        "title": "Source Kinds in Practice",
+        "url": "https://example.com/source-web",
+        "snippets": [
+          {
+            "text": "The selected source kinds include paper, docs, and web.",
+            "source_locator": "section 1"
+          }
+        ],
+        "provider": "brave",
+        "source_kind": "web",
+        "quality_score": 0.84,
+        "relevance_score": 0.88,
+        "authority_score": 0.76,
+        "freshness_score": 0.9,
+        "matched_subtopics": [
+          "source kinds"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      },
+      {
+        "key": "source-scholar",
+        "title": "Academic Search Completeness",
+        "url": "https://example.com/source-scholar",
+        "snippets": [
+          {
+            "text": "Academic search results broaden provider diversity when combined with web and docs.",
+            "source_locator": "section 3"
+          }
+        ],
+        "provider": "semantic_scholar",
+        "source_kind": "paper",
+        "quality_score": 0.86,
+        "relevance_score": 0.87,
+        "authority_score": 0.88,
+        "freshness_score": 0.5,
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "raw_metadata": {},
+        "selected": true
+      }
+    ],
+    "rejected": [],
+    "dedupe_log": []
+  },
+  "selection_graph": {
+    "items": [
+      {
+        "candidate_key": "grounding-paper",
+        "rationale": "Defines the grounding policy for unsupported claims.",
+        "bridge_note": "Sets the tone for the render quality discussion.",
+        "matched_subtopics": [
+          "grounding"
+        ],
+        "reading_time_minutes": 5,
+        "ordering_rationale": "Open with the grounding policy."
+      },
+      {
+        "candidate_key": "diversity-doc",
+        "rationale": "Explains why provider diversity is measured.",
+        "bridge_note": "Connects grounding to source diversity.",
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Follow with diversity rationale."
+      },
+      {
+        "candidate_key": "source-web",
+        "rationale": "Shows the concrete source kinds represented in the package.",
+        "bridge_note": "Adds the practical source-type view.",
+        "matched_subtopics": [
+          "source kinds"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Then show the source-kind mix."
+      },
+      {
+        "candidate_key": "source-scholar",
+        "rationale": "Shows a second academic source that broadens diversity.",
+        "bridge_note": "Closes the loop with another provider.",
+        "matched_subtopics": [
+          "provider diversity"
+        ],
+        "reading_time_minutes": 4,
+        "ordering_rationale": "Finish with the final diversity source."
+      }
+    ],
+    "gap_coverage_summary": []
+  },
+  "iteration_trace": {
+    "iterations": [
+      {
+        "iteration": 0,
+        "new_candidate_count": 2,
+        "accepted_candidate_count": 2,
+        "rejected_candidate_count": 0,
+        "coverage": 0.71,
+        "coverage_delta": 0.71,
+        "uncovered_subtopics": [
+          "source kinds"
+        ],
+        "estimated_cost_usd": 2.2,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "arxiv",
+            "summary": "search via arxiv succeeded"
+          }
+        ],
+        "continue_reason": "remaining uncovered subtopics: source kinds"
+      },
+      {
+        "iteration": 1,
+        "new_candidate_count": 2,
+        "accepted_candidate_count": 4,
+        "rejected_candidate_count": 0,
+        "coverage": 0.89,
+        "coverage_delta": 0.18,
+        "uncovered_subtopics": [],
+        "estimated_cost_usd": 2.3,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "docs",
+            "summary": "search via docs succeeded"
+          }
+        ],
+        "continue_reason": "coverage improved by 0.18; continue exploring"
+      },
+      {
+        "iteration": 2,
+        "new_candidate_count": 0,
+        "accepted_candidate_count": 4,
+        "rejected_candidate_count": 0,
+        "coverage": 0.95,
+        "coverage_delta": 0.06,
+        "uncovered_subtopics": [],
+        "estimated_cost_usd": 2.4,
+        "tool_calls": [
+          {
+            "tool_name": "search",
+            "status": "ok",
+            "provider": "brave",
+            "summary": "search via brave succeeded"
+          }
+        ],
+        "stop_reason": "diminishing_returns"
+      }
+    ]
+  },
+  "renders": [
+    {
+      "name": "full_report",
+      "content_markdown": "# Grounding and Diversity\n\nUnsupported claims are marked [UNVERIFIED], provider diversity is tracked to avoid single-provider convergence, and the selected source kinds include paper, docs, and web. This package gives the trajectory suite a diverse artifact with grounded final-render guidance.\n\n[1] Grounding paper\n[2] Diversity doc\n[3] Source web\n[4] Source scholar",
+      "citation_map": {
+        "[1]": "grounding-paper",
+        "[2]": "diversity-doc",
+        "[3]": "source-web",
+        "[4]": "source-scholar"
+      },
+      "structured_content": {
+        "sections": [
+          "Overview",
+          "Grounding",
+          "Diversity"
+        ],
+        "word_count": 47
+      },
+      "generated_at": "2026-04-07T15:10:00Z"
+    }
+  ],
+  "critique_result": null,
+  "grounding_result": null,
+  "coherence_result": null,
+  "preferences": null,
+  "preference_degradations": []
+}

@@ -182,6 +182,10 @@ class EvidenceCandidate(StrictBaseModel):
         default_factory=dict,
         description="Provider-specific metadata preserved for downstream processing.",
     )
+    iteration_added: int | None = Field(
+        default=None,
+        description="Iteration index where this candidate first entered the evidence ledger.",
+    )
     selected: bool = Field(
         default=False,
         description="True if this candidate was selected for the final deliverable.",
@@ -291,8 +295,13 @@ class IterationRecord(StrictBaseModel):
     coverage: StrictFloat = 0.0
     coverage_delta: StrictFloat = 0.0
     uncovered_subtopics: list[str] = Field(default_factory=list)
+    unanswered_questions: list[str] = Field(default_factory=list)
     estimated_cost_usd: StrictFloat = 0.0
     tool_calls: list["ToolCallRecord"] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    context_budget_used_ratio: StrictFloat | None = None
+    step_costs_usd: dict[str, float] = Field(default_factory=dict)
+    step_latencies_ms: dict[str, int] = Field(default_factory=dict)
     continue_reason: str | None = None
     stop_reason: StopReason | None = None
 
@@ -314,6 +323,17 @@ class IterationRecord(StrictBaseModel):
             raise ValueError("estimated_cost_usd must be finite")
         if self.estimated_cost_usd < 0.0:
             raise ValueError("estimated_cost_usd must be non-negative")
+        if (
+            self.context_budget_used_ratio is not None
+            and not 0.0 <= self.context_budget_used_ratio
+        ):
+            raise ValueError("context_budget_used_ratio must be non-negative")
+        for value in self.step_costs_usd.values():
+            if not isfinite(value) or value < 0.0:
+                raise ValueError("step_costs_usd values must be finite and non-negative")
+        for value in self.step_latencies_ms.values():
+            if value < 0:
+                raise ValueError("step_latencies_ms values must be non-negative")
         return self
 
 
@@ -555,6 +575,10 @@ class CoverageScore(StrictBaseModel):
         ...,
         description="Fraction of plan subtopics judged to be covered by the gathered evidence (0.0 to 1.0).",
     )
+    plan_fidelity: UnitFloat = Field(
+        default=0.0,
+        description="Fraction of plan key questions substantively addressed by the gathered evidence (0.0 to 1.0).",
+    )
     source_diversity: UnitFloat = Field(
         ...,
         description="Diversity of information sources used, normalized to 0.0-1.0.",
@@ -570,6 +594,10 @@ class CoverageScore(StrictBaseModel):
     uncovered_subtopics: list[str] = Field(
         default_factory=list,
         description="Subtopics from the plan that the scorer judged to be insufficiently covered.",
+    )
+    unanswered_questions: list[str] = Field(
+        default_factory=list,
+        description="Plan key questions that remain insufficiently answered by the current evidence.",
     )
 
 
@@ -653,6 +681,7 @@ class SearchAction(StrictBaseModel):
 class SearchExecutionResult(StrictBaseModel):
     raw_results: list[RawToolResult] = Field(default_factory=list)
     budget: "IterationBudget" = Field(default_factory=lambda: IterationBudget())
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SupervisorDecision(StrictBaseModel):
@@ -706,6 +735,7 @@ class SupervisorCheckpointResult(StrictBaseModel):
     )
     raw_results: list[RawToolResult] = Field(default_factory=list)
     budget: IterationBudget = Field(default_factory=IterationBudget)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RelevanceScorerOutput(StrictBaseModel):

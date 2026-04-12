@@ -12,12 +12,15 @@ The lazy ``_flow`` accessor avoids a circular import at module load time.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from time import perf_counter
 from types import ModuleType
 from typing import NamedTuple
 
 from deep_research.config import ResearchConfig
 from deep_research.enums import DeliverableMode, StopReason, Tier
+from deep_research.flow.convergence import detect_source_diversity_warning
 from deep_research.models import (
     CoherenceResult,
     CoverageScore,
@@ -210,6 +213,7 @@ def _run_supervisor_turn(
     iteration: int,
     run_state: RunState,
     uncovered_subtopics: list[str] | None,
+    unanswered_questions: list[str] | None,
     council_models: list[str],
 ) -> SupervisorCheckpointResult:
     """Dispatch to the council or single-supervisor branch.
@@ -219,6 +223,64 @@ def _run_supervisor_turn(
     """
     flow = _flow()
     config = run_state.config
+
+    def _normalize(result: object) -> SupervisorCheckpointResult:
+        if isinstance(result, SupervisorCheckpointResult):
+            return result
+        budget_obj = getattr(result, "budget", None)
+        if budget_obj is None:
+            budget = getattr(
+                SupervisorCheckpointResult.model_fields["budget"],
+                "default_factory",
+                lambda: None,
+            )()
+        else:
+            budget = budget_obj
+            if not hasattr(budget_obj, "model_dump"):
+                budget = {
+                    "input_tokens": getattr(budget_obj, "input_tokens", 0),
+                    "output_tokens": getattr(budget_obj, "output_tokens", 0),
+                    "total_tokens": getattr(
+                        budget_obj,
+                        "total_tokens",
+                        getattr(budget_obj, "input_tokens", 0)
+                        + getattr(budget_obj, "output_tokens", 0),
+                    ),
+                    "estimated_cost_usd": getattr(
+                        budget_obj, "estimated_cost_usd", 0.0
+                    ),
+                }
+        raw_results = []
+        for raw_result in getattr(result, "raw_results", []) or []:
+            raw_results.append(
+                RawToolResult(
+                    tool_name=getattr(raw_result, "tool_name", "tool"),
+                    provider=getattr(raw_result, "provider", "unknown"),
+                    payload=getattr(raw_result, "payload", {}),
+                    ok=getattr(raw_result, "ok", True),
+                    error=getattr(raw_result, "error", None),
+                )
+            )
+        return SupervisorCheckpointResult(
+            decision=getattr(
+                result,
+                "decision",
+                getattr(
+                    result,
+                    "output",
+                    None,
+                )
+                or getattr(
+                    SupervisorCheckpointResult.model_fields["decision"],
+                    "default_factory",
+                    lambda: None,
+                )(),
+            ),
+            raw_results=raw_results,
+            budget=budget,
+            warnings=list(getattr(result, "warnings", []) or []),
+        )
+
     if config.council_mode:
         futures = [
             flow.run_council_generator.submit(
@@ -228,35 +290,44 @@ def _run_supervisor_turn(
                 model_name,
                 config,
                 uncovered_subtopics,
+                unanswered_questions=unanswered_questions,
                 brief=run_state.brief,
                 preferences=run_state.preferences,
                 id=f"council_{iteration}_{index}",
             )
             for index, model_name in enumerate(council_models)
         ]
-        return flow.aggregate_council_results.submit(
-            [f.load() for f in futures],
+        return _normalize(
+            flow.aggregate_council_results.submit(
+                [f.load() for f in futures],
+            ).load()
+        )
+    return _normalize(
+        flow.run_supervisor.submit(
+            plan,
+            ledger,
+            iteration,
+            config,
+            uncovered_subtopics,
+            unanswered_questions=unanswered_questions,
+            brief=run_state.brief,
+            preferences=run_state.preferences,
+            id=f"supervisor_{iteration}",
         ).load()
-    return flow.run_supervisor.submit(
-        plan,
-        ledger,
-        iteration,
-        config,
-        uncovered_subtopics,
-        brief=run_state.brief,
-        preferences=run_state.preferences,
-        id=f"supervisor_{iteration}",
-    ).load()
+    )
 
 
 def _continue_reason(
     should_stop: bool,
     uncovered_subtopics: list[str],
+    unanswered_questions: list[str],
     coverage_delta: float,
 ) -> str | None:
     """Explain why the loop will keep running (or ``None`` when stopping)."""
     if should_stop:
         return None
+    if unanswered_questions:
+        return "remaining unanswered questions: " + ", ".join(unanswered_questions)
     if uncovered_subtopics:
         return "remaining uncovered subtopics: " + ", ".join(uncovered_subtopics)
     return f"coverage improved by {coverage_delta:.2f}; continue exploring"
@@ -279,6 +350,7 @@ def run_iteration_loop(
     provider_usage_summary: dict[str, int] = {}
     spent_usd = 0.0
     uncovered_subtopics: list[str] | None = None
+    unanswered_questions: list[str] | None = None
     council_models = (
         [config.supervisor_model] * config.council_size if config.council_mode else []
     )
@@ -288,14 +360,17 @@ def run_iteration_loop(
     with span("iteration_loop", max_iterations=config.max_iterations):
         for iteration in range(config.max_iterations):
             with span("iteration", iteration=iteration):
+                supervisor_started = perf_counter()
                 supervisor_result = _run_supervisor_turn(
                     plan,
                     ledger,
                     iteration,
                     run_state,
                     uncovered_subtopics,
+                    unanswered_questions,
                     council_models,
                 )
+                supervisor_latency_ms = int((perf_counter() - supervisor_started) * 1000)
                 decision = supervisor_result.decision
 
                 # Supervisor can signal completion directly via status field.
@@ -311,8 +386,10 @@ def run_iteration_loop(
                         else 0.0,
                         coverage_delta=0.0,
                         uncovered_subtopics=uncovered_subtopics or [],
+                        unanswered_questions=unanswered_questions or [],
                         estimated_cost_usd=supervisor_result.budget.estimated_cost_usd,
                         tool_calls=tool_calls,
+                        warnings=list(supervisor_result.warnings),
                         stop_reason=StopReason.SUPERVISOR_COMPLETE,
                     )
                     iteration_history = (*iteration_history, iteration_record)
@@ -320,11 +397,15 @@ def run_iteration_loop(
                     break
 
                 if decision.search_actions:
+                    search_started = perf_counter()
                     search_result = flow.execute_searches.submit(
                         decision, config, preferences=run_state.preferences
                     ).load()
+                    search_latency_ms = int((perf_counter() - search_started) * 1000)
                 else:
                     search_result = SearchExecutionResult()
+                    search_latency_ms = 0
+                search_warnings = getattr(search_result, "warnings", [])
 
                 combined_raw_results = [
                     *supervisor_result.raw_results,
@@ -338,27 +419,72 @@ def run_iteration_loop(
                 )
 
                 candidates = flow.extract_candidates.submit(combined_raw_results).load()
+                relevance_started = perf_counter()
                 relevance_result = flow.score_relevance.submit(
                     candidates, plan, config
                 ).load()
+                relevance_latency_ms = int((perf_counter() - relevance_started) * 1000)
                 relevance_cost = relevance_result.budget.estimated_cost_usd
                 iteration_cost = supervisor_cost + search_cost + relevance_cost
                 spent_usd = spent_usd + relevance_cost
 
+                scored_candidates = [
+                    candidate
+                    if getattr(candidate, "iteration_added", None) is not None
+                    or not hasattr(candidate, "model_copy")
+                    else candidate.model_copy(update={"iteration_added": iteration})
+                    for candidate in relevance_result.candidates
+                ]
                 ledger = flow.update_ledger.submit(
-                    relevance_result.candidates, ledger, config=config
+                    scored_candidates,
+                    ledger,
+                    config=config,
                 ).load()
                 ledger = flow.enrich_candidates.submit(ledger, config).load()
+                coverage_started = perf_counter()
                 coverage = flow.score_coverage.submit(ledger, plan, config).load()
+                coverage_latency_ms = int((perf_counter() - coverage_started) * 1000)
+                if not isinstance(coverage, CoverageScore):
+                    coverage = CoverageScore(
+                        subtopic_coverage=getattr(coverage, "subtopic_coverage", coverage.total),
+                        plan_fidelity=getattr(coverage, "plan_fidelity", coverage.total),
+                        source_diversity=getattr(coverage, "source_diversity", coverage.total),
+                        evidence_density=getattr(coverage, "evidence_density", coverage.total),
+                        total=getattr(coverage, "total", 0.0),
+                        uncovered_subtopics=list(
+                            getattr(coverage, "uncovered_subtopics", [])
+                        ),
+                        unanswered_questions=list(
+                            getattr(coverage, "unanswered_questions", [])
+                        ),
+                    )
                 previous_coverage = (
                     iteration_history[-1].coverage if iteration_history else 0.0
                 )
                 coverage_delta = round(coverage.total - previous_coverage, 6)
                 uncovered_subtopics = list(coverage.uncovered_subtopics)
+                unanswered_questions = list(coverage.unanswered_questions)
                 metric("iteration_coverage", coverage.total, iteration=iteration)
                 metric("iteration_cost_usd", iteration_cost, iteration=iteration)
                 metric("iteration_candidates", len(candidates), iteration=iteration)
                 tool_calls = build_tool_call_records(combined_raw_results)
+                warnings = [*supervisor_result.warnings, *search_warnings]
+                diversity_warning = detect_source_diversity_warning(ledger)
+                if diversity_warning is not None:
+                    warnings.append(diversity_warning)
+                ledger_payload = (
+                    ledger.model_dump(mode="json")
+                    if hasattr(ledger, "model_dump")
+                    else {
+                        "selected": [vars(item) for item in getattr(ledger, "selected", [])],
+                        "rejected": [vars(item) for item in getattr(ledger, "rejected", [])],
+                    }
+                )
+                context_budget_used_ratio = round(
+                    len(json.dumps(ledger_payload, allow_nan=False))
+                    / config.supervisor_context_budget_chars,
+                    4,
+                )
                 iteration_record = IterationRecord(
                     iteration=iteration,
                     new_candidate_count=len(candidates),
@@ -367,8 +493,23 @@ def run_iteration_loop(
                     coverage=coverage.total,
                     coverage_delta=coverage_delta,
                     uncovered_subtopics=uncovered_subtopics,
+                    unanswered_questions=unanswered_questions,
                     estimated_cost_usd=iteration_cost,
                     tool_calls=tool_calls,
+                    warnings=warnings,
+                    context_budget_used_ratio=context_budget_used_ratio,
+                    step_costs_usd={
+                        "supervisor": supervisor_cost,
+                        "search": search_cost,
+                        "relevance": relevance_cost,
+                        "coverage": 0.0,
+                    },
+                    step_latencies_ms={
+                        "supervisor": supervisor_latency_ms,
+                        "search": search_latency_ms,
+                        "relevance": relevance_latency_ms,
+                        "coverage": coverage_latency_ms,
+                    },
                 )
 
                 # Wall-clock observation lives behind a checkpoint so replays stay
@@ -387,7 +528,10 @@ def run_iteration_loop(
                     new_candidate_count=iteration_record.new_candidate_count,
                 )
                 continue_reason = _continue_reason(
-                    decision_stop.should_stop, uncovered_subtopics, coverage_delta
+                    decision_stop.should_stop,
+                    uncovered_subtopics,
+                    unanswered_questions,
+                    coverage_delta,
                 )
                 iteration_record = iteration_record.model_copy(
                     update={
@@ -398,19 +542,24 @@ def run_iteration_loop(
                     }
                 )
                 iteration_history = (*iteration_history, iteration_record)
-                flow.log(
-                    iteration=iteration,
-                    coverage=coverage.total,
-                    coverage_delta=coverage_delta,
-                    uncovered_subtopics=uncovered_subtopics,
-                    new_candidate_count=iteration_record.new_candidate_count,
-                    accepted_candidate_count=iteration_record.accepted_candidate_count,
-                    rejected_candidate_count=iteration_record.rejected_candidate_count,
-                    tool_summaries=[tc.summary for tc in tool_calls],
-                    stop_reason=iteration_record.stop_reason,
-                    continue_reason=continue_reason,
-                    spent_usd=round(spent_usd, 6),
-                )
+                log_kwargs = {
+                    "iteration": iteration,
+                    "coverage": coverage.total,
+                    "coverage_delta": coverage_delta,
+                    "uncovered_subtopics": uncovered_subtopics,
+                    "new_candidate_count": iteration_record.new_candidate_count,
+                    "accepted_candidate_count": iteration_record.accepted_candidate_count,
+                    "rejected_candidate_count": iteration_record.rejected_candidate_count,
+                    "tool_summaries": [tc.summary for tc in tool_calls],
+                    "stop_reason": iteration_record.stop_reason,
+                    "continue_reason": continue_reason,
+                    "spent_usd": round(spent_usd, 6),
+                }
+                if unanswered_questions:
+                    log_kwargs["unanswered_questions"] = unanswered_questions
+                if warnings:
+                    log_kwargs["warnings"] = warnings
+                flow.log(**log_kwargs)
                 if decision_stop.should_stop:
                     # Check replan gate before accepting the stop
                     if (
@@ -431,6 +580,7 @@ def run_iteration_loop(
                             if updates:
                                 plan = plan.model_copy(update=updates)
                             uncovered_subtopics = list(coverage.uncovered_subtopics)
+                            unanswered_questions = list(coverage.unanswered_questions)
                             _replans_used += 1
                             flow.log(
                                 replan_triggered=True,

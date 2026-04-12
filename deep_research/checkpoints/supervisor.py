@@ -11,6 +11,7 @@ from deep_research.agent_io import (
 )
 from deep_research.config import ModelPricing, ResearchConfig
 from deep_research.enums import DeliverableMode, PlanningMode
+from deep_research.evidence.ledger import select_new_this_iteration, truncate_ledger_for_context
 from deep_research.flow.costing import budget_from_agent_result
 from deep_research.models import (
     EvidenceLedger,
@@ -21,6 +22,48 @@ from deep_research.models import (
 )
 from deep_research.observability import bootstrap_logfire, span, warning
 from deep_research.providers import build_supervisor_surface
+
+
+def _pydantic_ai_version() -> str:
+    try:
+        import pydantic_ai
+    except Exception:
+        return "unknown"
+    return getattr(pydantic_ai, "__version__", None) or "unknown"
+
+
+def _build_trace_warning_result(
+    *,
+    iteration: int,
+    trace_stats: ToolTraceExtractionStats,
+    collector_call_count: int | None = None,
+) -> RawToolResult:
+    warning_codes = list(trace_stats.warnings)
+    if collector_call_count is not None and collector_call_count != trace_stats.tool_return_part_count:
+        warning_codes.append("hook_capture_mismatch")
+    warning_codes = sorted(dict.fromkeys(warning_codes))
+    warning_message = (
+        f"iteration={iteration} "
+        f"dropped_part_count={trace_stats.dropped_part_count} "
+        f"warning_codes={','.join(warning_codes) if warning_codes else 'none'} "
+        f"pydantic_ai_version={_pydantic_ai_version()}"
+    )
+    return RawToolResult(
+        tool_name="supervisor_trace_warning",
+        provider="supervisor",
+        payload={
+            "iteration": iteration,
+            "trace_available": trace_stats.trace_available,
+            "tool_return_part_count": trace_stats.tool_return_part_count,
+            "normalized_result_count": trace_stats.normalized_result_count,
+            "dropped_part_count": trace_stats.dropped_part_count,
+            "warning_codes": warning_codes,
+            "pydantic_ai_version": _pydantic_ai_version(),
+            "message": warning_message,
+        },
+        ok=False,
+        error=warning_message,
+    )
 
 
 def build_supervisor_guidance(preferences: ResearchPreferences) -> str:
@@ -102,6 +145,7 @@ def execute_supervisor_turn(
     iteration: int,
     config: ResearchConfig,
     uncovered_subtopics: list[str] | None = None,
+    unanswered_questions: list[str] | None = None,
     brief: str | None = None,
     preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
@@ -111,9 +155,18 @@ def execute_supervisor_turn(
 
     if uncovered_subtopics is None:
         uncovered_subtopics = list(plan.subtopics)
+    if unanswered_questions is None:
+        unanswered_questions = list(plan.key_questions)
+    context_ledger = truncate_ledger_for_context(
+        ledger,
+        max_chars=config.supervisor_context_budget_chars,
+        role="supervisor",
+        snippet_budget_chars=config.context_snippet_budget_chars,
+        current_iteration=iteration,
+    )
     toolsets, tools = build_supervisor_surface(
         plan,
-        ledger,
+        context_ledger,
         uncovered_subtopics=uncovered_subtopics,
         tool_timeout_sec=config.tool_timeout_sec,
         allow_bash_tool=config.allow_supervisor_bash,
@@ -125,8 +178,13 @@ def execute_supervisor_turn(
     )
     prompt: dict[str, object] = {
         "plan": plan.model_dump(mode="json"),
-        "ledger": ledger.model_dump(mode="json"),
+        "ledger": context_ledger.model_dump(mode="json"),
+        "new_this_iteration": [
+            candidate.model_dump(mode="json")
+            for candidate in select_new_this_iteration(context_ledger, iteration)
+        ],
         "uncovered_subtopics": uncovered_subtopics,
+        "unanswered_questions": unanswered_questions,
         "iteration": iteration,
         "tier": config.tier.value,
         "max_tool_calls": config.max_tool_calls_per_cycle,
@@ -138,7 +196,10 @@ def execute_supervisor_turn(
         prompt["user_brief"] = brief
     if preferences is not None:
         prompt["preferences"] = preferences.model_dump(mode="json")
-        prompt["guidance"] = build_supervisor_guidance(preferences)
+        prompt["guidance"] = (
+            build_supervisor_guidance(preferences)
+            + " Prioritize search actions that close unanswered key questions first."
+        )
 
     with span(
         "supervisor turn",
@@ -158,17 +219,34 @@ def execute_supervisor_turn(
                 serialized_prompt,
                 hooks={"after_tool_call": collector.hook},
             )
+            extracted_results, trace_stats = extract_mcp_raw_results_with_stats(result)
             raw_results = collector.results
-            trace_stats = ToolTraceExtractionStats(
-                trace_available=True,
-                tool_return_part_count=collector.call_count,
-                normalized_result_count=len(collector.results),
-            )
+            if (
+                trace_stats.trace_available
+                and collector.call_count != trace_stats.tool_return_part_count
+                and extracted_results
+            ):
+                raw_results = extracted_results
         else:
             result = agent.run_sync(serialized_prompt)
             raw_results, trace_stats = extract_mcp_raw_results_with_stats(result)
 
-    if trace_stats.warnings:
+    hook_capture_mismatch = (
+        supports_hooks
+        and trace_stats.trace_available
+        and collector.call_count != trace_stats.tool_return_part_count
+    )
+    if trace_stats.warnings or trace_stats.dropped_part_count > 0 or hook_capture_mismatch:
+        raw_results = [
+            *raw_results,
+            _build_trace_warning_result(
+            iteration=iteration,
+            trace_stats=trace_stats,
+            collector_call_count=collector.call_count if supports_hooks else None,
+        ),
+        ]
+
+    if trace_stats.warnings or trace_stats.dropped_part_count > 0 or hook_capture_mismatch:
         warning(
             "Supervisor tool trace extraction degraded",
             iteration=iteration,
@@ -178,6 +256,8 @@ def execute_supervisor_turn(
             normalized_result_count=trace_stats.normalized_result_count,
             dropped_part_count=trace_stats.dropped_part_count,
             warnings=trace_stats.warnings,
+            hook_capture_mismatch=hook_capture_mismatch,
+            pydantic_ai_version=_pydantic_ai_version(),
         )
 
     return SupervisorCheckpointResult(
@@ -187,6 +267,7 @@ def execute_supervisor_turn(
             result,
             ModelPricing.model_validate(config.supervisor_pricing),
         ),
+        warnings=list(trace_stats.warnings),
     )
 
 
@@ -197,6 +278,7 @@ def run_supervisor(
     iteration: int,
     config: ResearchConfig,
     uncovered_subtopics: list[str] | None = None,
+    unanswered_questions: list[str] | None = None,
     brief: str | None = None,
     preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
@@ -207,6 +289,7 @@ def run_supervisor(
         iteration,
         config,
         uncovered_subtopics,
+        unanswered_questions,
         brief=brief,
         preferences=preferences,
     )

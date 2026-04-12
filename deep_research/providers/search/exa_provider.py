@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult
 from deep_research.providers.search import failure_result
-from deep_research.providers.search._http import build_client
+from deep_research.providers.search._http import (
+    DEFAULT_RETRY_POLICY,
+    build_client,
+    request_with_retry,
+)
 
 
 class ExaSearchProvider:
@@ -40,8 +44,11 @@ class ExaSearchProvider:
                 ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             for query in queries:
                 try:
-                    response = client.post(
+                    response = request_with_retry(
+                        client,
+                        "POST",
                         "https://api.exa.ai/search",
+                        retry_policy=DEFAULT_RETRY_POLICY,
                         headers={"x-api-key": self._api_key},
                         json={
                             "query": query,
@@ -53,7 +60,6 @@ class ExaSearchProvider:
                             ),
                         },
                     )
-                    response.raise_for_status()
                     payload = response.json()
                     items = [
                         {

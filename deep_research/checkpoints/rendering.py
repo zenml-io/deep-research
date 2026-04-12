@@ -34,6 +34,8 @@ def write_reading_path(
         prompt_name="writer_reading_path",
         pricing=ModelPricing.model_validate(config.writer_pricing),
         preferences=preferences,
+        max_context_chars=config.writer_context_budget_chars,
+        snippet_budget_chars=config.context_snippet_budget_chars,
     )
 
 
@@ -63,6 +65,8 @@ def write_backing_report(
         prompt_name="writer_backing_report",
         pricing=ModelPricing.model_validate(config.writer_pricing),
         preferences=preferences,
+        max_context_chars=config.writer_context_budget_chars,
+        snippet_budget_chars=config.context_snippet_budget_chars,
     )
 
 
@@ -79,4 +83,6 @@ def write_full_report(
         prompt_name="writer_full_report",
         pricing=ModelPricing.model_validate(config.writer_pricing),
         preferences=preferences,
+        max_context_chars=config.writer_context_budget_chars,
+        snippet_budget_chars=config.context_snippet_budget_chars,
     )

@@ -5,6 +5,7 @@ importing checkpoint-decorated modules. Checkpoint wrappers should live elsewher
 """
 
 import re
+from collections.abc import Mapping
 
 from deep_research.agent_io import serialize_prompt_payload
 from deep_research.config import ModelPricing
@@ -63,6 +64,45 @@ def prompt_for_mode(
     return f"{preamble}\n\n{base_prompt}"
 
 
+def _trim_structure(value: object, *, string_budget: int, list_budget: int) -> object:
+    if isinstance(value, str):
+        return value[:string_budget]
+    if isinstance(value, list):
+        return [
+            _trim_structure(item, string_budget=string_budget, list_budget=list_budget)
+            for item in value[:list_budget]
+        ]
+    if isinstance(value, Mapping):
+        return {
+            key: _trim_structure(
+                nested, string_budget=string_budget, list_budget=list_budget
+            )
+            for key, nested in value.items()
+        }
+    return value
+
+
+def _truncate_render_input(
+    structured_content: object,
+    *,
+    max_chars: int | None,
+    snippet_budget_chars: int,
+) -> object:
+    if max_chars is None:
+        return structured_content
+    current = structured_content
+    for list_budget in (50, 25, 10, 5, 3):
+        candidate = _trim_structure(
+            current,
+            string_budget=snippet_budget_chars,
+            list_budget=list_budget,
+        )
+        if len(serialize_prompt_payload(candidate, label="writer input")) <= max_chars:
+            return candidate
+        current = candidate
+    return current
+
+
 def materialize_render_payload(
     scaffold: RenderPayload,
     *,
@@ -70,11 +110,18 @@ def materialize_render_payload(
     prompt_name: str,
     pricing: ModelPricing,
     preferences: ResearchPreferences | None = None,
+    max_context_chars: int | None = None,
+    snippet_budget_chars: int = 600,
 ) -> RenderCheckpointResult:
     """Run the writer agent against a scaffold and return validated synthesized prose."""
     from deep_research.agents.writer import build_writer_agent
 
     agent = build_writer_agent(writer_model)
+    truncated_input = _truncate_render_input(
+        scaffold.structured_content,
+        max_chars=max_context_chars,
+        snippet_budget_chars=snippet_budget_chars,
+    )
     prompt = {
         "trusted_render_guidance": prompt_for_mode(prompt_name, preferences),
         "trusted_context": {
@@ -84,7 +131,7 @@ def materialize_render_payload(
                 preferences.model_dump(mode="json") if preferences is not None else None
             ),
         },
-        "untrusted_render_input": scaffold.structured_content,
+        "untrusted_render_input": truncated_input,
     }
     result = agent.run_sync(
         serialize_prompt_payload(prompt, label="writer render payload")

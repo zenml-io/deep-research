@@ -1,0 +1,184 @@
+[
+  {
+    "id": "trajectory_pkg_001",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_001.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "converged",
+      "min_selected_evidence_count": 3,
+      "min_coverage_total": 0.9,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 3,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_002",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_001.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "converged",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.85,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_003",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_001.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "converged",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.9,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_004",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_002.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "max_iterations",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.8,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_005",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_002.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "max_iterations",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.78,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_006",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_002.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "max_iterations",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.75,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_007",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_003.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "supervisor_complete",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.85,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_008",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_003.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "supervisor_complete",
+      "min_selected_evidence_count": 2,
+      "min_coverage_total": 0.82,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "web"
+      ],
+      "min_unique_providers": 2,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_009",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_004.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "diminishing_returns",
+      "min_selected_evidence_count": 4,
+      "min_coverage_total": 0.94,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "docs",
+        "web"
+      ],
+      "min_unique_providers": 3,
+      "allow_unanswered_questions": false
+    }
+  },
+  {
+    "id": "trajectory_pkg_010",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_004.json"
+    },
+    "constraints": {
+      "expected_stop_reason": "diminishing_returns",
+      "min_selected_evidence_count": 4,
+      "min_coverage_total": 0.93,
+      "min_plan_fidelity": 1.0,
+      "required_source_kinds": [
+        "paper",
+        "web"
+      ],
+      "min_unique_providers": 3,
+      "allow_unanswered_questions": false
+    }
+  }
+]

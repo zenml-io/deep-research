@@ -1,9 +1,13 @@
+import json
 from pathlib import Path
+
+import pytest
 
 import evals.peval as peval
 from evals.loader import load_dataset
 from evals.runner import run_selected_suites
 from evals.settings import EvalSettings
+from evals.suites import SUITE_REGISTRY
 
 
 DATASET_ROOT = Path("evals/datasets")
@@ -13,10 +17,13 @@ def test_eval_datasets_load() -> None:
     brief_cases = load_dataset(DATASET_ROOT / "brief_to_plan.json")
     supervisor_cases = load_dataset(DATASET_ROOT / "supervisor_trace_and_safety.json")
     render_cases = load_dataset(DATASET_ROOT / "render_quality.json")
+    trajectory_cases = load_dataset(DATASET_ROOT / "trajectory_quality.json")
 
     assert len(brief_cases) >= 2
     assert len(supervisor_cases) >= 2
     assert len(render_cases) >= 2
+    assert len(trajectory_cases) >= 10
+    assert all("package_artifact" in case["input"] for case in trajectory_cases)
 
 
 def test_eval_runner_all_baseline_suites_smoke() -> None:
@@ -46,7 +53,67 @@ def test_eval_runner_all_baseline_suites_smoke() -> None:
         assert "judge" not in suite
 
 
-def test_eval_runner_sets_judge_mode_without_optional_dependency() -> None:
+def test_eval_runner_includes_trajectory_suite() -> None:
+    assert "trajectory_quality" in SUITE_REGISTRY
+
+    summary = run_selected_suites(
+        selected_suites=["trajectory_quality"],
+        dataset_root=DATASET_ROOT,
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["total_suites"] == 1
+    assert summary["total_cases"] == 10
+    assert summary["failed_cases"] == 0
+    assert summary["skipped_suites"] == 0
+
+    suite = summary["suites"][0]
+    assert suite["suite"] == "trajectory_quality"
+    assert suite["status"] == "ok"
+    assert suite["total_cases"] == 10
+    assert suite["failed_cases"] == 0
+    assert len(suite["case_results"]) == 10
+    assert all(result["passed"] for result in suite["case_results"])
+
+
+def test_trajectory_suite_reports_missing_package_artifact_readably(tmp_path) -> None:
+    dataset_root = tmp_path
+    (dataset_root / "trajectory_quality.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "trajectory_pkg_missing",
+                    "input": {
+                        "package_artifact": "evals/fixtures/trajectory_quality/missing.json"
+                    },
+                    "constraints": {
+                        "expected_stop_reason": "converged",
+                        "min_selected_evidence_count": 1,
+                        "min_coverage_total": 0.1,
+                        "min_plan_fidelity": 0.1,
+                        "allow_unanswered_questions": True,
+                    },
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Trajectory package artifact not found"):
+        run_selected_suites(
+            selected_suites=["trajectory_quality"],
+            dataset_root=dataset_root,
+        )
+
+
+def test_eval_runner_sets_judge_mode_without_optional_dependency(monkeypatch) -> None:
+    monkeypatch.setattr(peval, "Case", None)
+    monkeypatch.setattr(peval, "Dataset", None)
+    monkeypatch.setattr(peval, "EqualsExpected", None)
+    monkeypatch.setattr(peval, "LLMJudge", None)
+    monkeypatch.setattr(peval, "ModelSettings", None)
+
     summary = run_selected_suites(
         selected_suites=["brief_to_plan"],
         dataset_root=DATASET_ROOT,

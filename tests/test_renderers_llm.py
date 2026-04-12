@@ -18,6 +18,7 @@ from deep_research.models import (
     SelectionGraph,
     SelectionItem,
 )
+from deep_research.enums import StopReason
 
 
 def _install_kitaru_checkpoint_stub(monkeypatch):
@@ -137,6 +138,49 @@ def test_render_reading_path_checkpoint_materializes_writer_prose(monkeypatch) -
     assert captured["prompt"]["untrusted_render_input"]["items"][0]["candidate_key"] == "source-1"
     assert captured["prompt"]["untrusted_render_input"]["items"][0]["rationale"] == "Start here"
     assert captured["prompt"]["untrusted_render_input"]["items"][0]["citation"] == "[1]"
+
+
+def test_render_backing_report_checkpoint_materializes_writer_prose(monkeypatch) -> None:
+    module = _import_rendering_module(monkeypatch)
+    materialization_module = importlib.import_module(
+        "deep_research.renderers.materialization"
+    )
+
+    captured = {}
+
+    class FakeAgent:
+        def run_sync(self, prompt):
+            captured["prompt"] = json.loads(prompt)
+            return types.SimpleNamespace(
+                output=RenderProse(content_markdown="# Backing Report\n\nUse [1].")
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deep_research.agents.writer",
+        types.SimpleNamespace(build_writer_agent=lambda model_name: FakeAgent()),
+    )
+    monkeypatch.setattr(
+        materialization_module, "load_prompt", lambda name: f"prompt:{name}"
+    )
+
+    result = module.write_backing_report(
+        SelectionGraph(
+            items=[SelectionItem(candidate_key="source-1", rationale="Start here")]
+        ),
+        _sample_ledger(),
+        _sample_plan(),
+        IterationTrace(),
+        {"arxiv": 1},
+        StopReason.CONVERGED,
+        ResearchConfig.for_tier(Tier.STANDARD),
+    )
+
+    assert result.render.content_markdown.startswith("# Backing Report")
+    assert captured["prompt"]["trusted_render_guidance"] == "prompt:writer_backing_report"
+    assert captured["prompt"]["trusted_context"]["render_name"] == "backing_report"
+    assert captured["prompt"]["untrusted_render_input"]["goal"] == "Explain the topic"
+    assert captured["prompt"]["untrusted_render_input"]["stop_reason"] == "converged"
 
 
 def test_render_checkpoint_uses_writer_pricing_for_budget(monkeypatch) -> None:

@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
   "kitaru",
   "pydantic>=2",
-  "pydantic-ai",
+  "pydantic-ai>=1.75",
   "logfire",
   "pydantic-settings",
   "httpx>=0.27",
@@ -29,3 +29,16 @@ include = ["deep_research*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = [
+    "deep-research",
+]
+
+[tool.uv.sources]
+kitaru = { path = "../kitaru/kitaru", editable = true }
+
+[tool.uv]
+override-dependencies = [
+  "opentelemetry-sdk>=1.39.0",
+]
