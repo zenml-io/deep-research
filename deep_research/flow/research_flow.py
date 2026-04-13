@@ -79,10 +79,7 @@ def research_flow(
     with span("research_flow", brief_length=len(brief), tier=tier):
         stamp = stamp_run_metadata.submit().load()
         run_state = _pipeline.resolve_config_and_classify(brief, tier, config)
-        plan = build_plan.submit(
-            run_state.brief, run_state.classification, run_state.config.tier
-        ).load()
-        _pipeline.await_plan_approval_if_required(plan, run_state.config)
+        plan = _pipeline.build_plan_with_grounding(run_state)
         iteration_output = _pipeline.run_iteration_loop(plan, run_state, stamp)
         selection = rank_evidence.submit(
             iteration_output.ledger, plan, run_state.config
@@ -99,7 +96,9 @@ def research_flow(
             critique_bundle.renders, plan, iteration_output.ledger, run_state.config
         )
         spent_usd = spent_usd + judge_bundle.spent_usd
-        finalization = finalize_run_metadata.submit(stamp.started_at).load()
+        finalization = finalize_run_metadata.submit(
+            stamp.started_at,
+        ).load()
         return _pipeline.assemble_final_package(
             stamp=stamp,
             finalization=finalization,

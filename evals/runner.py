@@ -12,6 +12,13 @@ from evals.loader import load_dataset
 from evals.logfire import bootstrap_logfire
 from evals.settings import EvalSettings
 from evals.suites import SUITE_REGISTRY
+from evals.suites import web_regression
+
+
+SUITE_REGISTRY = {
+    **SUITE_REGISTRY,
+    web_regression.SUITE_NAME: web_regression.run,
+}
 
 
 def _write_baseline(summary: dict, output_dir: Path, baseline_name: str | None = None) -> Path:

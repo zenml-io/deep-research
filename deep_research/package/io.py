@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 
 from deep_research.config import ModelPricing, ResearchConfig
-from deep_research.models import InvestigationPackage, RenderPayload
+from deep_research.models import ClaimInventory, InvestigationPackage, RenderPayload
 from deep_research.renderers.full_report import (
     render_full_report as build_full_report_scaffold,
 )
@@ -39,6 +39,39 @@ def write_json(content: str, path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def render_claim_inventory_markdown(claim_inventory: ClaimInventory) -> str:
+    """Render the optional claim inventory as a compact markdown artifact."""
+    lines = [
+        "# Claim Inventory",
+        "",
+        f"Total claims: {claim_inventory.total_claims}",
+        f"Supported ratio: {claim_inventory.supported_ratio:.2f}",
+        f"Unsupported ratio: {claim_inventory.unsupported_ratio:.2f}",
+        f"Trivial ratio: {claim_inventory.trivial_ratio:.2f}",
+        "",
+    ]
+    for index, claim in enumerate(claim_inventory.claims, start=1):
+        evidence_keys = ", ".join(claim.supporting_candidate_keys) or "none"
+        lines.extend(
+            [
+                f"## Claim {index}",
+                claim.claim_text,
+                "",
+                f"- Status: {claim.support_status}",
+                f"- Confidence: {claim.confidence_score:.2f}",
+                f"- Evidence keys: {evidence_keys}",
+            ]
+        )
+        if claim.covered_subtopics:
+            lines.append(
+                f"- Covered subtopics: {', '.join(claim.covered_subtopics)}"
+            )
+        if claim.verification_reasoning:
+            lines.append(f"- Verification: {claim.verification_reasoning}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def reset_directory(path: Path) -> None:
@@ -89,6 +122,10 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
     normalized_render_file_names = {name.casefold() for name in render_file_names}
     if len(render_file_names) != len(normalized_render_file_names):
         raise ValueError("Duplicate render output filename")
+    if "full_report.md" in normalized_render_file_names:
+        raise ValueError(
+            "Duplicate render output filename: 'full_report' is reserved"
+        )
 
     run_dir = output_dir / run_dir_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +140,10 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
             "# Summary\n\n"
             f"Run ID: {package.run_summary.run_id}\n\n"
             f"Status: {package.run_summary.status}\n"
+            f"Elapsed seconds: {package.run_summary.elapsed_seconds}\n"
+            f"Active elapsed seconds: {package.run_summary.active_elapsed_seconds}\n"
+            f"Wall elapsed seconds: "
+            f"{package.run_summary.wall_elapsed_seconds if package.run_summary.wall_elapsed_seconds is not None else 'n/a'}\n"
         ),
         run_dir / "summary.md",
     )
@@ -117,8 +158,22 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
         "",
         f"Approval status: {package.research_plan.approval_status}",
         "",
-        "## Key Questions",
     ]
+    if package.research_plan.seeded_entities is not None:
+        seeded = package.research_plan.seeded_entities
+        plan_lines.extend(
+            [
+                "## Seeded Entities",
+                "",
+                f"- Projects: {', '.join(seeded.projects) if seeded.projects else 'none'}",
+                f"- Benchmarks: {', '.join(seeded.benchmarks) if seeded.benchmarks else 'none'}",
+                f"- Products: {', '.join(seeded.products) if seeded.products else 'none'}",
+                f"- Companies: {', '.join(seeded.companies) if seeded.companies else 'none'}",
+                f"- Key terms: {', '.join(seeded.key_terms) if seeded.key_terms else 'none'}",
+                "",
+            ]
+        )
+    plan_lines.append("## Key Questions")
     plan_lines.extend(
         f"- {question}" for question in package.research_plan.key_questions
     )
@@ -147,6 +202,15 @@ def write_package(package: InvestigationPackage, output_dir: Path) -> Path:
             ]
         )
     write_markdown("\n".join(ledger_lines) + "\n", run_dir / "evidence" / "ledger.md")
+    if package.claim_inventory is not None:
+        write_json(
+            package.claim_inventory.model_dump_json(indent=2),
+            run_dir / "evidence" / "claims.json",
+        )
+        write_markdown(
+            render_claim_inventory_markdown(package.claim_inventory),
+            run_dir / "evidence" / "claims.md",
+        )
     for iteration in package.iteration_trace.iterations:
         write_json(
             iteration.model_dump_json(indent=2),

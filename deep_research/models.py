@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from math import isfinite
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from pydantic import (
     AnyUrl,
@@ -85,6 +85,29 @@ class ResearchPreferences(StrictBaseModel):
     speed_bias: str | None = None
 
 
+class SeededEntities(StrictBaseModel):
+    projects: list[str] = Field(default_factory=list)
+    benchmarks: list[str] = Field(default_factory=list)
+    products: list[str] = Field(default_factory=list)
+    companies: list[str] = Field(default_factory=list)
+    key_terms: list[str] = Field(default_factory=list)
+
+
+class ClarifyOptions(StrictBaseModel):
+    scope: str | None = None
+    source_preference: str | None = None
+    depth_vs_breadth: str | None = None
+    comparison_targets: list[str] = Field(default_factory=list)
+    deliverable_mode: DeliverableMode | None = None
+    notes: str | None = None
+
+
+class PlanApproval(StrictBaseModel):
+    approved: bool
+    notes: str | None = None
+    overrides: ClarifyOptions | None = None
+
+
 class ResearchPlan(StrictBaseModel):
     """Structured plan the planner produces for a research brief.
 
@@ -125,6 +148,14 @@ class ResearchPlan(StrictBaseModel):
         default_factory=list,
         description="Optional allow-list of source groups (e.g. academic, news) the plan should stay within.",
     )
+    seeded_entities: SeededEntities | None = Field(
+        default=None,
+        description="Named entities discovered before planning to ground queries and subtopics.",
+    )
+    coverage_targets: list[str] = Field(
+        default_factory=list,
+        description="Optional coverage targets used by later evaluation and convergence logic.",
+    )
     approval_status: Literal["not_requested", "pending", "approved", "rejected"] = (
         Field(
             default="not_requested",
@@ -156,6 +187,10 @@ class EvidenceCandidate(StrictBaseModel):
     source_kind: SourceKind = Field(
         ..., description="Classification of the source type."
     )
+    source_group: SourceGroup | None = Field(
+        default=None,
+        description="Higher-level source grouping used for selection policy and evaluation.",
+    )
     quality_score: UnitFloat = Field(
         default=0.0, description="Overall quality estimate (0.0 to 1.0)."
     )
@@ -178,6 +213,30 @@ class EvidenceCandidate(StrictBaseModel):
     arxiv_id: str | None = Field(
         default=None, description="ArXiv paper ID if available."
     )
+    published_at: str | None = Field(
+        default=None,
+        description="Publication timestamp if available as an ISO-8601 string.",
+    )
+    canonical_url: str | None = Field(
+        default=None,
+        description="Normalized URL used for deduplication and canonical identity.",
+    )
+    selection_score: UnitFloat = Field(
+        default=0.0,
+        description="Composite selection score reserved for later ranking stages.",
+    )
+    novelty_score: UnitFloat = Field(
+        default=0.0,
+        description="Novelty estimate relative to the current evidence set.",
+    )
+    authority_rationale: str | None = Field(
+        default=None,
+        description="Optional short explanation for the authority score.",
+    )
+    relevance_rationale: str | None = Field(
+        default=None,
+        description="Optional short explanation for the relevance score.",
+    )
     raw_metadata: dict[str, object] = Field(
         default_factory=dict,
         description="Provider-specific metadata preserved for downstream processing.",
@@ -190,6 +249,11 @@ class EvidenceCandidate(StrictBaseModel):
         default=False,
         description="True if this candidate was selected for the final deliverable.",
     )
+
+    @field_validator("published_at")
+    @classmethod
+    def validate_published_at(cls, value: str | None) -> str | None:
+        return validate_iso8601_timestamp(value)
 
     @model_validator(mode="after")
     def validate_raw_metadata(self) -> "EvidenceCandidate":
@@ -212,6 +276,10 @@ class EvidenceLedger(StrictBaseModel):
     selected: list[EvidenceCandidate] = Field(default_factory=list)
     rejected: list[EvidenceCandidate] = Field(default_factory=list)
     dedupe_log: list[DedupeEvent] = Field(default_factory=list)
+    selection_policy_version: str | None = None
+    considered_count: int | None = None
+    selected_count: int | None = None
+    rejected_count: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -496,6 +564,8 @@ class RunSummary(StrictBaseModel):
     status: str
     estimated_cost_usd: float = 0.0
     elapsed_seconds: int = 0
+    active_elapsed_seconds: int = 0
+    wall_elapsed_seconds: int | None = None
     iteration_count: int = 0
     provider_usage_summary: dict[str, int] = Field(default_factory=dict)
     council_enabled: bool = False
@@ -517,6 +587,10 @@ class RunSummary(StrictBaseModel):
             raise ValueError("estimated_cost_usd must be non-negative")
         if self.elapsed_seconds < 0:
             raise ValueError("elapsed_seconds must be non-negative")
+        if self.active_elapsed_seconds < 0:
+            raise ValueError("active_elapsed_seconds must be non-negative")
+        if self.wall_elapsed_seconds is not None and self.wall_elapsed_seconds < 0:
+            raise ValueError("wall_elapsed_seconds must be non-negative")
         if self.iteration_count < 0:
             raise ValueError("iteration_count must be non-negative")
         if self.council_size < 1:
@@ -568,6 +642,8 @@ class InvestigationPackage(StrictBaseModel):
     render_settings: RenderSettingsSnapshot | None = None
     preferences: ResearchPreferences | None = None
     preference_degradations: list[str] = Field(default_factory=list)
+    claim_inventory: Optional["ClaimInventory"] = None
+    convergence_signal: Optional["ConvergenceSignal"] = None
 
 
 class CoverageScore(StrictBaseModel):
@@ -598,6 +674,22 @@ class CoverageScore(StrictBaseModel):
     unanswered_questions: list[str] = Field(
         default_factory=list,
         description="Plan key questions that remain insufficiently answered by the current evidence.",
+    )
+    coverage_by_subtopic: dict[str, UnitFloat] = Field(
+        default_factory=dict,
+        description="Optional finer-grained coverage scores by subtopic.",
+    )
+    source_group_diversity: dict[str, int] = Field(
+        default_factory=dict,
+        description="Counts of represented source groups used by downstream evaluators.",
+    )
+    marginal_info_gain: float = Field(
+        default=0.0,
+        description="Estimated marginal information gain from the most recent iteration.",
+    )
+    weak_claims: list[str] = Field(
+        default_factory=list,
+        description="Claims or draft assertions that remain weakly supported.",
     )
 
 
@@ -805,4 +897,65 @@ class RequestClassification(StrictBaseModel):
             raise ValueError(
                 "clarification_question must be None when clarification is not needed"
             )
+        return self
+
+
+class ClaimRecord(StrictBaseModel):
+    claim_text: str
+    supporting_candidate_keys: list[str] = Field(default_factory=list)
+    support_status: Literal["supported", "weak", "unsupported", "unverifiable"]
+    confidence_score: UnitFloat = 0.0
+    verification_reasoning: str = ""
+    claim_type: Literal["factual", "comparative", "procedural", "evaluative"] = (
+        "factual"
+    )
+    is_trivial: bool = False
+    covered_subtopics: list[str] = Field(default_factory=list)
+    source_group_breakdown: dict[str, int] = Field(default_factory=dict)
+    contradicts_claims: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_source_group_breakdown(self) -> "ClaimRecord":
+        for key, value in self.source_group_breakdown.items():
+            if value < 0:
+                raise ValueError(
+                    f"source_group_breakdown[{key!r}] must be non-negative"
+                )
+        return self
+
+
+class ClaimInventory(StrictBaseModel):
+    claims: list[ClaimRecord] = Field(default_factory=list)
+    total_claims: int = 0
+    supported_ratio: UnitFloat = 0.0
+    unsupported_ratio: UnitFloat = 0.0
+    trivial_ratio: UnitFloat = 0.0
+    per_subtopic_coverage: dict[str, UnitFloat] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def infer_totals(self) -> "ClaimInventory":
+        if self.total_claims == 0:
+            self.total_claims = len(self.claims)
+        return self
+
+
+class ConvergenceSignal(StrictBaseModel):
+    token_budget_remaining: UnitFloat = 1.0
+    subtopic_coverage: UnitFloat = 0.0
+    source_count: int = 0
+    marginal_info_gain: float = 0.0
+    stall_count: int = 0
+    selected_count: int = 0
+    source_group_diversity: int = 0
+
+    @model_validator(mode="after")
+    def validate_non_negative(self) -> "ConvergenceSignal":
+        if self.source_count < 0:
+            raise ValueError("source_count must be non-negative")
+        if self.stall_count < 0:
+            raise ValueError("stall_count must be non-negative")
+        if self.selected_count < 0:
+            raise ValueError("selected_count must be non-negative")
+        if self.source_group_diversity < 0:
+            raise ValueError("source_group_diversity must be non-negative")
         return self

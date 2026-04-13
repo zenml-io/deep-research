@@ -86,3 +86,39 @@ def write_full_report(
         max_context_chars=config.writer_context_budget_chars,
         snippet_budget_chars=config.context_snippet_budget_chars,
     )
+
+
+@checkpoint(type="llm_call")
+def write_comparison_memo(
+    package: InvestigationPackage,
+    config: ResearchConfig,
+    preferences: ResearchPreferences | None = None,
+) -> RenderCheckpointResult:
+    """Checkpoint: synthesize a comparison memo from package state."""
+    return materialize_render_payload(
+        full_report.render_comparison_memo(package),
+        writer_model=config.writer_model,
+        prompt_name="writer_full_report",
+        pricing=ModelPricing.model_validate(config.writer_pricing),
+        preferences=preferences,
+        max_context_chars=config.writer_context_budget_chars,
+        snippet_budget_chars=config.context_snippet_budget_chars,
+    )
+
+
+@checkpoint(type="llm_call")
+def write_recommendation_brief(
+    package: InvestigationPackage,
+    config: ResearchConfig,
+    preferences: ResearchPreferences | None = None,
+) -> RenderCheckpointResult:
+    """Checkpoint: synthesize a recommendation brief from package state."""
+    return materialize_render_payload(
+        full_report.render_recommendation_brief(package),
+        writer_model=config.writer_model,
+        prompt_name="writer_full_report",
+        pricing=ModelPricing.model_validate(config.writer_pricing),
+        preferences=preferences,
+        max_context_chars=config.writer_context_budget_chars,
+        snippet_budget_chars=config.context_snippet_budget_chars,
+    )

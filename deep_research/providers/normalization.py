@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from deep_research.enums import SourceGroup, SourceKind
 from deep_research.evidence.scoring import score_candidate_quality
 from deep_research.evidence.url import canonicalize_url
 from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResult
@@ -111,6 +112,67 @@ def raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
+def parse_source_kind(value: object, fallback: str) -> SourceKind:
+    raw_value = str(value or fallback).strip().lower()
+    try:
+        return SourceKind(raw_value)
+    except ValueError:
+        return SourceKind.WEB
+
+
+def _resolve_optional_source_group(name: str) -> SourceGroup | None:
+    try:
+        return SourceGroup[name]
+    except KeyError:
+        return None
+
+
+DOCS_GROUP = _resolve_optional_source_group("DOCS")
+BLOGS_GROUP = _resolve_optional_source_group("BLOGS")
+BENCHMARKS_GROUP = _resolve_optional_source_group("BENCHMARKS")
+FORUMS_GROUP = _resolve_optional_source_group("FORUMS")
+
+
+def infer_source_group(
+    canonical_url: str,
+    source_kind: SourceKind,
+    item: Mapping[str, Any],
+) -> SourceGroup:
+    raw_group = clean_string(item.get("source_group"))
+    if raw_group is not None:
+        try:
+            return SourceGroup(raw_group)
+        except ValueError:
+            pass
+
+    lower_url = canonical_url.casefold()
+    title = clean_string(item.get("title")) or ""
+    description = clean_string(item.get("description")) or ""
+    combined = f"{title} {description}".casefold()
+
+    if source_kind == SourceKind.PAPER:
+        return SourceGroup.PAPERS
+    if "github.com" in lower_url or "gitlab.com" in lower_url:
+        return SourceGroup.REPOS
+    if any(host in lower_url for host in ("reddit.com", "news.ycombinator.com", "x.com", "twitter.com")):
+        return FORUMS_GROUP or SourceGroup.SOCIAL
+    if any(host in lower_url for host in ("medium.com", "substack.com", "dev.to")):
+        return BLOGS_GROUP or SourceGroup.WEB
+    if ".news/" in lower_url or any(
+        host in lower_url
+        for host in ("techcrunch.com", "theverge.com", "wired.com", "bloomberg.com")
+    ):
+        return SourceGroup.NEWS
+    if any(
+        token in lower_url
+        for token in ("/docs/", "docs.", "readthedocs.", "developer.")
+    ):
+        return DOCS_GROUP or SourceGroup.WEB
+    if "benchmark" in combined or "leaderboard" in combined:
+        return BENCHMARKS_GROUP or SourceGroup.WEB
+    return SourceGroup.WEB
+
+
 def iter_result_items(
     raw_results: list[Mapping[str, Any] | RawToolResult],
 ) -> list[Mapping[str, Any]]:
@@ -152,6 +214,8 @@ def normalize_tool_results(
         canonical_url = canonicalize_url(url)
         if canonical_url is None:
             continue
+        normalized_source_kind = parse_source_kind(item.get("source_kind"), source_kind)
+        source_group = infer_source_group(canonical_url, normalized_source_kind, item)
 
         snippet_text = str(item.get("snippet") or item.get("description") or "").strip()
         source_locator = item.get("source_locator")
@@ -168,22 +232,31 @@ def normalize_tool_results(
 
         try:
             raw_quality = item.get("quality_score")
-            candidate = EvidenceCandidate(
-                key=candidate_key(item, canonical_url),
-                title=str(item.get("title") or url or f"result-{idx}").strip(),
-                url=url,
-                snippets=snippets,
-                provider=provider,
-                source_kind=source_kind,
-                quality_score=as_score(raw_quality),
-                relevance_score=as_score(item.get("relevance_score")),
-                authority_score=as_score(item.get("authority_score")),
-                freshness_score=as_score(item.get("freshness_score")),
-                matched_subtopics=matched_subtopics(item.get("matched_subtopics")),
-                doi=clean_string(item.get("doi")),
-                arxiv_id=clean_string(item.get("arxiv_id")),
-                raw_metadata=raw_metadata(item),
-            )
+            candidate_data: dict[str, object] = {
+                "key": candidate_key(item, canonical_url),
+                "title": str(item.get("title") or url or f"result-{idx}").strip(),
+                "url": url,
+                "snippets": snippets,
+                "provider": provider,
+                "source_kind": normalized_source_kind,
+                "quality_score": as_score(raw_quality),
+                "relevance_score": as_score(item.get("relevance_score")),
+                "authority_score": as_score(item.get("authority_score")),
+                "freshness_score": as_score(item.get("freshness_score")),
+                "matched_subtopics": matched_subtopics(item.get("matched_subtopics")),
+                "doi": clean_string(item.get("doi")),
+                "arxiv_id": clean_string(item.get("arxiv_id")),
+                "raw_metadata": raw_metadata(item),
+            }
+            if "source_group" in EvidenceCandidate.model_fields:
+                candidate_data["source_group"] = source_group
+            if "canonical_url" in EvidenceCandidate.model_fields:
+                candidate_data["canonical_url"] = canonical_url
+            if "published_at" in EvidenceCandidate.model_fields:
+                candidate_data["published_at"] = clean_string(
+                    item.get("published_at") or item.get("raw_published")
+                )
+            candidate = EvidenceCandidate(**candidate_data)
             if raw_quality is None:
                 candidate = candidate.model_copy(
                     update={"quality_score": score_candidate_quality(candidate)}

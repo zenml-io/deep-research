@@ -1,3 +1,5 @@
+from typing import Union
+
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +22,69 @@ class TierConfig(BaseModel):
     allows_council: bool = False
     requires_plan_approval: bool = True
     max_replans: int = 0
+
+
+class ConvergenceConfig(BaseModel):
+    token_budget: int = Field(default=200_000, ge=0)
+    coverage_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
+    strong_coverage_shortcut: float = Field(default=0.92, ge=0.0, le=1.0)
+    marginal_gain_threshold: float = Field(default=0.05, ge=0.0)
+    max_stall_count: int = Field(default=3, ge=0)
+    target_considered_resources: int = Field(default=200, ge=0)
+    min_considered_floor: int = Field(default=100, ge=0)
+    min_selected_for_stop: int = Field(default=12, ge=0)
+
+
+class SelectionPolicyConfig(BaseModel):
+    relevance_weight: float = Field(default=0.40, ge=0.0)
+    authority_weight: float = Field(default=0.25, ge=0.0)
+    recency_weight: float = Field(default=0.20, ge=0.0)
+    novelty_weight: float = Field(default=0.15, ge=0.0)
+    mmr_relevance_lambda: float = Field(default=0.50, ge=0.0)
+    mmr_diversity_lambda: float = Field(default=0.35, ge=0.0)
+    mmr_source_type_lambda: float = Field(default=0.15, ge=0.0)
+    max_paper_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
+    # Wave 4.5: synthesis-to-unsupported-claims feedback loop. Hard cap on the
+    # number of feedback iterations per run (deep tier only). 0 disables.
+    feedback_loop_max_iterations: int = Field(default=2, ge=0)
+
+
+class WebSearchPolicyConfig(BaseModel):
+    default_source_group_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "web": 1.0,
+            "docs": 1.0,
+            "repos": 0.95,
+            "benchmarks": 0.9,
+            "blogs": 0.8,
+            "papers": 0.45,
+        }
+    )
+    domain_recency_half_life_days: dict[str, int] = Field(
+        default_factory=lambda: {
+            "tooling": 90,
+            "architecture": 365,
+            "algorithm": 1825,
+            "current_events": 14,
+        }
+    )
+    max_results_per_query: int = Field(default=10, gt=0)
+    max_fetch_candidates_per_iteration: int = Field(default=5, gt=0)
+    max_fetched_chars_per_candidate: int = Field(default=4000, gt=0)
+
+
+class ActiveTimeConfig(BaseModel):
+    quick_limit_seconds: int = Field(default=60, gt=0)
+    standard_limit_seconds: int = Field(default=300, gt=0)
+    deep_limit_seconds: int = Field(default=900, gt=0)
+    custom_limit_seconds: int = Field(default=300, gt=0)
+
+
+class ClaimExtractionConfig(BaseModel):
+    enabled_for_quick: bool = False
+    enabled_for_standard: bool = False
+    enabled_for_deep: bool = True
+    enabled_for_custom: bool = False
 
 
 class ResearchSettings(BaseSettings):
@@ -68,21 +133,55 @@ class ResearchSettings(BaseSettings):
             "SEMANTIC_SCHOLAR_API_KEY",
         ),
     )
-    enabled_providers_csv: str = Field(
-        default="arxiv,exa",
+    # Web-first default: brave/exa lead (engineering prompts favor live web/docs),
+    # with arxiv/semantic_scholar as academic corroboration. Brave and Exa require
+    # API keys and no-op gracefully via provider.is_available() when keys are absent
+    # (see deep_research.providers.search.ProviderRegistry.active_providers).
+    enabled_providers_raw: Union[str, list[str]] = Field(
+        default="brave,exa,arxiv,semantic_scholar",
         alias="enabled_providers",
         validation_alias=AliasChoices("RESEARCH_ENABLED_PROVIDERS", "enabled_providers"),
     )
     max_results_per_query: int = Field(default=10, gt=0)
     max_fetch_candidates_per_iteration: int = Field(default=5, gt=0)
     max_fetched_chars_per_candidate: int = Field(default=4000, gt=0)
+    convergence_token_budget: int = Field(default=200_000, ge=0)
+    convergence_strong_coverage_shortcut: float = Field(
+        default=0.92, ge=0.0, le=1.0
+    )
+    convergence_marginal_gain_threshold: float = Field(default=0.05, ge=0.0)
+    convergence_max_stall_count: int = Field(default=3, ge=0)
+    convergence_target_considered_resources: int = Field(default=200, ge=0)
+    convergence_min_considered_floor: int = Field(default=100, ge=0)
+    convergence_min_selected_for_stop: int = Field(default=12, ge=0)
+    selection_relevance_weight: float = Field(default=0.40, ge=0.0)
+    selection_authority_weight: float = Field(default=0.25, ge=0.0)
+    selection_recency_weight: float = Field(default=0.20, ge=0.0)
+    selection_novelty_weight: float = Field(default=0.15, ge=0.0)
+    selection_mmr_relevance_lambda: float = Field(default=0.50, ge=0.0)
+    selection_mmr_diversity_lambda: float = Field(default=0.35, ge=0.0)
+    selection_mmr_source_type_lambda: float = Field(default=0.15, ge=0.0)
+    selection_max_paper_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
+    active_time_quick_limit_seconds: int = Field(default=60, gt=0)
+    active_time_standard_limit_seconds: int = Field(default=300, gt=0)
+    active_time_deep_limit_seconds: int = Field(default=900, gt=0)
+    active_time_custom_limit_seconds: int = Field(default=300, gt=0)
+    claim_extraction_enabled_for_quick: bool = False
+    claim_extraction_enabled_for_standard: bool = False
+    claim_extraction_enabled_for_deep: bool = True
+    claim_extraction_enabled_for_custom: bool = False
 
     @property
     def enabled_providers(self) -> list[str]:
+        raw = self.enabled_providers_raw
+        if isinstance(raw, str):
+            items = raw.split(",")
+        else:
+            items = list(raw)
         seen: set[str] = set()
         result: list[str] = []
-        for item in self.enabled_providers_csv.split(","):
-            cleaned = item.strip()
+        for item in items:
+            cleaned = item.strip() if isinstance(item, str) else str(item).strip()
             if cleaned and cleaned not in seen:
                 result.append(cleaned)
                 seen.add(cleaned)
@@ -136,6 +235,18 @@ class ResearchConfig(BaseModel):
     max_fetch_candidates_per_iteration: int = 5
     max_fetched_chars_per_candidate: int = 4000
     max_replans: int = 0
+    convergence: ConvergenceConfig = Field(default_factory=ConvergenceConfig)
+    selection_policy: SelectionPolicyConfig = Field(
+        default_factory=SelectionPolicyConfig
+    )
+    web_search_policy: WebSearchPolicyConfig = Field(
+        default_factory=WebSearchPolicyConfig
+    )
+    active_time: ActiveTimeConfig = Field(default_factory=ActiveTimeConfig)
+    claim_extraction: ClaimExtractionConfig = Field(
+        default_factory=ClaimExtractionConfig
+    )
+    claim_extraction_enabled: bool = False
 
     @classmethod
     def for_tier(
@@ -171,6 +282,49 @@ class ResearchConfig(BaseModel):
             ),
         }
         base = mapping[tier]
+        convergence = ConvergenceConfig(
+            token_budget=settings.convergence_token_budget,
+            coverage_threshold=settings.convergence_min_coverage,
+            strong_coverage_shortcut=settings.convergence_strong_coverage_shortcut,
+            marginal_gain_threshold=settings.convergence_marginal_gain_threshold,
+            max_stall_count=settings.convergence_max_stall_count,
+            target_considered_resources=settings.convergence_target_considered_resources,
+            min_considered_floor=settings.convergence_min_considered_floor,
+            min_selected_for_stop=settings.convergence_min_selected_for_stop,
+        )
+        selection_policy = SelectionPolicyConfig(
+            relevance_weight=settings.selection_relevance_weight,
+            authority_weight=settings.selection_authority_weight,
+            recency_weight=settings.selection_recency_weight,
+            novelty_weight=settings.selection_novelty_weight,
+            mmr_relevance_lambda=settings.selection_mmr_relevance_lambda,
+            mmr_diversity_lambda=settings.selection_mmr_diversity_lambda,
+            mmr_source_type_lambda=settings.selection_mmr_source_type_lambda,
+            max_paper_ratio=settings.selection_max_paper_ratio,
+        )
+        web_search_policy = WebSearchPolicyConfig(
+            max_results_per_query=settings.max_results_per_query,
+            max_fetch_candidates_per_iteration=settings.max_fetch_candidates_per_iteration,
+            max_fetched_chars_per_candidate=settings.max_fetched_chars_per_candidate,
+        )
+        active_time = ActiveTimeConfig(
+            quick_limit_seconds=settings.active_time_quick_limit_seconds,
+            standard_limit_seconds=settings.active_time_standard_limit_seconds,
+            deep_limit_seconds=settings.active_time_deep_limit_seconds,
+            custom_limit_seconds=settings.active_time_custom_limit_seconds,
+        )
+        claim_extraction = ClaimExtractionConfig(
+            enabled_for_quick=settings.claim_extraction_enabled_for_quick,
+            enabled_for_standard=settings.claim_extraction_enabled_for_standard,
+            enabled_for_deep=settings.claim_extraction_enabled_for_deep,
+            enabled_for_custom=settings.claim_extraction_enabled_for_custom,
+        )
+        claim_extraction_enabled = {
+            Tier.QUICK: claim_extraction.enabled_for_quick,
+            Tier.STANDARD: claim_extraction.enabled_for_standard,
+            Tier.DEEP: claim_extraction.enabled_for_deep,
+            Tier.CUSTOM: claim_extraction.enabled_for_custom,
+        }[tier]
         return cls(
             tier=tier,
             max_iterations=base.max_iterations,
@@ -218,4 +372,10 @@ class ResearchConfig(BaseModel):
             max_fetch_candidates_per_iteration=settings.max_fetch_candidates_per_iteration,
             max_fetched_chars_per_candidate=settings.max_fetched_chars_per_candidate,
             max_replans=base.max_replans,
+            convergence=convergence,
+            selection_policy=selection_policy,
+            web_search_policy=web_search_policy,
+            active_time=active_time,
+            claim_extraction=claim_extraction,
+            claim_extraction_enabled=claim_extraction_enabled,
         )

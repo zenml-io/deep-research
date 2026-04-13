@@ -1,7 +1,13 @@
 import json
+from collections import Counter
 
 from deep_research.evidence.dedup import match_precedence_keys
 from deep_research.evidence.resolution import resolve_coverage_entries, resolve_selected_entries
+from deep_research.evidence.scoring import (
+    combined_candidate_score,
+    infer_source_group,
+    score_candidate_novelty,
+)
 from deep_research.models import (
     DedupeEvent,
     EvidenceCandidate,
@@ -27,6 +33,13 @@ def ratchet_merge(
     existing: EvidenceCandidate, incoming: EvidenceCandidate
 ) -> EvidenceCandidate:
     """Merge duplicate candidates by keeping the strongest known fields from both."""
+    existing_selection_score = float(existing.raw_metadata.get("selection_score", 0.0))
+    incoming_selection_score = float(incoming.raw_metadata.get("selection_score", 0.0))
+    existing_novelty_score = float(existing.raw_metadata.get("novelty_score", 0.0))
+    incoming_novelty_score = float(incoming.raw_metadata.get("novelty_score", 0.0))
+    source_group = incoming.raw_metadata.get("source_group") or existing.raw_metadata.get(
+        "source_group"
+    )
     return existing.model_copy(
         update={
             "quality_score": max(existing.quality_score, incoming.quality_score),
@@ -41,7 +54,17 @@ def ratchet_merge(
             "snippets": dedupe_snippets([*existing.snippets, *incoming.snippets]),
             "doi": existing.doi or incoming.doi,
             "arxiv_id": existing.arxiv_id or incoming.arxiv_id,
-            "raw_metadata": {**existing.raw_metadata, **incoming.raw_metadata},
+            "raw_metadata": {
+                **existing.raw_metadata,
+                **incoming.raw_metadata,
+                "source_group": source_group,
+                "selection_score": round(
+                    max(existing_selection_score, incoming_selection_score), 4
+                ),
+                "novelty_score": round(
+                    max(existing_novelty_score, incoming_novelty_score), 4
+                ),
+            },
             "iteration_added": existing.iteration_added or incoming.iteration_added,
             "selected": existing.selected or incoming.selected,
         }
@@ -97,7 +120,13 @@ def merge_candidates(
     quality_floor: float = 0.3,
     iteration: int | None = None,
 ) -> EvidenceLedger:
-    """Combine candidates into a deduplicated ledger with ratcheted scores."""
+    """Combine candidates into a deduplicated ledger with runtime inclusion buckets.
+
+    Backward compatibility:
+    - ``ledger.selected`` remains the runtime inclusion set consumed by downstream
+      checkpoints such as enrichment and context truncation.
+    - Final deliverable ordering still happens later in ``rank_evidence``.
+    """
     normalized_incoming = [
         candidate
         if candidate.iteration_added is not None or iteration is None
@@ -106,12 +135,40 @@ def merge_candidates(
     ]
     canonical, dedupe_log = canonicalize_candidates([*existing, *normalized_incoming])
 
-    considered = [
-        candidate.model_copy(
-            update={"selected": candidate.quality_score >= quality_floor}
-        )
+    domain_counts = Counter(
+        str(candidate.url.host).lower() if hasattr(candidate.url, "host") else ""
         for candidate in canonical
-    ]
+    )
+    title_counts = Counter(candidate.title.strip().lower() for candidate in canonical)
+
+    considered: list[EvidenceCandidate] = []
+    for candidate in canonical:
+        source_group = infer_source_group(candidate)
+        novelty_score = score_candidate_novelty(
+            candidate,
+            domain_counts=domain_counts,
+            title_counts=title_counts,
+        )
+        selection_score = combined_candidate_score(
+            candidate,
+            domain_counts=domain_counts,
+            title_counts=title_counts,
+        )
+        runtime_selected = candidate.quality_score >= quality_floor
+        considered.append(
+            candidate.model_copy(
+                update={
+                    "selected": runtime_selected,
+                    "raw_metadata": {
+                        **candidate.raw_metadata,
+                        "source_group": source_group.value,
+                        "novelty_score": novelty_score,
+                        "selection_score": selection_score,
+                        "runtime_selected": runtime_selected,
+                    },
+                }
+            )
+        )
     selected = [candidate for candidate in considered if candidate.selected]
     rejected = [candidate for candidate in considered if not candidate.selected]
     return EvidenceLedger(
@@ -154,7 +211,9 @@ def _truncate_snippets(
 
 
 def _context_sort_key(candidate: EvidenceCandidate) -> tuple[float, float, int, str]:
+    selection_score = float(candidate.raw_metadata.get("selection_score", 0.0))
     return (
+        -selection_score,
         -candidate.relevance_score,
         -candidate.quality_score,
         -(candidate.iteration_added or -1),

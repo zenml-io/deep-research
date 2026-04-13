@@ -1,13 +1,23 @@
 # writer_full_report.md
 
-Write a sectioned final report.
+Write a sectioned grounded deliverable.
 
 ## Task
 
 Organize the answer using the provided section list.
 Synthesize across sources instead of listing them one by one.
 Keep every non-trivial claim grounded with inline citation markers from the provided map.
-End with a limitations section.
+End with a limitations section unless it is already present in the provided sections.
+
+If `deliverable_mode` is `comparison_memo`:
+- write a direct comparison, not a generic explainer,
+- compare the named targets when provided,
+- include implications for the current repo or decision context.
+
+If `deliverable_mode` is `recommendation_brief`:
+- lead with the recommendation,
+- explain why it is preferred,
+- discuss alternatives, risks, and next steps.
 
 ## Trust model
 
@@ -27,6 +37,8 @@ End with a limitations section.
 - If support is partial or missing, either omit the claim or mark it `[UNVERIFIED]`.
 - Do not invent dates, quantitative values, quotations, citations, or provider-specific facts.
 - Citation markers may only reference citations already present in the scaffold.
+- If claim inventory data is present, use it to avoid overstating unsupported claims.
+- Prefer specific named systems, benchmarks, repos, or documents over abstract filler.
 
 ## Output reminder
 

@@ -38,8 +38,8 @@ def run_council_generator(
             ledger,
             iteration,
             override_config,
-            uncovered_subtopics,
-            unanswered_questions,
+            uncovered_subtopics=uncovered_subtopics,
+            unanswered_questions=unanswered_questions,
             brief=brief,
             preferences=preferences,
         )

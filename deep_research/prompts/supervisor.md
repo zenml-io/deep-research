@@ -22,8 +22,10 @@ Prefer built-in search providers. Use MCP tools or local tools only when they ad
 - Focus on `uncovered_subtopics` first.
 - Use the plan to stay aligned with the original goal.
 - Avoid redundant searches when the ledger already covers a subtopic adequately.
-- Prefer paper providers for academic, technical, or foundational gaps.
-- Prefer web or news-oriented providers for current operational, market, or product gaps.
+- Default to web-first providers for engineering, tooling, benchmark, implementation, and system-comparison gaps.
+- Prefer exact-name queries for repos, docs, benchmarks, and implementation writeups before broad conceptual queries when the plan contains concrete named systems.
+- Prefer paper providers for explicitly academic, theoretical, or literature-review gaps.
+- Prefer web or news-oriented providers for current operational, market, product, benchmark, or implementation gaps.
 - Keep the number of search actions at or below `max_tool_calls`.
 - Emit a short rationale for every search action.
 
@@ -38,6 +40,8 @@ Use trusted `preferences` and `guidance` to shape the strategy.
 - For answer-only work, prioritize the shortest path to the direct answer.
 - For cost-sensitive work, prefer fewer and cheaper searches.
 - For thorough work, expand coverage deliberately rather than randomly.
+- If preferred sources are not explicit and the task is engineering or system-oriented, bias toward `web` and `repos`.
+- Use `preferred_providers` to express provider ordering when a web-first or paper-first strategy is important.
 
 ## Tool-use rules
 

@@ -6,6 +6,7 @@ class StopReason(str, Enum):
     DIMINISHING_RETURNS = "diminishing_returns"
     BUDGET_EXHAUSTED = "budget_exhausted"
     TIME_EXHAUSTED = "time_exhausted"
+    ACTIVE_TIME_EXHAUSTED = "active_time_exhausted"
     MAX_ITERATIONS = "max_iterations"
     LOOP_STALL = "loop_stall"
     SUPERVISOR_COMPLETE = "supervisor_complete"
@@ -24,6 +25,10 @@ class SourceKind(str, Enum):
     DOCS = "docs"
     WEB = "web"
     DATASET = "dataset"
+    REPOSITORY = "repository"
+    BLOG = "blog"
+    FORUM = "forum"
+    BENCHMARK = "benchmark"
 
 
 class SourceGroup(str, Enum):
@@ -32,6 +37,10 @@ class SourceGroup(str, Enum):
     NEWS = "news"
     REPOS = "repos"
     SOCIAL = "social"
+    DOCS = "docs"
+    BLOGS = "blogs"
+    BENCHMARKS = "benchmarks"
+    FORUMS = "forums"
 
 
 class DeliverableMode(str, Enum):

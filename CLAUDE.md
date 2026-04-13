@@ -174,5 +174,5 @@ All `RESEARCH_*` settings are loaded via pydantic-settings (`ResearchSettings`).
 - `RESEARCH_DEFAULT_COST_BUDGET_USD` — Cost ceiling per run (default: `0.10`)
 - `RESEARCH_DAILY_COST_LIMIT_USD` — Global daily ceiling (default: `10.00`)
 - `RESEARCH_ALLOW_SUPERVISOR_BASH` — Opt-in bash tool for supervisor agent
-- `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `arxiv,semantic_scholar`)
+- `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `brave,exa,arxiv,semantic_scholar` — web-first; brave/exa no-op gracefully when API keys are absent)
 - `DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT` — Ship LLM content to Logfire (default: `false`)

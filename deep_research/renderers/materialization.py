@@ -42,15 +42,39 @@ def prompt_for_mode(
             f"This is a comparison between {targets}. Structure the output to compare"
             " these targets fairly with balanced coverage."
         )
+        parts.append(
+            "Use explicit comparison sections. Include a concise comparison overview,"
+            " a head-to-head analysis, implications for this repo or user decision,"
+            " and a limitations section."
+        )
+    elif mode == DeliverableMode.COMPARISON_MEMO:
+        parts.append(
+            "This deliverable is a comparison memo. Compare the strongest named"
+            " systems or approaches from the evidence instead of writing a generic"
+            " essay. Include implications and limitations."
+        )
     elif mode == DeliverableMode.RECOMMENDATION_BRIEF:
         parts.append(
             "The user wants a recommendation. Lead with the recommendation,"
             " then provide supporting evidence and trade-offs."
         )
+        parts.append(
+            "Use explicit sections for the recommendation, supporting rationale,"
+            " alternatives considered, risks, and next steps."
+        )
     elif mode == DeliverableMode.ANSWER_ONLY:
         parts.append(
             "The user wants a concise direct answer. Be brief and focused."
             " Skip extensive background unless critical to the answer."
+        )
+
+    if base_prompt_name == "writer_full_report" and mode in {
+        DeliverableMode.COMPARISON_MEMO,
+        DeliverableMode.RECOMMENDATION_BRIEF,
+    }:
+        parts.append(
+            "Do not degrade this mode into a generic final report. Honor the requested"
+            " deliverable shape and section framing."
         )
 
     if preferences.audience:

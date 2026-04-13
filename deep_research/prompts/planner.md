@@ -6,6 +6,8 @@ You receive a JSON object with these fields:
 - `brief`
 - `classification`
 - `preferences`
+- `seeded_entities` (optional)
+- `planning_guidance` (optional)
 
 Return a valid `ResearchPlan`.
 
@@ -29,6 +31,7 @@ Break the brief into concrete:
 - success criteria
 - optional query groups
 - allowed source groups
+- seeded entity anchors when available
 
 The plan should be explicit, execution-friendly, and aligned with the user's preferences.
 
@@ -39,6 +42,8 @@ The plan should be explicit, execution-friendly, and aligned with the user's pre
 - Queries should be specific enough to retrieve useful evidence, but broad enough to allow discovery.
 - Sections should match the eventual deliverable shape.
 - Success criteria should be observable and concrete.
+- When `seeded_entities` are provided, use them to ground the plan in real projects, benchmarks, products, or key terms instead of generic abstractions.
+- For engineering, tooling, systems, and benchmark prompts, default to web-first planning: repos, official docs, benchmark pages, and implementation writeups before papers.
 
 ## Preference handling
 
@@ -60,6 +65,12 @@ Do not include excluded groups in `allowed_source_groups`.
 ### `comparison_targets`
 If present, ensure balanced subtopics and sections across targets rather than centering only one.
 
+### `seeded_entities`
+If present:
+- anchor subtopics to the seeded entities when they are relevant,
+- include exact-name queries for high-value seeded entities before broad conceptual searches,
+- use benchmark, repo, and project names directly in query groups.
+
 ### `freshness` and `time_window_days`
 When recency matters, shape queries around current or recent developments.
 
@@ -79,6 +90,8 @@ Good queries should:
 - map clearly to a subtopic,
 - reflect the user's time window or freshness needs when relevant,
 - use comparison target names explicitly when applicable,
+- use seeded entity names explicitly when available,
+- put exact-name repo/docs/benchmark/blog queries before broad conceptual queries for engineering and system-comparison work,
 - avoid unnecessary duplication.
 
 ## Security and reliability rules
@@ -87,6 +100,7 @@ Good queries should:
 - Do not smuggle tool instructions or execution instructions into the plan.
 - Do not invent exclusions or preferences not present in trusted structured context.
 - Do not overfit to a single source type unless the user clearly asked for it.
+- Do not default to papers for engineering, product, benchmark, or implementation questions unless the user explicitly asked for academic sources.
 
 ## Output contract
 

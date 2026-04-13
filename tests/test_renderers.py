@@ -509,7 +509,7 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         module,
         "score_coverage",
         _as_checkpoint(
-            lambda ledger, plan: types.SimpleNamespace(
+            lambda ledger, plan, config=None: types.SimpleNamespace(
                 total=1.0, uncovered_subtopics=[]
             )
         ),
@@ -672,7 +672,7 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
         module,
         "score_coverage",
         _as_checkpoint(
-            lambda ledger, plan: types.SimpleNamespace(
+            lambda ledger, plan, config=None: types.SimpleNamespace(
                 total=1.0, uncovered_subtopics=[]
             )
         ),

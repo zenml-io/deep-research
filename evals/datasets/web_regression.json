@@ -1,0 +1,104 @@
+[
+  {
+    "id": "web_regression_harnesses_001",
+    "input": {
+      "package_artifact": "results/run-c603ae09-eb52-4ede-8fe1-d306407f9faf/package.json"
+    },
+    "constraints": {
+      "expected_entities": [
+        "GPT Researcher",
+        "STORM",
+        "BrowseComp",
+        "DeepResearch Bench"
+      ],
+      "required_source_groups": [
+        "web",
+        "repos",
+        "docs"
+      ],
+      "forbidden_drift_terms": [
+        "holistic view of research capability",
+        "moving toward reproducible, automated scientific inquiry"
+      ],
+      "min_provider_diversity": 2,
+      "max_paper_ratio": 0.35,
+      "required_output_sections": [
+        "Executive Summary",
+        "Limitations"
+      ],
+      "max_unsupported_claim_ratio": 0.2
+    }
+  },
+  {
+    "id": "web_regression_harnesses_002",
+    "input": {
+      "package_artifact": "results/run-c603ae09-eb52-4ede-8fe1-d306407f9faf/package.json"
+    },
+    "constraints": {
+      "expected_entities": [
+        "OpenAI Deep Research",
+        "Perplexity",
+        "Google Gemini"
+      ],
+      "required_source_groups": [
+        "web",
+        "docs"
+      ],
+      "forbidden_drift_terms": [
+        "triple-too problem"
+      ],
+      "min_provider_diversity": 2,
+      "max_paper_ratio": 0.4,
+      "required_output_sections": [
+        "Executive Summary",
+        "Conclusion and Recommendations"
+      ],
+      "max_unsupported_claim_ratio": 0.25
+    }
+  },
+  {
+    "id": "web_regression_harnesses_003",
+    "input": {
+      "package_artifact": "results/run-c603ae09-eb52-4ede-8fe1-d306407f9faf/package.json"
+    },
+    "constraints": {
+      "expected_entities": [
+        "LangChain",
+        "LangGraph",
+        "LiveDRBench"
+      ],
+      "required_source_groups": [
+        "web",
+        "repos",
+        "docs"
+      ],
+      "forbidden_drift_terms": [
+        "ethical adherence"
+      ],
+      "min_provider_diversity": 2,
+      "max_paper_ratio": 0.35,
+      "required_output_sections": [
+        "Technical Challenges and Mitigation Strategies",
+        "Limitations"
+      ],
+      "max_unsupported_claim_ratio": 0.2
+    }
+  },
+  {
+    "id": "web_regression_control_academic_001",
+    "input": {
+      "package_artifact": "evals/fixtures/trajectory_quality/package_004.json"
+    },
+    "constraints": {
+      "required_source_groups": [
+        "web",
+        "papers"
+      ],
+      "min_provider_diversity": 3,
+      "max_paper_ratio": 0.75,
+      "required_output_sections": [
+        "Grounding and Diversity"
+      ]
+    }
+  }
+]

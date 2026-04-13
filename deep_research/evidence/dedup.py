@@ -1,7 +1,13 @@
 from collections.abc import Iterable
+from difflib import SequenceMatcher
+from urllib.parse import urlparse
 
 from deep_research.evidence.url import canonicalize_url
 from deep_research.models import DedupeEvent, EvidenceCandidate
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.strip().lower().split())
 
 
 def candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]:
@@ -20,7 +26,7 @@ def candidate_identities(candidate: EvidenceCandidate) -> list[tuple[str, str]]:
     canonical_url = canonicalize_url(str(candidate.url))
     if canonical_url:
         identities.append(("canonical_url", canonical_url))
-    title = candidate.title.strip().lower()
+    title = _normalize_title(candidate.title)
     if title:
         identities.append(("title", title))
     return identities
@@ -71,3 +77,31 @@ def dedupe_candidates(
             seen.setdefault(key, canonical)
 
     return deduped, dedupe_log
+
+
+def is_near_duplicate(
+    left: EvidenceCandidate,
+    right: EvidenceCandidate,
+    *,
+    title_similarity_threshold: float = 0.92,
+) -> bool:
+    """Detect near-duplicates without changing the persisted dedupe-event schema."""
+    if left.key == right.key:
+        return True
+
+    left_url = canonicalize_url(str(left.url))
+    right_url = canonicalize_url(str(right.url))
+    if left_url and right_url and left_url == right_url:
+        return True
+
+    left_domain = (urlparse(str(left.url)).hostname or "").lower().removeprefix("www.")
+    right_domain = (urlparse(str(right.url)).hostname or "").lower().removeprefix("www.")
+    left_title = _normalize_title(left.title)
+    right_title = _normalize_title(right.title)
+
+    if left_title and right_title:
+        similarity = SequenceMatcher(a=left_title, b=right_title).ratio()
+        if similarity >= title_similarity_threshold and left_domain == right_domain:
+            return True
+
+    return False

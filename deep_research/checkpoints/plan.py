@@ -14,7 +14,10 @@ from deep_research.observability import span
 
 @checkpoint(type="llm_call")
 def build_plan(
-    brief: str, classification: RequestClassification, tier: Tier
+    brief: str,
+    classification: RequestClassification,
+    tier: Tier,
+    seeded_entities: dict[str, list[str]] | None = None,
 ) -> ResearchPlan:
     """Checkpoint: generate a structured research plan from the brief, classification, and preferences."""
     with span("build_plan", tier=tier):
@@ -29,5 +32,15 @@ def build_plan(
             },
             "preferences": preferences.model_dump(mode="json"),
         }
+        if seeded_entities:
+            prompt_parts["seeded_entities"] = seeded_entities
+        if not preferences.preferred_source_groups and (
+            preferences.comparison_targets
+            or preferences.deliverable_mode.value == "comparison_memo"
+        ):
+            prompt_parts["planning_guidance"] = {
+                "web_first_default": True,
+                "exact_name_queries_first": True,
+            }
         prompt = json.dumps(prompt_parts, indent=2)
         return build_planner_agent(model_name).run_sync(prompt).output

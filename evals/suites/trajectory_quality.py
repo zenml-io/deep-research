@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from deep_research.evidence.resolution import resolve_selected_entries
-from deep_research.enums import SourceKind, StopReason
+from deep_research.enums import SourceGroup, SourceKind, StopReason
 from deep_research.models import InvestigationPackage
 
 from evals.peval import run_bool_assertion_dataset, run_llm_judge_dataset
@@ -98,6 +98,56 @@ def _selected_entries(package: InvestigationPackage):
     return resolve_selected_entries(package.evidence_ledger)
 
 
+def _claim_inventory(package: InvestigationPackage):
+    return getattr(package, "claim_inventory", None)
+
+
+def _claim_stats(package: InvestigationPackage) -> dict[str, object]:
+    claim_inventory = _claim_inventory(package)
+    if claim_inventory is None:
+        return {
+            "present": False,
+            "total_claims": 0,
+            "unsupported_ratio": None,
+            "supported_ratio": None,
+        }
+
+    claims = getattr(claim_inventory, "claims", [])
+    unsupported_ratio = getattr(claim_inventory, "unsupported_ratio", None)
+    supported_ratio = getattr(claim_inventory, "supported_ratio", None)
+    total_claims = getattr(claim_inventory, "total_claims", len(claims))
+    if unsupported_ratio is None and claims:
+        unsupported = sum(
+            1
+            for claim in claims
+            if getattr(claim, "support_status", None) in {"unsupported", "weak"}
+        )
+        unsupported_ratio = round(unsupported / len(claims), 4)
+    if supported_ratio is None and claims:
+        supported = sum(
+            1
+            for claim in claims
+            if getattr(claim, "support_status", None) == "supported"
+        )
+        supported_ratio = round(supported / len(claims), 4)
+    return {
+        "present": True,
+        "total_claims": total_claims,
+        "unsupported_ratio": unsupported_ratio,
+        "supported_ratio": supported_ratio,
+    }
+
+
+def _selected_source_groups(selected_entries: list) -> list[str]:
+    groups: set[str] = set()
+    for candidate in selected_entries:
+        group = getattr(candidate, "source_group", None)
+        if group is None:
+            continue
+        groups.add(group.value if hasattr(group, "value") else str(group))
+    return sorted(groups)
+
+
 def _corpus_text(package: InvestigationPackage) -> str:
     parts: list[str] = []
     parts.extend(render.content_markdown for render in package.renders)
@@ -159,8 +209,10 @@ def _evaluate_case(case: dict) -> dict:
     coverage_total = final_iteration.coverage if final_iteration is not None else 0.0
     plan_fidelity, unanswered_questions = _plan_fidelity(package)
     selected_source_kinds = sorted({candidate.source_kind.value for candidate in selected_entries})
+    selected_source_groups = _selected_source_groups(selected_entries)
     selected_providers = sorted({candidate.provider for candidate in selected_entries})
     render_names = [render.name for render in package.renders]
+    claim_stats = _claim_stats(package)
 
     checks: list[dict] = []
 
@@ -246,6 +298,31 @@ def _evaluate_case(case: dict) -> dict:
             }
         )
 
+    required_source_groups = constraints.get("required_source_groups", [])
+    if required_source_groups:
+        normalized_required_groups = []
+        for group in required_source_groups:
+            try:
+                normalized_required_groups.append(SourceGroup(group).value)
+            except Exception as exc:
+                raise ValueError(
+                    f"{case_id}: invalid required_source_groups entry {group!r}"
+                ) from exc
+        missing_source_groups = [
+            group for group in normalized_required_groups if group not in selected_source_groups
+        ]
+        checks.append(
+            {
+                "name": "required_source_groups",
+                "passed": not missing_source_groups,
+                "detail": (
+                    "missing source groups: " + ", ".join(missing_source_groups)
+                    if missing_source_groups
+                    else f"selected_source_groups={selected_source_groups}"
+                ),
+            }
+        )
+
     allow_unanswered_questions = bool(constraints.get("allow_unanswered_questions", True))
     if not allow_unanswered_questions:
         checks.append(
@@ -256,6 +333,25 @@ def _evaluate_case(case: dict) -> dict:
                     "unanswered questions: " + ", ".join(unanswered_questions)
                     if unanswered_questions
                     else "all key questions were answered"
+                ),
+            }
+        )
+
+    max_unsupported_claim_ratio = constraints.get("max_unsupported_claim_ratio")
+    if isinstance(max_unsupported_claim_ratio, (int, float)):
+        checks.append(
+            {
+                "name": "unsupported_claim_ratio",
+                "passed": claim_stats["present"]
+                and claim_stats["unsupported_ratio"] is not None
+                and float(claim_stats["unsupported_ratio"])
+                <= float(max_unsupported_claim_ratio),
+                "detail": (
+                    "claim inventory missing"
+                    if not claim_stats["present"]
+                    else "unsupported_ratio="
+                    f"{claim_stats['unsupported_ratio']}, "
+                    f"max_unsupported_claim_ratio={float(max_unsupported_claim_ratio):.4f}"
                 ),
             }
         )
@@ -279,7 +375,9 @@ def _evaluate_case(case: dict) -> dict:
         "plan_fidelity": plan_fidelity,
         "unanswered_questions": unanswered_questions,
         "selected_source_kinds": selected_source_kinds,
+        "selected_source_groups": selected_source_groups,
         "selected_providers": selected_providers,
+        "claim_stats": claim_stats,
         "render_names": render_names,
     }
 
@@ -293,7 +391,9 @@ def _judge_output(case: dict) -> dict:
         "plan_fidelity": result["plan_fidelity"],
         "unanswered_questions": result["unanswered_questions"],
         "selected_source_kinds": result["selected_source_kinds"],
+        "selected_source_groups": result["selected_source_groups"],
         "selected_providers": result["selected_providers"],
+        "claim_stats": result["claim_stats"],
         "render_names": result["render_names"],
     }
 

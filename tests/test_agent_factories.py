@@ -212,5 +212,16 @@ def test_agent_factories_raise_when_kitaru_adapter_import_is_unavailable(
 
     import pytest
 
-    with pytest.raises(ImportError):
-        _load_module("deep_research.agents.classifier")
+    class _BlockKitaruFinder:
+        def find_spec(self, name, path=None, target=None):
+            if name == "kitaru" or name.startswith("kitaru."):
+                raise ImportError(f"kitaru blocked for test: {name}")
+            return None
+
+    finder = _BlockKitaruFinder()
+    sys.meta_path.insert(0, finder)
+    try:
+        with pytest.raises(ImportError):
+            _load_module("deep_research.agents.classifier")
+    finally:
+        sys.meta_path.remove(finder)

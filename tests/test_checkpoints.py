@@ -1445,15 +1445,16 @@ def test_rank_evidence_uses_selected_entries_and_gap_summary(
 
     result = module.rank_evidence(ledger, plan)
 
+    # MMR greedy selection: candidate-1 (docs, higher combined score on relevance +
+    # source-group prior) leads; candidate-2 (paper) follows after diversity penalty.
     assert [item.candidate_key for item in result.items] == [
-        "candidate-2",
         "candidate-1",
+        "candidate-2",
     ]
-    assert result.items[0].matched_subtopics == ["durability"]
-    assert result.items[0].reading_time_minutes == 6
+    assert result.items[0].matched_subtopics == ["replay"]
     assert (
         result.items[0].ordering_rationale
-        == "Higher quality, authority, and relevance sources appear earlier."
+        == "MMR greedy selection balances relevance against content and source-group diversity."
     )
     assert result.gap_coverage_summary == ["operations"]
     assert ("rank_evidence", "tool_call") in decorated
@@ -1623,7 +1624,7 @@ def test_rank_evidence_breaks_score_ties_by_candidate_key(monkeypatch) -> None:
         "candidate-b",
     ]
     assert result.items[0].ordering_rationale == (
-        "Higher quality, authority, and relevance sources appear earlier."
+        "MMR greedy selection balances relevance against content and source-group diversity."
     )
 
 

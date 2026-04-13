@@ -66,11 +66,116 @@ class ProviderRegistry:
         providers = [self._providers[name] for name in self._enabled_names]
         return [provider for provider in providers if provider.is_available()]
 
+    @staticmethod
+    def _web_first_provider_rank(provider_name: str) -> int:
+        return {
+            "exa": 0,
+            "brave": 1,
+            "semantic_scholar": 2,
+            "arxiv": 3,
+        }.get(provider_name, 99)
+
+    @staticmethod
+    def _paper_first_provider_rank(provider_name: str) -> int:
+        return {
+            "semantic_scholar": 0,
+            "arxiv": 1,
+            "exa": 2,
+            "brave": 3,
+        }.get(provider_name, 99)
+
+    @staticmethod
+    def _query_text(action: SearchAction) -> str:
+        return action.query.casefold()
+
+    @classmethod
+    def _looks_paper_first(
+        cls,
+        action: SearchAction,
+        preferred_source_groups: list[SourceGroup] | None = None,
+    ) -> bool:
+        if action.preferred_source_kinds:
+            return SourceKind.PAPER in action.preferred_source_kinds
+
+        if preferred_source_groups and SourceGroup.PAPERS in preferred_source_groups:
+            return True
+
+        query_text = cls._query_text(action)
+        academic_markers = (
+            "paper",
+            "papers",
+            "literature review",
+            "survey",
+            "survey paper",
+            "arxiv",
+            "semantic scholar",
+            "citation",
+            "citations",
+            "peer reviewed",
+            "peer-reviewed",
+            "theorem",
+            "proof",
+        )
+        return any(marker in query_text for marker in academic_markers)
+
+    @classmethod
+    def _preferred_group_rank(
+        cls,
+        provider: SearchProvider,
+        preferred_source_groups: list[SourceGroup] | None = None,
+    ) -> int:
+        if not preferred_source_groups:
+            return 0
+        try:
+            return preferred_source_groups.index(provider.source_group)
+        except ValueError:
+            return len(preferred_source_groups) + 1
+
+    @classmethod
+    def _provider_sort_key(
+        cls,
+        provider: SearchProvider,
+        action: SearchAction,
+        preferred_source_groups: list[SourceGroup] | None = None,
+        preferred_providers: list[str] | None = None,
+    ) -> tuple[int, int, int, int, str]:
+        preferred_provider_rank = (
+            preferred_providers.index(provider.name)
+            if preferred_providers and provider.name in preferred_providers
+            else len(preferred_providers or []) + 1
+        )
+        preferred_group_rank = cls._preferred_group_rank(
+            provider, preferred_source_groups
+        )
+        provider_family_rank = (
+            cls._paper_first_provider_rank(provider.name)
+            if cls._looks_paper_first(action, preferred_source_groups)
+            else cls._web_first_provider_rank(provider.name)
+        )
+        explicit_kind_rank = 0
+        if action.preferred_source_kinds:
+            explicit_kind_rank = (
+                0
+                if set(action.preferred_source_kinds).intersection(
+                    provider.supported_source_kinds
+                )
+                else 1
+            )
+        return (
+            preferred_provider_rank,
+            explicit_kind_rank,
+            preferred_group_rank,
+            provider_family_rank,
+            provider.name,
+        )
+
     def providers_for(
         self,
         action: SearchAction,
         excluded_providers: list[str] | None = None,
         excluded_source_groups: list[SourceGroup] | None = None,
+        preferred_source_groups: list[SourceGroup] | None = None,
+        preferred_providers: list[str] | None = None,
     ) -> list[SearchProvider]:
         providers = self.active_providers()
 
@@ -97,7 +202,15 @@ class ProviderRegistry:
                 for provider in providers
                 if requested_kinds.intersection(provider.supported_source_kinds)
             ]
-        return providers
+        return sorted(
+            providers,
+            key=lambda provider: self._provider_sort_key(
+                provider,
+                action,
+                preferred_source_groups=preferred_source_groups,
+                preferred_providers=preferred_providers,
+            ),
+        )
 
 
 __all__ = ["ProviderRegistry", "SearchProvider", "failure_result"]

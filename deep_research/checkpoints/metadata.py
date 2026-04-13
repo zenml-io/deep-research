@@ -1,4 +1,4 @@
-"""Checkpoints that encapsulate wall-clock and run identity non-determinism.
+"""Checkpoints that encapsulate timing and run identity non-determinism.
 
 Keeping ``uuid4`` and ``datetime.now`` calls behind checkpoint boundaries means
 the flow body is pure with respect to the checkpoint cache: on replay, the
@@ -21,10 +21,11 @@ def _utc_now_iso() -> str:
 
 
 class WallClockSnapshot(BaseModel):
-    """Immutable wall-clock observation taken relative to a run start stamp.
+    """Immutable timing observation taken relative to a run start stamp.
 
-    ``elapsed_seconds`` is an integer to match the ``RunSummary.elapsed_seconds``
-    contract the downstream assembler expects.
+    ``elapsed_seconds`` remains the legacy wall-clock field that downstream code
+    already expects. ``active_elapsed_seconds`` is carried alongside it so the
+    flow can enforce budgets on active work only.
     """
 
     now_iso: str = Field(
@@ -35,6 +36,16 @@ class WallClockSnapshot(BaseModel):
         ...,
         ge=0,
         description="Whole seconds elapsed since the run's started_at stamp.",
+    )
+    wall_elapsed_seconds: int = Field(
+        ...,
+        ge=0,
+        description="Whole seconds elapsed since the run's started_at stamp.",
+    )
+    active_elapsed_seconds: int = Field(
+        default=0,
+        ge=0,
+        description="Whole seconds of active work observed by the flow.",
     )
 
 
@@ -52,7 +63,9 @@ def stamp_run_metadata() -> RunMetadataStamp:
 
 
 @checkpoint
-def snapshot_wall_clock(started_at: str) -> WallClockSnapshot:
+def snapshot_wall_clock(
+    started_at: str, active_elapsed_seconds: int = 0
+) -> WallClockSnapshot:
     """Checkpoint: capture elapsed seconds and an ISO ``now`` relative to ``started_at``.
 
     Replay returns the cached snapshot, so convergence decisions remain stable
@@ -64,6 +77,8 @@ def snapshot_wall_clock(started_at: str) -> WallClockSnapshot:
     return WallClockSnapshot(
         now_iso=now.isoformat().replace("+00:00", "Z"),
         elapsed_seconds=elapsed,
+        wall_elapsed_seconds=elapsed,
+        active_elapsed_seconds=max(0, int(active_elapsed_seconds)),
     )
 
 
@@ -79,10 +94,22 @@ class RunFinalization(BaseModel):
         ge=0,
         description="Whole seconds between started_at and completed_at.",
     )
+    wall_elapsed_seconds: int = Field(
+        ...,
+        ge=0,
+        description="Whole seconds between started_at and completed_at.",
+    )
+    active_elapsed_seconds: int = Field(
+        default=0,
+        ge=0,
+        description="Whole seconds of active work observed across the run.",
+    )
 
 
 @checkpoint
-def finalize_run_metadata(started_at: str) -> RunFinalization:
+def finalize_run_metadata(
+    started_at: str, active_elapsed_seconds: int = 0
+) -> RunFinalization:
     """Checkpoint: stamp the run completion time and total elapsed seconds.
 
     Mirrors ``stamp_run_metadata`` at the tail of the flow so that on replay we
@@ -94,4 +121,6 @@ def finalize_run_metadata(started_at: str) -> RunFinalization:
     return RunFinalization(
         completed_at=now.isoformat().replace("+00:00", "Z"),
         elapsed_seconds=elapsed,
+        wall_elapsed_seconds=elapsed,
+        active_elapsed_seconds=max(0, int(active_elapsed_seconds)),
     )

@@ -218,7 +218,7 @@ def _patch_success_path(module, monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "score_coverage",
-        _as_checkpoint(lambda ledger, plan: _sample_coverage()),
+        _as_checkpoint(lambda ledger, plan, config=None: _sample_coverage()),
     )
     monkeypatch.setattr(
         module,
