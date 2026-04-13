@@ -3,7 +3,7 @@ from math import isclose
 from pydantic import BaseModel, Field
 
 from deep_research.enums import StopReason
-from deep_research.models import CoverageScore, EvidenceLedger, IterationRecord
+from deep_research.models import EvidenceLedger, IterationRecord
 
 
 class StopDecision(BaseModel):
@@ -37,12 +37,10 @@ def detect_source_diversity_warning(ledger: EvidenceLedger) -> str | None:
     provider_counts: dict[str, int] = {}
     source_kind_counts: dict[str, int] = {}
     for candidate in selected:
-        provider = getattr(candidate, "provider", None)
-        source_kind = getattr(getattr(candidate, "source_kind", None), "value", None)
-        if provider is not None:
-            provider_counts[provider] = provider_counts.get(provider, 0) + 1
-        if source_kind is not None:
-            source_kind_counts[source_kind] = source_kind_counts.get(source_kind, 0) + 1
+        provider = candidate.provider
+        source_kind = candidate.source_kind.value
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        source_kind_counts[source_kind] = source_kind_counts.get(source_kind, 0) + 1
     threshold = 0.8
     if provider_counts:
         provider, provider_count = max(provider_counts.items(), key=lambda item: item[1])
@@ -58,76 +56,23 @@ def detect_source_diversity_warning(ledger: EvidenceLedger) -> str | None:
 
 
 def check_convergence(
-    signal: ConvergenceSignal | CoverageScore,
+    signal: ConvergenceSignal,
     history: list[IterationRecord],
-    **kwargs,
+    *,
+    max_iterations: int,
+    coverage_threshold: float,
+    strong_coverage_threshold: float,
+    marginal_gain_threshold: float,
+    max_stall_count: int,
+    budget_limit_usd: float,
+    active_time_limit_seconds: int,
+    min_considered_floor: int,
+    min_selected_for_stop: int,
+    elapsed_seconds: int = 0,
+    spent_usd: float = 0.0,
+    new_candidate_count: int = 0,
 ) -> StopDecision:
     """Decide whether the research loop should stop using a composite signal."""
-    if "uncovered_subtopics" in kwargs:
-        raise TypeError(
-            "check_convergence does not accept 'uncovered_subtopics' override; "
-            "pass the state via CoverageScore.uncovered_subtopics instead"
-        )
-    if isinstance(signal, CoverageScore):
-        current = signal
-        spent_usd = kwargs["spent_usd"]
-        elapsed_seconds = kwargs["elapsed_seconds"]
-        max_iterations = kwargs["max_iterations"]
-        epsilon = kwargs["epsilon"]
-        min_coverage = kwargs["min_coverage"]
-        budget_limit_usd = kwargs["budget_limit_usd"]
-        time_limit_seconds = kwargs["time_limit_seconds"]
-        new_candidate_count = kwargs.get("new_candidate_count", 0)
-        has_explicit_gap_state = "uncovered_subtopics" in current.model_fields_set
-        has_remaining_gaps = has_explicit_gap_state and bool(current.uncovered_subtopics)
-        has_unanswered_questions = bool(current.unanswered_questions)
-
-        if spent_usd >= budget_limit_usd:
-            return StopDecision(should_stop=True, reason=StopReason.BUDGET_EXHAUSTED)
-        if elapsed_seconds >= time_limit_seconds:
-            return StopDecision(should_stop=True, reason=StopReason.TIME_EXHAUSTED)
-        if (
-            current.total >= min_coverage
-            and not has_remaining_gaps
-            and not has_unanswered_questions
-        ):
-            return StopDecision(should_stop=True, reason=StopReason.CONVERGED)
-        if history:
-            previous = history[-1]
-            coverage_gain = current.total - previous.coverage
-            low_gain = coverage_gain < epsilon and not isclose(
-                coverage_gain,
-                epsilon,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            )
-            spent_ratio = spent_usd / budget_limit_usd if budget_limit_usd > 0 else 1.0
-            elapsed_ratio = (
-                elapsed_seconds / time_limit_seconds if time_limit_seconds > 0 else 1.0
-            )
-            resource_pressure = max(spent_ratio, elapsed_ratio)
-
-            if coverage_gain <= 0:
-                return StopDecision(should_stop=True, reason=StopReason.LOOP_STALL)
-            if low_gain and resource_pressure >= 0.5:
-                return StopDecision(
-                    should_stop=True, reason=StopReason.DIMINISHING_RETURNS
-                )
-            if "new_candidate_count" in kwargs and new_candidate_count <= 0 and low_gain:
-                return StopDecision(should_stop=True, reason=StopReason.LOOP_STALL)
-        if len(history) + 1 >= max_iterations:
-            return StopDecision(should_stop=True, reason=StopReason.MAX_ITERATIONS)
-        return StopDecision(should_stop=False)
-
-    max_iterations = kwargs["max_iterations"]
-    coverage_threshold = kwargs["coverage_threshold"]
-    strong_coverage_threshold = kwargs["strong_coverage_threshold"]
-    marginal_gain_threshold = kwargs["marginal_gain_threshold"]
-    max_stall_count = kwargs["max_stall_count"]
-    budget_limit_usd = kwargs["budget_limit_usd"]
-    active_time_limit_seconds = kwargs["active_time_limit_seconds"]
-    min_considered_floor = kwargs["min_considered_floor"]
-    min_selected_for_stop = kwargs["min_selected_for_stop"]
     diagnostics: dict[str, int | float | str | bool] = {
         "coverage_total": round(signal.coverage_total, 6),
         "subtopic_coverage": round(signal.subtopic_coverage, 6),

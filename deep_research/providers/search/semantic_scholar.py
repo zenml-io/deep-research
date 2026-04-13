@@ -105,6 +105,4 @@ class SemanticScholarProvider:
                     results.append(failure_result(self.name, "paper", exc))
             return results
         finally:
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
+            client.close()

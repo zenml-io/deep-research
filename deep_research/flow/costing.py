@@ -12,19 +12,15 @@ def estimate_cost_usd(
 
 
 def budget_from_agent_result(result: object, pricing: ModelPricing) -> IterationBudget:
-    """Extract token usage from an agent result and return a costed IterationBudget."""
-    usage_attr = getattr(result, "usage", None)
-    usage = usage_attr() if callable(usage_attr) else usage_attr
-    input_tokens = int(
-        getattr(usage, "input_tokens", getattr(usage, "prompt_tokens", 0)) or 0
-    )
-    output_tokens = int(
-        getattr(usage, "output_tokens", getattr(usage, "completion_tokens", 0)) or 0
-    )
-    total_tokens = int(
-        getattr(usage, "total_tokens", input_tokens + output_tokens)
-        or (input_tokens + output_tokens)
-    )
+    """Extract token usage from a PydanticAI agent result into a costed IterationBudget.
+
+    ``result.usage`` is a ``RunUsage`` attribute on modern PydanticAI and was a
+    method on older releases; the ``callable`` guard accommodates both.
+    """
+    usage = result.usage() if callable(result.usage) else result.usage
+    input_tokens = int(usage.input_tokens or 0)
+    output_tokens = int(usage.output_tokens or 0)
+    total_tokens = int(usage.total_tokens or input_tokens + output_tokens)
     return IterationBudget(
         input_tokens=input_tokens,
         output_tokens=output_tokens,

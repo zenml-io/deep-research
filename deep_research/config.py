@@ -26,12 +26,12 @@ class TierConfig(BaseModel):
 
 class ConvergenceConfig(BaseModel):
     token_budget: int = Field(default=200_000, ge=0)
-    coverage_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
+    coverage_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     strong_coverage_shortcut: float = Field(default=0.92, ge=0.0, le=1.0)
     marginal_gain_threshold: float = Field(default=0.05, ge=0.0)
     max_stall_count: int = Field(default=3, ge=0)
-    target_considered_resources: int = Field(default=200, ge=0)
-    min_considered_floor: int = Field(default=100, ge=0)
+    target_considered_resources: int = Field(default=30, ge=0)
+    min_considered_floor: int = Field(default=15, ge=0)
     min_selected_for_stop: int = Field(default=12, ge=0)
 
 
@@ -112,6 +112,7 @@ class ResearchSettings(BaseSettings):
     review_model: str = "anthropic:claude-sonnet-4-20250514"
     judge_model: str = "openai:gpt-4o-mini"
     coverage_scorer_model: str = "openai:gpt-4o-mini"
+    claim_extractor_model: str = "openai:gpt-4o-mini"
     use_curator_for_selection: bool = False
     supervisor_context_budget_chars: int = Field(default=18000, gt=0)
     relevance_context_budget_chars: int = Field(default=16000, gt=0)
@@ -216,6 +217,7 @@ class ResearchConfig(BaseModel):
     review_model: str
     judge_model: str
     coverage_scorer_model: str
+    claim_extractor_model: str
     use_curator_for_selection: bool = False
     supervisor_context_budget_chars: int = 18000
     relevance_context_budget_chars: int = 16000
@@ -227,6 +229,7 @@ class ResearchConfig(BaseModel):
     writer_pricing: ModelPricing = Field(default_factory=ModelPricing)
     review_pricing: ModelPricing = Field(default_factory=ModelPricing)
     judge_pricing: ModelPricing = Field(default_factory=ModelPricing)
+    claim_extractor_pricing: ModelPricing = Field(default_factory=ModelPricing)
     brave_api_key: str = ""
     exa_api_key: str = ""
     semantic_scholar_api_key: str = ""
@@ -351,6 +354,7 @@ class ResearchConfig(BaseModel):
             review_model=settings.review_model,
             judge_model=settings.judge_model,
             coverage_scorer_model=settings.coverage_scorer_model,
+            claim_extractor_model=settings.claim_extractor_model,
             use_curator_for_selection=(
                 True if tier == Tier.DEEP else settings.use_curator_for_selection
             ),
@@ -364,6 +368,7 @@ class ResearchConfig(BaseModel):
             writer_pricing=ModelPricing(),
             review_pricing=ModelPricing(),
             judge_pricing=ModelPricing(),
+            claim_extractor_pricing=ModelPricing(),
             brave_api_key=settings.brave_api_key,
             exa_api_key=settings.exa_api_key,
             semantic_scholar_api_key=settings.semantic_scholar_api_key,

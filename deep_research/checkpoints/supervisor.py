@@ -27,9 +27,9 @@ from deep_research.providers import build_supervisor_surface
 def _pydantic_ai_version() -> str:
     try:
         import pydantic_ai
-    except Exception:
+        return pydantic_ai.__version__ or "unknown"
+    except (ImportError, AttributeError):
         return "unknown"
-    return getattr(pydantic_ai, "__version__", None) or "unknown"
 
 
 def _build_trace_warning_result(
@@ -149,6 +149,11 @@ def execute_supervisor_turn(
     brief: str | None = None,
     preferences: ResearchPreferences | None = None,
 ) -> SupervisorCheckpointResult:
+    """
+    Execute one supervisor search turn: build context, run the agent, collect tool
+    results, emit a degradation warning if the trace is incomplete, and return a
+    SupervisorCheckpointResult.
+    """
     from deep_research.agents.supervisor import build_supervisor_agent
 
     bootstrap_logfire()
@@ -157,6 +162,7 @@ def execute_supervisor_turn(
         uncovered_subtopics = list(plan.subtopics)
     if unanswered_questions is None:
         unanswered_questions = list(plan.key_questions)
+
     context_ledger = truncate_ledger_for_context(
         ledger,
         max_chars=config.supervisor_context_budget_chars,
@@ -176,6 +182,8 @@ def execute_supervisor_turn(
         toolsets=toolsets,
         tools=tools,
     )
+
+    # --- build prompt payload ---
     prompt: dict[str, object] = {
         "plan": plan.model_dump(mode="json"),
         "ledger": context_ledger.model_dump(mode="json"),
@@ -201,21 +209,19 @@ def execute_supervisor_turn(
             + " Prioritize search actions that close unanswered key questions first."
         )
 
+    # --- run agent ---
     with span(
         "supervisor turn",
         iteration=iteration,
         allow_supervisor_bash=config.allow_supervisor_bash,
         enabled_provider_count=len(config.enabled_providers),
     ):
-        serialized_prompt = serialize_prompt_payload(
-            prompt, label="supervisor prompt payload"
-        )
-        sig = inspect.signature(agent.run_sync)
-        supports_hooks = "hooks" in sig.parameters
+        serialized_prompt = serialize_prompt_payload(prompt, label="supervisor prompt payload")
+        supports_hooks = "hooks" in inspect.signature(agent.run_sync).parameters
 
         if supports_hooks:
             collector = ToolResultCollector()
-            result = agent.run_sync(
+            result = agent.run_sync(  # type: ignore[union-attr]
                 serialized_prompt,
                 hooks={"after_tool_call": collector.hook},
             )
@@ -226,27 +232,27 @@ def execute_supervisor_turn(
                 and collector.call_count != trace_stats.tool_return_part_count
                 and extracted_results
             ):
+                # Why: fall back to trace extraction when hook count diverges from trace count
                 raw_results = extracted_results
         else:
-            result = agent.run_sync(serialized_prompt)
+            collector = None
+            result = agent.run_sync(serialized_prompt)  # type: ignore[union-attr]
             raw_results, trace_stats = extract_mcp_raw_results_with_stats(result)
 
+    # --- detect trace issues ---
     hook_capture_mismatch = (
         supports_hooks
+        and collector is not None
         and trace_stats.trace_available
         and collector.call_count != trace_stats.tool_return_part_count
     )
-    if trace_stats.warnings or trace_stats.dropped_part_count > 0 or hook_capture_mismatch:
-        raw_results = [
-            *raw_results,
-            _build_trace_warning_result(
-            iteration=iteration,
-            trace_stats=trace_stats,
-            collector_call_count=collector.call_count if supports_hooks else None,
-        ),
-        ]
-
-    if trace_stats.warnings or trace_stats.dropped_part_count > 0 or hook_capture_mismatch:
+    collector_call_count = collector.call_count if collector is not None else None
+    has_trace_issues = bool(trace_stats.warnings) or trace_stats.dropped_part_count > 0 or hook_capture_mismatch
+    if has_trace_issues:
+        # Why: build a new list to preserve immutability of the input
+        raw_results = [*raw_results, _build_trace_warning_result(
+            iteration=iteration, trace_stats=trace_stats, collector_call_count=collector_call_count,
+        )]
         warning(
             "Supervisor tool trace extraction degraded",
             iteration=iteration,

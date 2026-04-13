@@ -21,6 +21,7 @@ from deep_research.models import (
     SelectionGraph,
     SelectionItem,
     StopReason,
+    SupervisorCheckpointResult,
 )
 
 
@@ -473,9 +474,9 @@ def test_research_flow_uses_renderer_checkpoints(monkeypatch) -> None:
         module,
         "run_supervisor",
         _as_checkpoint(
-            lambda *args, **kwargs: types.SimpleNamespace(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
                 raw_results=[],
-                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+                budget=IterationBudget(),
             )
         ),
     )
@@ -634,9 +635,9 @@ def test_research_flow_passes_config_into_merge_checkpoint(monkeypatch) -> None:
         module,
         "run_supervisor",
         _as_checkpoint(
-            lambda *args, **kwargs: types.SimpleNamespace(
+            lambda *args, **kwargs: SupervisorCheckpointResult(
                 raw_results=[],
-                budget=types.SimpleNamespace(estimated_cost_usd=0.0),
+                budget=IterationBudget(),
             )
         ),
     )

@@ -48,9 +48,7 @@ def fetch_url_content(url: str, timeout_sec: int, max_chars: int) -> str | None:
             retry_policy=DEFAULT_RETRY_POLICY,
         )
     finally:
-        close = getattr(client, "close", None)
-        if callable(close):
-            close()
+        client.close()
 
     content_type = response.headers.get("content-type", "")
     if "html" not in content_type and "text" not in content_type:

@@ -80,6 +80,4 @@ class BraveSearchProvider:
                     results.append(failure_result(self.name, "web", exc))
             return results
         finally:
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
+            client.close()

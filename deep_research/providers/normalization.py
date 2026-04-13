@@ -10,12 +10,25 @@ from deep_research.evidence.url import canonicalize_url
 from deep_research.models import EvidenceCandidate, EvidenceSnippet, RawToolResult
 
 
-def clean_string(value: object) -> str | None:
-    """Normalize a scalar raw-result field into a trimmed string or `None`.
+# Fields promoted to typed EvidenceCandidate attributes; excluded from raw_metadata.
+_RAW_METADATA_EXCLUDED: frozenset[str] = frozenset({
+    "title", "url", "snippet", "description",
+    "quality_score", "relevance_score", "authority_score", "freshness_score",
+    "matched_subtopics", "doi", "arxiv_id",
+})
 
-    Container values are rejected here because downstream identity and metadata fields
-    expect leaf scalar values, not nested mappings or lists with ambiguous meaning.
-    """
+# URL substring patterns mapped to SourceGroup, evaluated in priority order.
+_URL_PATTERNS: tuple[tuple[tuple[str, ...], SourceGroup], ...] = (
+    (("github.com", "gitlab.com"), SourceGroup.REPOS),
+    (("reddit.com", "news.ycombinator.com", "x.com", "twitter.com"), SourceGroup.FORUMS),
+    (("medium.com", "substack.com", "dev.to"), SourceGroup.BLOGS),
+    (("techcrunch.com", "theverge.com", "wired.com", "bloomberg.com", ".news/"), SourceGroup.NEWS),
+    (("/docs/", "docs.", "readthedocs.", "developer."), SourceGroup.DOCS),
+)
+
+
+def clean_string(value: object) -> str | None:
+    """Normalize a scalar raw-result field into a trimmed string, or None for containers."""
     if value is None:
         return None
     if isinstance(value, Mapping) or (
@@ -27,92 +40,51 @@ def clean_string(value: object) -> str | None:
 
 
 def as_score(value: object) -> float:
-    """Coerce an optional raw score field into a float, defaulting missing values to zero.
-
-    Normalized evidence candidates treat absent scores as `0.0` so providers can omit
-    any subset of ranking signals without breaking candidate validation.
-    """
+    """Coerce an optional raw score field to float, treating absent values as 0.0."""
     if value is None:
         return 0.0
     return float(value)
 
 
 def matched_subtopics(value: object) -> list[str]:
-    """Normalize raw matched-subtopic data into a list of non-empty strings.
-
-    Providers may emit a single string, a list-like container, or unusable values.
-    This helper preserves only trimmed, non-empty subtopic labels in input order.
-    """
+    """Normalize raw matched-subtopic data into a list of non-empty strings."""
     if value is None:
         return []
     if isinstance(value, str):
         value = [value]
     elif not isinstance(value, Iterable):
         return []
-    normalized: list[str] = []
-    for subtopic in value:
-        if subtopic is None:
-            continue
-        cleaned = str(subtopic).strip()
-        if cleaned:
-            normalized.append(cleaned)
-    return normalized
+    return [s for subtopic in value if subtopic is not None and (s := str(subtopic).strip())]
 
 
 def candidate_identity(item: Mapping[str, Any], canonical_url: str) -> str:
-    """Choose the strongest stable identity available for a raw result item.
-
-    DOI wins over arXiv ID, and both win over canonical URL because those identifiers
-    survive URL variants and provider-specific formatting differences more reliably.
-    """
+    """Return the strongest stable identity: DOI > arXiv ID > canonical URL."""
     doi = clean_string(item.get("doi"))
     if doi is not None:
         return f"doi:{doi.lower()}"
-
     arxiv_id = clean_string(item.get("arxiv_id"))
     if arxiv_id is not None:
         return f"arxiv:{arxiv_id.lower()}"
-
     return f"url:{canonical_url}"
 
 
 def candidate_key(item: Mapping[str, Any], canonical_url: str) -> str:
-    """Generate a deterministic short key from the chosen semantic identity string.
-
-    Hashing keeps keys compact while still remaining stable across providers that emit
-    the same DOI, arXiv ID, or canonical URL for an evidence candidate.
-    """
+    """Return a deterministic 16-hex-char key derived from the semantic identity."""
     identity = candidate_identity(item, canonical_url).encode("utf-8")
     return f"evidence-{sha256(identity).hexdigest()[:16]}"
 
 
 def raw_metadata(item: Mapping[str, Any]) -> dict[str, object]:
-    """Copy provider-specific fields that are not promoted into first-class candidate data.
-
-    Core fields used for typed model attributes are excluded so `raw_metadata` remains a
-    clean bucket for auxiliary provider payload details rather than duplicated state.
-    """
-    excluded = {
-        "title",
-        "url",
-        "snippet",
-        "description",
-        "quality_score",
-        "relevance_score",
-        "authority_score",
-        "freshness_score",
-        "matched_subtopics",
-        "doi",
-        "arxiv_id",
-    }
+    """Copy auxiliary provider fields not promoted to first-class candidate attributes."""
     return {
         str(key): value
         for key, value in item.items()
-        if key not in excluded and value is not None
+        if key not in _RAW_METADATA_EXCLUDED and value is not None
     }
 
 
 def parse_source_kind(value: object, fallback: str) -> SourceKind:
+    """Coerce a raw source-kind field into a SourceKind enum, falling back to WEB."""
     raw_value = str(value or fallback).strip().lower()
     try:
         return SourceKind(raw_value)
@@ -120,24 +92,12 @@ def parse_source_kind(value: object, fallback: str) -> SourceKind:
         return SourceKind.WEB
 
 
-def _resolve_optional_source_group(name: str) -> SourceGroup | None:
-    try:
-        return SourceGroup[name]
-    except KeyError:
-        return None
-
-
-DOCS_GROUP = _resolve_optional_source_group("DOCS")
-BLOGS_GROUP = _resolve_optional_source_group("BLOGS")
-BENCHMARKS_GROUP = _resolve_optional_source_group("BENCHMARKS")
-FORUMS_GROUP = _resolve_optional_source_group("FORUMS")
-
-
 def infer_source_group(
     canonical_url: str,
     source_kind: SourceKind,
     item: Mapping[str, Any],
 ) -> SourceGroup:
+    """Derive the best SourceGroup from an explicit field, URL patterns, or content heuristics."""
     raw_group = clean_string(item.get("source_group"))
     if raw_group is not None:
         try:
@@ -145,44 +105,29 @@ def infer_source_group(
         except ValueError:
             pass
 
+    if source_kind == SourceKind.PAPER:
+        return SourceGroup.PAPERS
+
     lower_url = canonical_url.casefold()
+    for patterns, group in _URL_PATTERNS:
+        if any(p in lower_url for p in patterns):
+            return group
+
+    # Content heuristics — only computed when URL patterns produce no match.
     title = clean_string(item.get("title")) or ""
     description = clean_string(item.get("description")) or ""
     combined = f"{title} {description}".casefold()
-
-    if source_kind == SourceKind.PAPER:
-        return SourceGroup.PAPERS
-    if "github.com" in lower_url or "gitlab.com" in lower_url:
-        return SourceGroup.REPOS
-    if any(host in lower_url for host in ("reddit.com", "news.ycombinator.com", "x.com", "twitter.com")):
-        return FORUMS_GROUP or SourceGroup.SOCIAL
-    if any(host in lower_url for host in ("medium.com", "substack.com", "dev.to")):
-        return BLOGS_GROUP or SourceGroup.WEB
-    if ".news/" in lower_url or any(
-        host in lower_url
-        for host in ("techcrunch.com", "theverge.com", "wired.com", "bloomberg.com")
-    ):
-        return SourceGroup.NEWS
-    if any(
-        token in lower_url
-        for token in ("/docs/", "docs.", "readthedocs.", "developer.")
-    ):
-        return DOCS_GROUP or SourceGroup.WEB
     if "benchmark" in combined or "leaderboard" in combined:
-        return BENCHMARKS_GROUP or SourceGroup.WEB
+        return SourceGroup.BENCHMARKS
+
     return SourceGroup.WEB
 
 
 def iter_result_items(
     raw_results: list[Mapping[str, Any] | RawToolResult],
 ) -> list[Mapping[str, Any]]:
-    """Flatten mixed raw-result payloads into a uniform list of item mappings.
-
-    `RawToolResult` payloads may wrap items under `results` or `items`, while tests and
-    other callers can pass mappings directly. This helper normalizes those entry shapes.
-    """
+    """Flatten mixed raw-result payloads into a uniform list of item mappings."""
     items: list[Mapping[str, Any]] = []
-
     for raw_result in raw_results:
         if isinstance(raw_result, RawToolResult):
             payload = raw_result.payload
@@ -191,12 +136,64 @@ def iter_result_items(
                 items.extend(item for item in nested if isinstance(item, Mapping))
                 continue
             items.append(payload)
-            continue
-
-        if isinstance(raw_result, Mapping):
+        elif isinstance(raw_result, Mapping):
             items.append(raw_result)
-
     return items
+
+
+def _build_candidate(
+    item: Mapping[str, Any],
+    idx: int,
+    provider: str,
+    source_kind: str,
+) -> EvidenceCandidate | None:
+    """Build a typed EvidenceCandidate from a raw item mapping; None on missing URL or validation error."""
+    url = str(item.get("url") or "").strip()
+    if not url:
+        return None
+    canonical_url = canonicalize_url(url)
+    if canonical_url is None:
+        return None
+
+    normalized_source_kind = parse_source_kind(item.get("source_kind"), source_kind)
+    source_group = infer_source_group(canonical_url, normalized_source_kind, item)
+
+    snippet_text = str(item.get("snippet") or item.get("description") or "").strip()
+    raw_locator = item.get("source_locator")
+    locator = str(raw_locator).strip() or None if raw_locator is not None else None
+    snippets = [EvidenceSnippet(text=snippet_text, source_locator=locator)] if snippet_text else []
+
+    raw_quality = item.get("quality_score")
+    try:
+        candidate = EvidenceCandidate(
+            key=candidate_key(item, canonical_url),
+            title=str(item.get("title") or url or f"result-{idx}").strip(),
+            url=url,
+            snippets=snippets,
+            provider=provider,
+            source_kind=normalized_source_kind,
+            source_group=source_group,
+            canonical_url=canonical_url,
+            quality_score=as_score(raw_quality),
+            relevance_score=as_score(item.get("relevance_score")),
+            authority_score=as_score(item.get("authority_score")),
+            freshness_score=as_score(item.get("freshness_score")),
+            matched_subtopics=matched_subtopics(item.get("matched_subtopics")),
+            doi=clean_string(item.get("doi")),
+            arxiv_id=clean_string(item.get("arxiv_id")),
+            published_at=clean_string(
+                item.get("published_at") or item.get("raw_published")
+            ),
+            raw_metadata=raw_metadata(item),
+        )
+    except (ValidationError, ValueError, TypeError):
+        return None
+
+    if raw_quality is None:
+        candidate = candidate.model_copy(
+            update={"quality_score": score_candidate_quality(candidate)}
+        )
+    return candidate
 
 
 def normalize_tool_results(
@@ -205,64 +202,9 @@ def normalize_tool_results(
     source_kind: str,
 ) -> list[EvidenceCandidate]:
     """Transform raw tool results into typed EvidenceCandidate instances."""
-    normalized: list[EvidenceCandidate] = []
-
+    candidates = []
     for idx, item in enumerate(iter_result_items(raw_results)):
-        url = str(item.get("url") or "").strip()
-        if not url:
-            continue
-        canonical_url = canonicalize_url(url)
-        if canonical_url is None:
-            continue
-        normalized_source_kind = parse_source_kind(item.get("source_kind"), source_kind)
-        source_group = infer_source_group(canonical_url, normalized_source_kind, item)
-
-        snippet_text = str(item.get("snippet") or item.get("description") or "").strip()
-        source_locator = item.get("source_locator")
-        snippets = []
-        if snippet_text:
-            snippets.append(
-                EvidenceSnippet(
-                    text=snippet_text,
-                    source_locator=str(source_locator).strip() or None
-                    if source_locator is not None
-                    else None,
-                )
-            )
-
-        try:
-            raw_quality = item.get("quality_score")
-            candidate_data: dict[str, object] = {
-                "key": candidate_key(item, canonical_url),
-                "title": str(item.get("title") or url or f"result-{idx}").strip(),
-                "url": url,
-                "snippets": snippets,
-                "provider": provider,
-                "source_kind": normalized_source_kind,
-                "quality_score": as_score(raw_quality),
-                "relevance_score": as_score(item.get("relevance_score")),
-                "authority_score": as_score(item.get("authority_score")),
-                "freshness_score": as_score(item.get("freshness_score")),
-                "matched_subtopics": matched_subtopics(item.get("matched_subtopics")),
-                "doi": clean_string(item.get("doi")),
-                "arxiv_id": clean_string(item.get("arxiv_id")),
-                "raw_metadata": raw_metadata(item),
-            }
-            if "source_group" in EvidenceCandidate.model_fields:
-                candidate_data["source_group"] = source_group
-            if "canonical_url" in EvidenceCandidate.model_fields:
-                candidate_data["canonical_url"] = canonical_url
-            if "published_at" in EvidenceCandidate.model_fields:
-                candidate_data["published_at"] = clean_string(
-                    item.get("published_at") or item.get("raw_published")
-                )
-            candidate = EvidenceCandidate(**candidate_data)
-            if raw_quality is None:
-                candidate = candidate.model_copy(
-                    update={"quality_score": score_candidate_quality(candidate)}
-                )
-        except (ValidationError, ValueError, TypeError):
-            continue
-        normalized.append(candidate)
-
-    return normalized
+        candidate = _build_candidate(item, idx, provider, source_kind)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates

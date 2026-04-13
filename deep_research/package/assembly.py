@@ -1,7 +1,6 @@
 from deep_research.models import (
     ClaimInventory,
     CoherenceResult,
-    ConvergenceSignal,
     CritiqueResult,
     EvidenceLedger,
     GroundingResult,
@@ -29,7 +28,6 @@ def assemble_package(
     grounding_result: GroundingResult | None = None,
     coherence_result: CoherenceResult | None = None,
     claim_inventory: ClaimInventory | None = None,
-    convergence_signal: ConvergenceSignal | None = None,
     preferences: ResearchPreferences | None = None,
     preference_degradations: list[str] | None = None,
 ) -> InvestigationPackage:
@@ -46,7 +44,6 @@ def assemble_package(
         grounding_result=grounding_result,
         coherence_result=coherence_result,
         claim_inventory=claim_inventory,
-        convergence_signal=convergence_signal,
         preferences=preferences,
         preference_degradations=preference_degradations or [],
     )

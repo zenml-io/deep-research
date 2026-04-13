@@ -37,29 +37,9 @@ class ToolResultCollector:
             return
         mapping = _coerce_mapping(result)
         if mapping is not None:
-            payload = _coerce_mapping(mapping.get("payload"))
-            if payload is not None:
-                self.results.append(
-                    RawToolResult(
-                        tool_name=str(mapping.get("tool_name") or tool_name),
-                        provider=str(mapping.get("provider") or "mcp"),
-                        payload=dict(payload),
-                        ok=bool(mapping.get("ok", True)),
-                        error=mapping.get("error"),
-                    )
-                )
-                return
-            # Flat shapes: {"results": [...], "source_kind": "web"} etc.
-            if any(key in mapping for key in ("results", "items", "source_kind")):
-                self.results.append(
-                    RawToolResult(
-                        tool_name=str(mapping.get("tool_name") or tool_name),
-                        provider=str(mapping.get("provider") or "mcp"),
-                        payload=dict(mapping),
-                        ok=bool(mapping.get("ok", True)),
-                        error=mapping.get("error"),
-                    )
-                )
+            built = _mapping_to_raw_result(mapping, fallback_name=tool_name)
+            if built is not None:
+                self.results.append(built)
 
 
 def serialize_prompt_payload(payload: object, *, label: str = "agent prompt") -> str:
@@ -75,7 +55,12 @@ def serialize_prompt_payload(payload: object, *, label: str = "agent prompt") ->
 def extract_tool_results_with_stats(
     result: object,
 ) -> tuple[list[RawToolResult], ToolTraceExtractionStats]:
-    """Normalize tool-return parts from a PydanticAI/Kitaru result object."""
+    """Normalize tool-return parts from a PydanticAI/Kitaru result object.
+
+    Walks the message trace, picks out every tool-return part, and converts
+    each to a typed RawToolResult. Unrecognised shapes are counted and
+    described in the returned stats so callers can emit structured warnings.
+    """
     stats = ToolTraceExtractionStats()
     all_messages = getattr(result, "all_messages", None)
     if not callable(all_messages):
@@ -114,7 +99,11 @@ def extract_tool_results(result: object) -> list[RawToolResult]:
     return raw_results
 
 
+# --- Private helpers ---
+
+
 def _iter_parts(message: object) -> list[object]:
+    """Return message.parts as a list, or empty list if absent/wrong type."""
     parts = _get_field(message, "parts", [])
     if isinstance(parts, list | tuple):
         return list(parts)
@@ -122,6 +111,7 @@ def _iter_parts(message: object) -> list[object]:
 
 
 def _normalize_tool_return_part(part: object) -> RawToolResult | None:
+    """Convert a single tool-return message part into a RawToolResult."""
     content = _get_field(part, "content")
     if isinstance(content, RawToolResult):
         return content
@@ -130,52 +120,62 @@ def _normalize_tool_return_part(part: object) -> RawToolResult | None:
     if content_mapping is None:
         return None
 
-    payload = _coerce_mapping(content_mapping.get("payload"))
-    tool_name = str(
-        content_mapping.get("tool_name") or _get_field(part, "tool_name", "tool")
-    )
-    provider = str(content_mapping.get("provider") or "mcp")
-    error = content_mapping.get("error")
-    ok = bool(content_mapping.get("ok", True))
+    # Fall back to part.tool_name when the content dict omits it.
+    fallback_name = str(_get_field(part, "tool_name", "tool"))
+    return _mapping_to_raw_result(content_mapping, fallback_name=fallback_name)
 
+
+def _mapping_to_raw_result(
+    mapping: Mapping[str, Any], fallback_name: str
+) -> RawToolResult | None:
+    """Build a RawToolResult from a flat or nested mapping from an external source.
+
+    Tries a nested payload key first, then flat shapes recognised by results/items/source_kind.
+    """
+    tool_name = str(mapping.get("tool_name") or fallback_name)
+    provider = str(mapping.get("provider") or "mcp")
+    ok = bool(mapping.get("ok", True))
+    raw_error = mapping.get("error")
+    error: str | None = str(raw_error) if raw_error is not None else None
+
+    payload = _coerce_mapping(mapping.get("payload"))
     if payload is not None:
         return RawToolResult(
             tool_name=tool_name,
             provider=provider,
             payload=dict(payload),
             ok=ok,
-            error=error if error is None or isinstance(error, str) else str(error),
+            error=error,
         )
 
-    if any(key in content_mapping for key in ("results", "items", "source_kind")):
+    if any(key in mapping for key in ("results", "items", "source_kind")):
         return RawToolResult(
             tool_name=tool_name,
             provider=provider,
-            payload=dict(content_mapping),
+            payload=dict(mapping),
             ok=ok,
-            error=error if error is None or isinstance(error, str) else str(error),
+            error=error,
         )
 
     return None
 
 
 def _coerce_mapping(value: object) -> Mapping[str, Any] | None:
+    """Return value as a Mapping, or convert a BaseModel to one; None otherwise."""
     if isinstance(value, Mapping):
         return value
-
     if isinstance(value, BaseModel):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-
+        # model_dump(mode="json") always returns dict — cast directly.
+        return value.model_dump(mode="json")  # type: ignore[return-value]
     return None
 
 
 def _describe_unhandled_part(part: object) -> str:
+    """Produce a short diagnostic label for an unrecognised tool-return shape."""
     content = _get_field(part, "content")
     mapping = _coerce_mapping(content)
     if mapping is not None:
-        keys = ",".join(sorted(str(key) for key in mapping.keys())[:5]) or "<empty>"
+        keys = ",".join(sorted(str(k) for k in mapping.keys())[:5]) or "<empty>"
         return f"unhandled_tool_return_keys:{keys}"
     if content is None:
         return "unhandled_tool_return_type:none"
@@ -183,12 +183,14 @@ def _describe_unhandled_part(part: object) -> str:
 
 
 def _append_warning(stats: ToolTraceExtractionStats, warning: str) -> None:
+    """Add warning to stats, deduplicating and capping at 10 entries."""
     if warning in stats.warnings or len(stats.warnings) >= 10:
         return
     stats.warnings.append(warning)
 
 
 def _get_field(obj: object, name: str, default: object = None) -> object:
+    """Read a named field from a Mapping or arbitrary object (external/untyped source)."""
     if isinstance(obj, Mapping):
         return obj.get(name, default)
     return getattr(obj, name, default)

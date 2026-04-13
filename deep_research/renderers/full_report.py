@@ -37,23 +37,16 @@ def _effective_sections(
 
 
 def _claim_inventory_summary(package: InvestigationPackage) -> dict[str, object] | None:
-    claim_inventory = getattr(package, "claim_inventory", None)
-    if claim_inventory is None:
+    inventory = package.claim_inventory
+    if inventory is None:
         return None
-
-    claims = getattr(claim_inventory, "claims", [])
     return {
-        "total_claims": getattr(claim_inventory, "total_claims", len(claims)),
-        "supported_ratio": getattr(claim_inventory, "supported_ratio", None),
-        "unsupported_ratio": getattr(claim_inventory, "unsupported_ratio", None),
-        "trivial_ratio": getattr(claim_inventory, "trivial_ratio", None),
-        "per_subtopic_coverage": getattr(claim_inventory, "per_subtopic_coverage", {}),
-        "claims": [
-            claim.model_dump(mode="json")
-            if hasattr(claim, "model_dump")
-            else claim
-            for claim in claims
-        ],
+        "total_claims": inventory.total_claims,
+        "supported_ratio": inventory.supported_ratio,
+        "unsupported_ratio": inventory.unsupported_ratio,
+        "trivial_ratio": inventory.trivial_ratio,
+        "per_subtopic_coverage": inventory.per_subtopic_coverage,
+        "claims": [claim.model_dump(mode="json") for claim in inventory.claims],
     }
 
 

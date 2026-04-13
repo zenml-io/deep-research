@@ -86,26 +86,31 @@ class ResearchPreferences(StrictBaseModel):
 
 
 class SeededEntities(StrictBaseModel):
+    """Named entities harvested before planning to anchor the research brief."""
+
     projects: list[str] = Field(default_factory=list)
     benchmarks: list[str] = Field(default_factory=list)
     products: list[str] = Field(default_factory=list)
     companies: list[str] = Field(default_factory=list)
     key_terms: list[str] = Field(default_factory=list)
 
-
-class ClarifyOptions(StrictBaseModel):
-    scope: str | None = None
-    source_preference: str | None = None
-    depth_vs_breadth: str | None = None
-    comparison_targets: list[str] = Field(default_factory=list)
-    deliverable_mode: DeliverableMode | None = None
-    notes: str | None = None
-
-
-class PlanApproval(StrictBaseModel):
-    approved: bool
-    notes: str | None = None
-    overrides: ClarifyOptions | None = None
+    def flattened(self) -> list[str]:
+        """Return every entity name, de-duplicated and in group order."""
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for group in (
+            self.projects,
+            self.benchmarks,
+            self.products,
+            self.companies,
+            self.key_terms,
+        ):
+            for value in group:
+                cleaned = value.strip()
+                if cleaned and cleaned not in seen:
+                    seen.add(cleaned)
+                    ordered.append(cleaned)
+        return ordered
 
 
 class ResearchPlan(StrictBaseModel):
@@ -643,7 +648,6 @@ class InvestigationPackage(StrictBaseModel):
     preferences: ResearchPreferences | None = None
     preference_degradations: list[str] = Field(default_factory=list)
     claim_inventory: Optional["ClaimInventory"] = None
-    convergence_signal: Optional["ConvergenceSignal"] = None
 
 
 class CoverageScore(StrictBaseModel):
@@ -939,23 +943,8 @@ class ClaimInventory(StrictBaseModel):
         return self
 
 
-class ConvergenceSignal(StrictBaseModel):
-    token_budget_remaining: UnitFloat = 1.0
-    subtopic_coverage: UnitFloat = 0.0
-    source_count: int = 0
-    marginal_info_gain: float = 0.0
-    stall_count: int = 0
-    selected_count: int = 0
-    source_group_diversity: int = 0
+class ClaimExtractionResult(StrictBaseModel):
+    inventory: ClaimInventory
+    budget: IterationBudget = Field(default_factory=lambda: IterationBudget())
 
-    @model_validator(mode="after")
-    def validate_non_negative(self) -> "ConvergenceSignal":
-        if self.source_count < 0:
-            raise ValueError("source_count must be non-negative")
-        if self.stall_count < 0:
-            raise ValueError("stall_count must be non-negative")
-        if self.selected_count < 0:
-            raise ValueError("selected_count must be non-negative")
-        if self.source_group_diversity < 0:
-            raise ValueError("source_group_diversity must be non-negative")
-        return self
+

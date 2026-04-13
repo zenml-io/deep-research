@@ -1,6 +1,7 @@
 from kitaru import checkpoint
 
 from deep_research.models import (
+    ClaimInventory,
     CoherenceResult,
     CritiqueResult,
     EvidenceLedger,
@@ -31,6 +32,7 @@ def assemble_package(
     coherence_result: CoherenceResult | None = None,
     preferences: ResearchPreferences | None = None,
     preference_degradations: list[str] | None = None,
+    claim_inventory: ClaimInventory | None = None,
 ) -> InvestigationPackage:
     """Checkpoint: combine all research artifacts into the final investigation package."""
     with span("assemble_package"):
@@ -47,4 +49,5 @@ def assemble_package(
             coherence_result=coherence_result,
             preferences=preferences,
             preference_degradations=preference_degradations or [],
+            claim_inventory=claim_inventory,
         )

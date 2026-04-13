@@ -6,8 +6,42 @@ from deep_research.config import ResearchConfig
 from deep_research.enums import SourceGroup, SourceKind
 from deep_research.models import RawToolResult, SearchAction
 
+_WEB_FIRST_RANK: dict[str, int] = {
+    "exa": 0,
+    "brave": 1,
+    "semantic_scholar": 2,
+    "arxiv": 3,
+}
+
+_PAPER_FIRST_RANK: dict[str, int] = {
+    "semantic_scholar": 0,
+    "arxiv": 1,
+    "exa": 2,
+    "brave": 3,
+}
+
+_ACADEMIC_MARKERS: frozenset[str] = frozenset(
+    {
+        "paper",
+        "papers",
+        "literature review",
+        "survey",
+        "survey paper",
+        "arxiv",
+        "semantic scholar",
+        "citation",
+        "citations",
+        "peer reviewed",
+        "peer-reviewed",
+        "theorem",
+        "proof",
+    }
+)
+
 
 class SearchProvider(Protocol):
+    """Protocol every search-provider adapter must satisfy."""
+
     name: str
     source_group: SourceGroup
     supported_source_kinds: tuple[SourceKind, ...]
@@ -26,6 +60,7 @@ class SearchProvider(Protocol):
 
 
 def failure_result(provider: str, source_kind: str, error: Exception) -> RawToolResult:
+    """Return a failed `RawToolResult` for use in provider error handlers."""
     return RawToolResult(
         tool_name="search",
         provider=provider,
@@ -36,6 +71,8 @@ def failure_result(provider: str, source_kind: str, error: Exception) -> RawTool
 
 
 class ProviderRegistry:
+    """Registry of all search-provider adapters for a given `ResearchConfig`."""
+
     def __init__(self, config: ResearchConfig) -> None:
         from deep_research.providers.search.arxiv_provider import ArxivSearchProvider
         from deep_research.providers.search.brave import BraveSearchProvider
@@ -63,30 +100,9 @@ class ProviderRegistry:
         ]
 
     def active_providers(self) -> list[SearchProvider]:
+        """Return enabled providers that report themselves as available."""
         providers = [self._providers[name] for name in self._enabled_names]
-        return [provider for provider in providers if provider.is_available()]
-
-    @staticmethod
-    def _web_first_provider_rank(provider_name: str) -> int:
-        return {
-            "exa": 0,
-            "brave": 1,
-            "semantic_scholar": 2,
-            "arxiv": 3,
-        }.get(provider_name, 99)
-
-    @staticmethod
-    def _paper_first_provider_rank(provider_name: str) -> int:
-        return {
-            "semantic_scholar": 0,
-            "arxiv": 1,
-            "exa": 2,
-            "brave": 3,
-        }.get(provider_name, 99)
-
-    @staticmethod
-    def _query_text(action: SearchAction) -> str:
-        return action.query.casefold()
+        return [p for p in providers if p.is_available()]
 
     @classmethod
     def _looks_paper_first(
@@ -96,40 +112,9 @@ class ProviderRegistry:
     ) -> bool:
         if action.preferred_source_kinds:
             return SourceKind.PAPER in action.preferred_source_kinds
-
         if preferred_source_groups and SourceGroup.PAPERS in preferred_source_groups:
             return True
-
-        query_text = cls._query_text(action)
-        academic_markers = (
-            "paper",
-            "papers",
-            "literature review",
-            "survey",
-            "survey paper",
-            "arxiv",
-            "semantic scholar",
-            "citation",
-            "citations",
-            "peer reviewed",
-            "peer-reviewed",
-            "theorem",
-            "proof",
-        )
-        return any(marker in query_text for marker in academic_markers)
-
-    @classmethod
-    def _preferred_group_rank(
-        cls,
-        provider: SearchProvider,
-        preferred_source_groups: list[SourceGroup] | None = None,
-    ) -> int:
-        if not preferred_source_groups:
-            return 0
-        try:
-            return preferred_source_groups.index(provider.source_group)
-        except ValueError:
-            return len(preferred_source_groups) + 1
+        return any(marker in action.query.casefold() for marker in _ACADEMIC_MARKERS)
 
     @classmethod
     def _provider_sort_key(
@@ -144,14 +129,24 @@ class ProviderRegistry:
             if preferred_providers and provider.name in preferred_providers
             else len(preferred_providers or []) + 1
         )
-        preferred_group_rank = cls._preferred_group_rank(
-            provider, preferred_source_groups
-        )
-        provider_family_rank = (
-            cls._paper_first_provider_rank(provider.name)
+
+        if preferred_source_groups:
+            try:
+                preferred_group_rank = preferred_source_groups.index(
+                    provider.source_group
+                )
+            except ValueError:
+                preferred_group_rank = len(preferred_source_groups) + 1
+        else:
+            preferred_group_rank = 0
+
+        rank_table = (
+            _PAPER_FIRST_RANK
             if cls._looks_paper_first(action, preferred_source_groups)
-            else cls._web_first_provider_rank(provider.name)
+            else _WEB_FIRST_RANK
         )
+        provider_family_rank = rank_table.get(provider.name, 99)
+
         explicit_kind_rank = 0
         if action.preferred_source_kinds:
             explicit_kind_rank = (
@@ -161,6 +156,7 @@ class ProviderRegistry:
                 )
                 else 1
             )
+
         return (
             preferred_provider_rank,
             explicit_kind_rank,
@@ -177,9 +173,9 @@ class ProviderRegistry:
         preferred_source_groups: list[SourceGroup] | None = None,
         preferred_providers: list[str] | None = None,
     ) -> list[SearchProvider]:
+        """Return active providers applicable to *action*, sorted by preference."""
         providers = self.active_providers()
 
-        # Hard exclusions -- deterministic, no LLM discretion
         if excluded_providers:
             excluded_set = set(excluded_providers)
             providers = [p for p in providers if p.name not in excluded_set]
@@ -189,23 +185,21 @@ class ProviderRegistry:
                 p for p in providers if p.source_group not in excluded_group_set
             ]
 
-        # Action-level preferences (from supervisor SearchAction)
         if action.preferred_providers:
             preferred = set(action.preferred_providers)
-            providers = [
-                provider for provider in providers if provider.name in preferred
-            ]
+            providers = [p for p in providers if p.name in preferred]
         if action.preferred_source_kinds:
             requested_kinds = set(action.preferred_source_kinds)
             providers = [
-                provider
-                for provider in providers
-                if requested_kinds.intersection(provider.supported_source_kinds)
+                p
+                for p in providers
+                if requested_kinds.intersection(p.supported_source_kinds)
             ]
+
         return sorted(
             providers,
-            key=lambda provider: self._provider_sort_key(
-                provider,
+            key=lambda p: self._provider_sort_key(
+                p,
                 action,
                 preferred_source_groups=preferred_source_groups,
                 preferred_providers=preferred_providers,

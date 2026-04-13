@@ -15,15 +15,26 @@ from pydantic import BaseModel, Field
 from deep_research.models import RunMetadataStamp
 
 
-def _utc_now_iso() -> str:
-    """Return the current UTC time as a Z-suffixed ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def _measure_elapsed(started_at: str) -> tuple[str, int]:
+    """Parse a Z-suffixed ISO-8601 start timestamp and return the current UTC time and elapsed seconds.
+
+    Returns a ``(now_iso, elapsed_seconds)`` tuple where ``now_iso`` is a
+    Z-suffixed ISO-8601 string and ``elapsed_seconds`` is the non-negative
+    whole-second difference between ``started_at`` and now.
+
+    This helper is only called from inside ``@checkpoint`` functions so
+    ``datetime.now`` never re-executes on Kitaru replay — the non-determinism
+    isolation invariant is preserved.
+    """
+    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    return now.isoformat().replace("+00:00", "Z"), max(0, int((now - started).total_seconds()))
 
 
 class WallClockSnapshot(BaseModel):
     """Immutable timing observation taken relative to a run start stamp.
 
-    ``elapsed_seconds`` remains the legacy wall-clock field that downstream code
+    ``elapsed_seconds`` is the legacy wall-clock field that downstream code
     already expects. ``active_elapsed_seconds`` is carried alongside it so the
     flow can enforce budgets on active work only.
     """
@@ -35,12 +46,12 @@ class WallClockSnapshot(BaseModel):
     elapsed_seconds: int = Field(
         ...,
         ge=0,
-        description="Whole seconds elapsed since the run's started_at stamp.",
+        description="Whole seconds elapsed since the run's started_at stamp (legacy field).",
     )
     wall_elapsed_seconds: int = Field(
         ...,
         ge=0,
-        description="Whole seconds elapsed since the run's started_at stamp.",
+        description="Whole wall-clock seconds elapsed since the run's started_at stamp.",
     )
     active_elapsed_seconds: int = Field(
         default=0,
@@ -58,7 +69,7 @@ def stamp_run_metadata() -> RunMetadataStamp:
     """
     return RunMetadataStamp(
         run_id=f"run-{uuid4()}",
-        started_at=_utc_now_iso(),
+        started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     )
 
 
@@ -71,11 +82,9 @@ def snapshot_wall_clock(
     Replay returns the cached snapshot, so convergence decisions remain stable
     across re-runs even though wall-clock time would otherwise advance.
     """
-    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    now = datetime.now(timezone.utc)
-    elapsed = max(0, int((now - started).total_seconds()))
+    now_iso, elapsed = _measure_elapsed(started_at)
     return WallClockSnapshot(
-        now_iso=now.isoformat().replace("+00:00", "Z"),
+        now_iso=now_iso,
         elapsed_seconds=elapsed,
         wall_elapsed_seconds=elapsed,
         active_elapsed_seconds=max(0, int(active_elapsed_seconds)),
@@ -97,7 +106,7 @@ class RunFinalization(BaseModel):
     wall_elapsed_seconds: int = Field(
         ...,
         ge=0,
-        description="Whole seconds between started_at and completed_at.",
+        description="Whole wall-clock seconds between started_at and completed_at.",
     )
     active_elapsed_seconds: int = Field(
         default=0,
@@ -115,11 +124,9 @@ def finalize_run_metadata(
     Mirrors ``stamp_run_metadata`` at the tail of the flow so that on replay we
     observe the original completion stamp rather than a fresh wall-clock read.
     """
-    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    now = datetime.now(timezone.utc)
-    elapsed = max(0, int((now - started).total_seconds()))
+    completed_at, elapsed = _measure_elapsed(started_at)
     return RunFinalization(
-        completed_at=now.isoformat().replace("+00:00", "Z"),
+        completed_at=completed_at,
         elapsed_seconds=elapsed,
         wall_elapsed_seconds=elapsed,
         active_elapsed_seconds=max(0, int(active_elapsed_seconds)),

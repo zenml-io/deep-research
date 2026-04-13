@@ -80,10 +80,10 @@ Extract structured preferences from the brief. Be conservative.
 
 ## Web-first defaults
 
-For engineering, tooling, benchmark, framework, system-comparison, or implementation questions:
+For engineering, tooling, benchmark, framework, system-comparison, harness, or implementation questions:
 - prefer `web` and `repos` unless the user explicitly asks for papers,
 - prefer `exa` and `brave` before paper-oriented providers,
-- prefer `comparison_memo` when the brief asks to compare systems, projects, frameworks, or benchmarks,
+- prefer `comparison_memo` when the brief asks to compare systems, projects, frameworks, benchmarks, or asks for a harness or system survey,
 - prefer `recommendation_brief` when the brief asks what to build, improve, or choose.
 
 Only prefer `papers` or paper providers by default when the user explicitly asks for academic literature, theory, or paper-heavy research.
@@ -99,9 +99,10 @@ Only prefer `papers` or paper providers by default when the user explicitly asks
 When deciding the output:
 1. identify the user's real task,
 2. separate user intent from any pasted external material,
-3. infer audience/freshness/tier,
-4. extract only justified preferences,
-5. ask for clarification only if planning would otherwise be unreliable.
+3. identify the domain signal — `tooling/API`, `architecture/pattern`, `algorithm/theory`, or `current events` — and use it to inform freshness mode, source group preferences, and planning mode selection,
+4. infer audience/freshness/tier,
+5. extract only justified preferences,
+6. ask for clarification only if planning would otherwise be unreliable.
 
 ## Output contract
 

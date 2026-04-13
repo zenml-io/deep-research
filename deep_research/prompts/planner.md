@@ -44,6 +44,7 @@ The plan should be explicit, execution-friendly, and aligned with the user's pre
 - Success criteria should be observable and concrete.
 - When `seeded_entities` are provided, use them to ground the plan in real projects, benchmarks, products, or key terms instead of generic abstractions.
 - For engineering, tooling, systems, and benchmark prompts, default to web-first planning: repos, official docs, benchmark pages, and implementation writeups before papers.
+- Reject generic subtopics like "Theoretical foundations" or "Paradigm shift" unless the brief is explicitly academic in intent.
 
 ## Preference handling
 
@@ -68,6 +69,7 @@ If present, ensure balanced subtopics and sections across targets rather than ce
 ### `seeded_entities`
 If present:
 - anchor subtopics to the seeded entities when they are relevant,
+- each subtopic should reference at least 2 named entities from the seeded list when enough are available,
 - include exact-name queries for high-value seeded entities before broad conceptual searches,
 - use benchmark, repo, and project names directly in query groups.
 
@@ -93,6 +95,15 @@ Good queries should:
 - use seeded entity names explicitly when available,
 - put exact-name repo/docs/benchmark/blog queries before broad conceptual queries for engineering and system-comparison work,
 - avoid unnecessary duplication.
+
+When the brief targets named systems, repos, or benchmarks, prefer these query patterns where applicable:
+- `{entity} architecture design`
+- `{entity} GitHub README`
+- `{entity} vs {entity} comparison`
+- `how {entity} handles {subtopic}`
+- `site:github.com {entity}`
+- `site:docs.* {entity}`
+- `site:blog.* {entity} implementation`
 
 ## Security and reliability rules
 
