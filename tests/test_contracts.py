@@ -1,15 +1,26 @@
-"""Tests for V2 data contracts: brief, plan, and evidence."""
+"""Tests for V2 data contracts: brief, plan, evidence, decisions, reports, package."""
 
 import pytest
 from pydantic import ValidationError
 
 from research.contracts import (
+    CouncilComparison,
+    CouncilPackage,
+    CritiqueDimensionScore,
+    CritiqueReport,
+    DraftReport,
     EvidenceItem,
     EvidenceLedger,
+    FinalReport,
+    InvestigationPackage,
+    IterationRecord,
     ResearchBrief,
     ResearchPlan,
+    RunMetadata,
     StrictBase,
+    SubagentFindings,
     SubagentTask,
+    SupervisorDecision,
 )
 
 
@@ -247,6 +258,537 @@ class TestEvidenceLedger:
 
 
 # ---------------------------------------------------------------------------
+# SubagentFindings
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentFindings:
+    def test_requires_findings(self):
+        sf = SubagentFindings(findings=["DPO is effective"])
+        assert sf.findings == ["DPO is effective"]
+
+    def test_missing_findings_raises(self):
+        with pytest.raises(ValidationError):
+            SubagentFindings()  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        sf = SubagentFindings(findings=["f"])
+        assert sf.source_references == []
+        assert sf.excerpts == []
+        assert sf.confidence_notes is None
+
+    def test_all_fields_accepted(self):
+        sf = SubagentFindings(
+            findings=["f1", "f2"],
+            source_references=["ref1"],
+            excerpts=["excerpt1"],
+            confidence_notes="High",
+        )
+        assert sf.findings == ["f1", "f2"]
+        assert sf.source_references == ["ref1"]
+        assert sf.excerpts == ["excerpt1"]
+        assert sf.confidence_notes == "High"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            SubagentFindings(findings=["f"], bogus="x")
+
+
+# ---------------------------------------------------------------------------
+# SupervisorDecision
+# ---------------------------------------------------------------------------
+
+
+class TestSupervisorDecision:
+    def test_requires_done_and_rationale(self):
+        sd = SupervisorDecision(done=False, rationale="Need more data")
+        assert sd.done is False
+        assert sd.rationale == "Need more data"
+
+    def test_missing_done_raises(self):
+        with pytest.raises(ValidationError):
+            SupervisorDecision(rationale="R")  # type: ignore[call-arg]
+
+    def test_missing_rationale_raises(self):
+        with pytest.raises(ValidationError):
+            SupervisorDecision(done=True)  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        sd = SupervisorDecision(done=True, rationale="Complete")
+        assert sd.gaps == []
+        assert sd.subagent_tasks == []
+        assert sd.pinned_evidence_ids == []
+
+    def test_with_subagent_tasks(self):
+        task = SubagentTask(task_description="Search DPO", target_subtopic="DPO")
+        sd = SupervisorDecision(
+            done=False,
+            rationale="Need DPO coverage",
+            gaps=["DPO alternatives"],
+            subagent_tasks=[task],
+            pinned_evidence_ids=["ev-001"],
+        )
+        assert len(sd.subagent_tasks) == 1
+        assert sd.gaps == ["DPO alternatives"]
+        assert sd.pinned_evidence_ids == ["ev-001"]
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            SupervisorDecision(done=True, rationale="R", extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# IterationRecord
+# ---------------------------------------------------------------------------
+
+
+class TestIterationRecord:
+    def test_requires_iteration_index_and_supervisor_decision(self):
+        sd = SupervisorDecision(done=False, rationale="Continue")
+        rec = IterationRecord(iteration_index=0, supervisor_decision=sd)
+        assert rec.iteration_index == 0
+        assert rec.supervisor_decision.done is False
+
+    def test_missing_iteration_index_raises(self):
+        sd = SupervisorDecision(done=False, rationale="R")
+        with pytest.raises(ValidationError):
+            IterationRecord(supervisor_decision=sd)  # type: ignore[call-arg]
+
+    def test_missing_supervisor_decision_raises(self):
+        with pytest.raises(ValidationError):
+            IterationRecord(iteration_index=0)  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        sd = SupervisorDecision(done=True, rationale="Done")
+        rec = IterationRecord(iteration_index=1, supervisor_decision=sd)
+        assert rec.subagent_results == []
+        assert rec.ledger_size == 0
+        assert rec.cost_usd == 0.0
+        assert rec.duration_seconds == 0.0
+
+    def test_with_subagent_results(self):
+        sd = SupervisorDecision(done=False, rationale="Continue")
+        findings = SubagentFindings(findings=["Found DPO paper"])
+        rec = IterationRecord(
+            iteration_index=2,
+            supervisor_decision=sd,
+            subagent_results=[findings],
+            ledger_size=5,
+            cost_usd=0.02,
+            duration_seconds=12.5,
+        )
+        assert len(rec.subagent_results) == 1
+        assert rec.ledger_size == 5
+        assert rec.cost_usd == 0.02
+        assert rec.duration_seconds == 12.5
+
+    def test_rejects_extra_fields(self):
+        sd = SupervisorDecision(done=True, rationale="R")
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            IterationRecord(iteration_index=0, supervisor_decision=sd, extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# DraftReport
+# ---------------------------------------------------------------------------
+
+
+class TestDraftReport:
+    def test_requires_content(self):
+        dr = DraftReport(content="# Report\n\nFindings [ev-001].")
+        assert dr.content == "# Report\n\nFindings [ev-001]."
+
+    def test_missing_content_raises(self):
+        with pytest.raises(ValidationError):
+            DraftReport()  # type: ignore[call-arg]
+
+    def test_sections_default_empty(self):
+        dr = DraftReport(content="text")
+        assert dr.sections == []
+
+    def test_with_sections(self):
+        dr = DraftReport(content="text", sections=["Introduction", "Results"])
+        assert dr.sections == ["Introduction", "Results"]
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            DraftReport(content="text", extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# CritiqueDimensionScore
+# ---------------------------------------------------------------------------
+
+
+class TestCritiqueDimensionScore:
+    def test_requires_dimension_score_explanation(self):
+        cds = CritiqueDimensionScore(
+            dimension="source_reliability", score=0.85, explanation="Well sourced"
+        )
+        assert cds.dimension == "source_reliability"
+        assert cds.score == 0.85
+        assert cds.explanation == "Well sourced"
+
+    def test_missing_dimension_raises(self):
+        with pytest.raises(ValidationError):
+            CritiqueDimensionScore(score=0.5, explanation="E")  # type: ignore[call-arg]
+
+    def test_missing_score_raises(self):
+        with pytest.raises(ValidationError):
+            CritiqueDimensionScore(dimension="D", explanation="E")  # type: ignore[call-arg]
+
+    def test_missing_explanation_raises(self):
+        with pytest.raises(ValidationError):
+            CritiqueDimensionScore(dimension="D", score=0.5)  # type: ignore[call-arg]
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            CritiqueDimensionScore(
+                dimension="D", score=0.5, explanation="E", extra="bad"
+            )
+
+
+# ---------------------------------------------------------------------------
+# CritiqueReport
+# ---------------------------------------------------------------------------
+
+
+class TestCritiqueReport:
+    def test_requires_dimensions_and_require_more_research(self):
+        dims = [
+            CritiqueDimensionScore(
+                dimension="source_reliability", score=0.9, explanation="Good"
+            ),
+            CritiqueDimensionScore(
+                dimension="completeness", score=0.7, explanation="Missing areas"
+            ),
+            CritiqueDimensionScore(
+                dimension="grounding", score=0.8, explanation="Well grounded"
+            ),
+        ]
+        cr = CritiqueReport(dimensions=dims, require_more_research=True)
+        assert len(cr.dimensions) == 3
+        assert cr.require_more_research is True
+
+    def test_missing_dimensions_raises(self):
+        with pytest.raises(ValidationError):
+            CritiqueReport(require_more_research=False)  # type: ignore[call-arg]
+
+    def test_missing_require_more_research_raises(self):
+        with pytest.raises(ValidationError):
+            CritiqueReport(dimensions=[])  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        cr = CritiqueReport(dimensions=[], require_more_research=False)
+        assert cr.issues == []
+        assert cr.reviewer_provenance == []
+
+    def test_with_optional_fields(self):
+        cr = CritiqueReport(
+            dimensions=[],
+            require_more_research=False,
+            issues=["Missing recent papers"],
+            reviewer_provenance=["reviewer-1", "reviewer-2"],
+        )
+        assert cr.issues == ["Missing recent papers"]
+        assert cr.reviewer_provenance == ["reviewer-1", "reviewer-2"]
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            CritiqueReport(dimensions=[], require_more_research=False, extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# FinalReport
+# ---------------------------------------------------------------------------
+
+
+class TestFinalReport:
+    def test_requires_content(self):
+        fr = FinalReport(content="# Final Report\n\n[ev-001] supports X.")
+        assert fr.content == "# Final Report\n\n[ev-001] supports X."
+
+    def test_missing_content_raises(self):
+        with pytest.raises(ValidationError):
+            FinalReport()  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        fr = FinalReport(content="text")
+        assert fr.sections == []
+        assert fr.stop_reason is None
+
+    def test_with_optional_fields(self):
+        fr = FinalReport(
+            content="text",
+            sections=["Summary", "Conclusions"],
+            stop_reason="converged",
+        )
+        assert fr.sections == ["Summary", "Conclusions"]
+        assert fr.stop_reason == "converged"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            FinalReport(content="text", extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# RunMetadata
+# ---------------------------------------------------------------------------
+
+
+class TestRunMetadata:
+    def test_requires_run_id_tier_started_at(self):
+        rm = RunMetadata(
+            run_id="run-001", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        assert rm.run_id == "run-001"
+        assert rm.tier == "standard"
+        assert rm.started_at == "2024-01-01T00:00:00Z"
+
+    def test_missing_run_id_raises(self):
+        with pytest.raises(ValidationError):
+            RunMetadata(tier="standard", started_at="2024-01-01T00:00:00Z")  # type: ignore[call-arg]
+
+    def test_missing_tier_raises(self):
+        with pytest.raises(ValidationError):
+            RunMetadata(run_id="r", started_at="2024-01-01T00:00:00Z")  # type: ignore[call-arg]
+
+    def test_missing_started_at_raises(self):
+        with pytest.raises(ValidationError):
+            RunMetadata(run_id="r", tier="standard")  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        rm = RunMetadata(run_id="r", tier="quick", started_at="2024-01-01T00:00:00Z")
+        assert rm.completed_at is None
+        assert rm.total_cost_usd == 0.0
+        assert rm.total_iterations == 0
+        assert rm.stop_reason is None
+
+    def test_with_optional_fields(self):
+        rm = RunMetadata(
+            run_id="r",
+            tier="deep",
+            started_at="2024-01-01T00:00:00Z",
+            completed_at="2024-01-01T01:00:00Z",
+            total_cost_usd=1.50,
+            total_iterations=5,
+            stop_reason="converged",
+        )
+        assert rm.completed_at == "2024-01-01T01:00:00Z"
+        assert rm.total_cost_usd == 1.50
+        assert rm.total_iterations == 5
+        assert rm.stop_reason == "converged"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            RunMetadata(
+                run_id="r",
+                tier="standard",
+                started_at="2024-01-01T00:00:00Z",
+                extra="bad",
+            )
+
+
+# ---------------------------------------------------------------------------
+# InvestigationPackage
+# ---------------------------------------------------------------------------
+
+
+def _make_metadata():
+    return RunMetadata(
+        run_id="run-001", tier="standard", started_at="2024-01-01T00:00:00Z"
+    )
+
+
+def _make_brief():
+    return ResearchBrief(topic="RLHF", raw_request="Tell me about RLHF")
+
+
+def _make_plan():
+    return ResearchPlan(goal="Understand RLHF", key_questions=["What is RLHF?"])
+
+
+def _make_ledger():
+    return EvidenceLedger()
+
+
+class TestInvestigationPackage:
+    def test_requires_metadata_brief_plan_ledger(self):
+        pkg = InvestigationPackage(
+            metadata=_make_metadata(),
+            brief=_make_brief(),
+            plan=_make_plan(),
+            ledger=_make_ledger(),
+        )
+        assert pkg.metadata.run_id == "run-001"
+        assert pkg.brief.topic == "RLHF"
+        assert pkg.plan.goal == "Understand RLHF"
+        assert pkg.ledger.items == []
+
+    def test_defaults_schema_version_to_1_0(self):
+        pkg = InvestigationPackage(
+            metadata=_make_metadata(),
+            brief=_make_brief(),
+            plan=_make_plan(),
+            ledger=_make_ledger(),
+        )
+        assert pkg.schema_version == "1.0"
+
+    def test_missing_metadata_raises(self):
+        with pytest.raises(ValidationError):
+            InvestigationPackage(  # type: ignore[call-arg]
+                brief=_make_brief(),
+                plan=_make_plan(),
+                ledger=_make_ledger(),
+            )
+
+    def test_missing_brief_raises(self):
+        with pytest.raises(ValidationError):
+            InvestigationPackage(  # type: ignore[call-arg]
+                metadata=_make_metadata(),
+                plan=_make_plan(),
+                ledger=_make_ledger(),
+            )
+
+    def test_missing_plan_raises(self):
+        with pytest.raises(ValidationError):
+            InvestigationPackage(  # type: ignore[call-arg]
+                metadata=_make_metadata(),
+                brief=_make_brief(),
+                ledger=_make_ledger(),
+            )
+
+    def test_missing_ledger_raises(self):
+        with pytest.raises(ValidationError):
+            InvestigationPackage(  # type: ignore[call-arg]
+                metadata=_make_metadata(),
+                brief=_make_brief(),
+                plan=_make_plan(),
+            )
+
+    def test_optional_fields_default(self):
+        pkg = InvestigationPackage(
+            metadata=_make_metadata(),
+            brief=_make_brief(),
+            plan=_make_plan(),
+            ledger=_make_ledger(),
+        )
+        assert pkg.iterations == []
+        assert pkg.draft is None
+        assert pkg.critique is None
+        assert pkg.final_report is None
+        assert pkg.prompt_hashes == {}
+
+    def test_with_all_optional_fields(self):
+        sd = SupervisorDecision(done=True, rationale="Complete")
+        iteration = IterationRecord(iteration_index=0, supervisor_decision=sd)
+        draft = DraftReport(content="draft text")
+        dims = [
+            CritiqueDimensionScore(dimension="grounding", score=0.9, explanation="Good")
+        ]
+        critique = CritiqueReport(dimensions=dims, require_more_research=False)
+        final = FinalReport(content="final text", stop_reason="converged")
+
+        pkg = InvestigationPackage(
+            metadata=_make_metadata(),
+            brief=_make_brief(),
+            plan=_make_plan(),
+            ledger=_make_ledger(),
+            iterations=[iteration],
+            draft=draft,
+            critique=critique,
+            final_report=final,
+            prompt_hashes={"supervisor": "abc123"},
+        )
+        assert len(pkg.iterations) == 1
+        assert pkg.draft.content == "draft text"
+        assert pkg.critique.require_more_research is False
+        assert pkg.final_report.stop_reason == "converged"
+        assert pkg.prompt_hashes == {"supervisor": "abc123"}
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            InvestigationPackage(
+                metadata=_make_metadata(),
+                brief=_make_brief(),
+                plan=_make_plan(),
+                ledger=_make_ledger(),
+                extra="bad",
+            )
+
+
+# ---------------------------------------------------------------------------
+# CouncilComparison
+# ---------------------------------------------------------------------------
+
+
+class TestCouncilComparison:
+    def test_requires_comparison(self):
+        cc = CouncilComparison(comparison="Generator A was better")
+        assert cc.comparison == "Generator A was better"
+
+    def test_missing_comparison_raises(self):
+        with pytest.raises(ValidationError):
+            CouncilComparison()  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        cc = CouncilComparison(comparison="text")
+        assert cc.generator_scores == {}
+        assert cc.recommended_generator is None
+
+    def test_with_optional_fields(self):
+        cc = CouncilComparison(
+            comparison="A > B",
+            generator_scores={"gemini": 0.9, "claude": 0.85},
+            recommended_generator="gemini",
+        )
+        assert cc.generator_scores == {"gemini": 0.9, "claude": 0.85}
+        assert cc.recommended_generator == "gemini"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            CouncilComparison(comparison="text", extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# CouncilPackage
+# ---------------------------------------------------------------------------
+
+
+class TestCouncilPackage:
+    def test_defaults_schema_version_to_1_0(self):
+        cp = CouncilPackage()
+        assert cp.schema_version == "1.0"
+
+    def test_optional_fields_default(self):
+        cp = CouncilPackage()
+        assert cp.canonical_generator is None
+        assert cp.council_provider_compromise is False
+        assert cp.comparison is None
+        assert cp.packages == {}
+
+    def test_with_packages(self):
+        pkg = InvestigationPackage(
+            metadata=_make_metadata(),
+            brief=_make_brief(),
+            plan=_make_plan(),
+            ledger=_make_ledger(),
+        )
+        cp = CouncilPackage(
+            canonical_generator="gemini",
+            packages={"gemini": pkg},
+            comparison=CouncilComparison(comparison="Only one generator"),
+        )
+        assert cp.canonical_generator == "gemini"
+        assert "gemini" in cp.packages
+        assert cp.comparison.comparison == "Only one generator"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            CouncilPackage(extra="bad")
+
+
+# ---------------------------------------------------------------------------
 # Cross-cutting: all models reject extras
 # ---------------------------------------------------------------------------
 
@@ -267,6 +809,36 @@ class TestEvidenceLedger:
             },
         ),
         (EvidenceLedger, {}),
+        (SubagentFindings, {"findings": ["f"]}),
+        (SupervisorDecision, {"done": True, "rationale": "R"}),
+        (
+            IterationRecord,
+            {
+                "iteration_index": 0,
+                "supervisor_decision": SupervisorDecision(done=True, rationale="R"),
+            },
+        ),
+        (DraftReport, {"content": "C"}),
+        (CritiqueDimensionScore, {"dimension": "D", "score": 0.5, "explanation": "E"}),
+        (CritiqueReport, {"dimensions": [], "require_more_research": False}),
+        (FinalReport, {"content": "C"}),
+        (
+            RunMetadata,
+            {"run_id": "r", "tier": "standard", "started_at": "2024-01-01T00:00:00Z"},
+        ),
+        (
+            InvestigationPackage,
+            {
+                "metadata": RunMetadata(
+                    run_id="r", tier="standard", started_at="2024-01-01T00:00:00Z"
+                ),
+                "brief": ResearchBrief(topic="T", raw_request="R"),
+                "plan": ResearchPlan(goal="G", key_questions=["Q"]),
+                "ledger": EvidenceLedger(),
+            },
+        ),
+        (CouncilComparison, {"comparison": "C"}),
+        (CouncilPackage, {}),
     ],
 )
 def test_all_models_reject_extras(model_cls, valid_kwargs):

@@ -2,8 +2,22 @@
 
 from research.contracts.base import StrictBase
 from research.contracts.brief import ResearchBrief
+from research.contracts.decisions import SubagentFindings, SupervisorDecision
 from research.contracts.evidence import EvidenceItem, EvidenceLedger
+from research.contracts.iteration import IterationRecord
+from research.contracts.package import (
+    CouncilComparison,
+    CouncilPackage,
+    InvestigationPackage,
+    RunMetadata,
+)
 from research.contracts.plan import ResearchPlan, SubagentTask
+from research.contracts.reports import (
+    CritiqueDimensionScore,
+    CritiqueReport,
+    DraftReport,
+    FinalReport,
+)
 
 __all__ = [
     "StrictBase",
@@ -12,4 +26,15 @@ __all__ = [
     "SubagentTask",
     "EvidenceItem",
     "EvidenceLedger",
+    "SubagentFindings",
+    "SupervisorDecision",
+    "IterationRecord",
+    "DraftReport",
+    "CritiqueDimensionScore",
+    "CritiqueReport",
+    "FinalReport",
+    "RunMetadata",
+    "InvestigationPackage",
+    "CouncilComparison",
+    "CouncilPackage",
 ]

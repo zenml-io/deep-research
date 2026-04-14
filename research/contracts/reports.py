@@ -1,0 +1,74 @@
+"""Report contracts — draft, critique, and final report."""
+
+from __future__ import annotations
+
+from research.contracts.base import StrictBase
+
+
+class DraftReport(StrictBase):
+    """Initial report draft with inline evidence citations.
+
+    Content is markdown with inline ``[evidence_id]`` citations
+    linking claims to evidence in the ledger.
+    """
+
+    content: str
+    """Markdown report body with inline [evidence_id] citations."""
+
+    sections: list[str] = []
+    """Section headings present in the report."""
+
+
+class CritiqueDimensionScore(StrictBase):
+    """Score for a single critique dimension.
+
+    Standard dimensions include source_reliability, completeness,
+    and grounding.
+    """
+
+    dimension: str
+    """Name of the dimension (e.g. 'source_reliability')."""
+
+    score: float
+    """Numeric score for this dimension."""
+
+    explanation: str
+    """Explanation of the score."""
+
+
+class CritiqueReport(StrictBase):
+    """Structured critique of a draft report.
+
+    Evaluates the draft across multiple dimensions and indicates
+    whether further research is needed. On deep tier, tracks
+    per-reviewer provenance for multi-reviewer merging.
+    """
+
+    dimensions: list[CritiqueDimensionScore]
+    """Scores across critique dimensions (must include source_reliability, completeness, grounding)."""
+
+    require_more_research: bool
+    """Whether the critique recommends additional research iterations."""
+
+    issues: list[str] = []
+    """Specific issues identified in the draft."""
+
+    reviewer_provenance: list[str] = []
+    """Per-reviewer tracking for deep tier multi-reviewer merging."""
+
+
+class FinalReport(StrictBase):
+    """Final polished report after critique and revision.
+
+    Content is markdown with inline ``[evidence_id]`` citations,
+    inheriting citation discipline from :class:`DraftReport`.
+    """
+
+    content: str
+    """Markdown report body with inline [evidence_id] citations."""
+
+    sections: list[str] = []
+    """Section headings present in the report."""
+
+    stop_reason: str | None = None
+    """Why the research loop terminated (e.g. 'converged', 'budget_exhausted')."""
