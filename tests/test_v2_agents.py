@@ -483,3 +483,247 @@ class TestSubagent:
 
         # Our stub wrap() returns a dict, so result should be that dict
         assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Generator agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratorAgent:
+    """Unit tests for ``build_generator_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the generator module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.generator",
+        )
+        mod = importlib.import_module("research.agents.generator")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_draft_report(self, monkeypatch):
+        """Factory sets output_type=DraftReport on the agent."""
+        from research.contracts.reports import DraftReport
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is DraftReport
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the generator prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+
+    def test_prompt_mentions_citations(self, monkeypatch):
+        """Generator prompt must mention citation discipline and [evidence_id] format."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        assert "citation" in prompt
+        assert "[evidence_id]" in prompt
+
+    def test_no_tools_passed(self, monkeypatch):
+        """Generator agent must NOT have any tools — structural guard."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='generator'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_generator_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "generator"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_generator_agent("test-model")
+
+        assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Reviewer agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerAgent:
+    """Unit tests for ``build_reviewer_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the reviewer module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.reviewer",
+        )
+        mod = importlib.import_module("research.agents.reviewer")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("anthropic:claude-sonnet-4-20250514")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "anthropic:claude-sonnet-4-20250514"
+
+    def test_output_type_is_critique_report(self, monkeypatch):
+        """Factory sets output_type=CritiqueReport on the agent."""
+        from research.contracts.reports import CritiqueReport
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is CritiqueReport
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the reviewer prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+
+    def test_prompt_has_three_dimensions(self, monkeypatch):
+        """Reviewer prompt must reference all three critique dimensions."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        assert "source_reliability" in prompt
+        assert "completeness" in prompt
+        assert "grounding" in prompt
+
+    def test_no_tools_passed(self, monkeypatch):
+        """Reviewer agent must NOT have any tools — structural guard."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='reviewer'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_reviewer_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "reviewer"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_reviewer_agent("test-model")
+
+        assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Finalizer agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestFinalizerAgent:
+    """Unit tests for ``build_finalizer_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the finalizer module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.finalizer",
+        )
+        mod = importlib.import_module("research.agents.finalizer")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_final_report(self, monkeypatch):
+        """Factory sets output_type=FinalReport on the agent."""
+        from research.contracts.reports import FinalReport
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is FinalReport
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the finalizer prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+
+    def test_prompt_mentions_critique_and_citation(self, monkeypatch):
+        """Finalizer prompt must reference critique handling and citation discipline."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        assert "critique" in prompt
+        assert "citation" in prompt
+
+    def test_no_tools_passed(self, monkeypatch):
+        """Finalizer agent must NOT have any tools — structural guard."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='finalizer'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_finalizer_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "finalizer"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_finalizer_agent("test-model")
+
+        assert result is wrap_calls[0]
