@@ -283,3 +283,91 @@ class TestPlannerAgent:
 
         # Our stub wrap() returns a dict, so result should be that dict
         assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Supervisor agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestSupervisorAgent:
+    """Unit tests for ``build_supervisor_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the supervisor module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.supervisor",
+        )
+        mod = importlib.import_module("research.agents.supervisor")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_supervisor_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_supervisor_decision(self, monkeypatch):
+        """Factory sets output_type=SupervisorDecision on the agent."""
+        from research.contracts.decisions import SupervisorDecision
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_supervisor_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is SupervisorDecision
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the supervisor prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_supervisor_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+        assert "research supervisor" in prompt.lower()
+
+    def test_prompt_covers_key_concepts(self, monkeypatch):
+        """Supervisor prompt addresses budget, gaps, convergence, and delegation."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_supervisor_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        # Must cover the key responsibilities
+        assert "budget" in prompt
+        assert "gap" in prompt
+        assert "subagent" in prompt
+        assert "done" in prompt
+        assert "pinned" in prompt or "pin" in prompt
+
+    def test_no_tools_passed(self, monkeypatch):
+        """Supervisor agent must NOT have any tools — structural guard."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_supervisor_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        # FakeAgent stores all kwargs; 'tools' should not be present
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='supervisor'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_supervisor_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "supervisor"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_supervisor_agent("test-model")
+
+        # Our stub wrap() returns a dict, so result should be that dict
+        assert result is wrap_calls[0]
