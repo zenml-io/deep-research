@@ -8,4 +8,5 @@ build/
 dist/
 .superpowers/
 .ruff_cache/
+.worktrees/
 
