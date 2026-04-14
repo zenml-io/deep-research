@@ -151,3 +151,135 @@ class TestWrapAgent:
         agents_mod = importlib.import_module("research.agents")
         assert hasattr(agents_mod, "wrap_agent")
         assert callable(agents_mod.wrap_agent)
+
+
+# ---------------------------------------------------------------------------
+# Scope agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestScopeAgent:
+    """Unit tests for ``build_scope_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the scope module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.scope",
+        )
+        mod = importlib.import_module("research.agents.scope")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_scope_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_research_brief(self, monkeypatch):
+        """Factory sets output_type=ResearchBrief on the agent."""
+        from research.contracts import ResearchBrief
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_scope_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is ResearchBrief
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the scope prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_scope_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 50  # substantive, not empty
+        assert "research scoping agent" in prompt.lower()
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='scope'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_scope_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "scope"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_scope_agent("test-model")
+
+        # Our stub wrap() returns a dict, so result should be that dict
+        assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Planner agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerAgent:
+    """Unit tests for ``build_planner_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the planner module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.planner",
+        )
+        mod = importlib.import_module("research.agents.planner")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_planner_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_research_plan(self, monkeypatch):
+        """Factory sets output_type=ResearchPlan on the agent."""
+        from research.contracts import ResearchPlan
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_planner_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is ResearchPlan
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the planner prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_planner_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 50  # substantive, not empty
+        assert "research planner" in prompt.lower()
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='planner'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_planner_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "planner"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_planner_agent("test-model")
+
+        # Our stub wrap() returns a dict, so result should be that dict
+        assert result is wrap_calls[0]
