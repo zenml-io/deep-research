@@ -371,3 +371,115 @@ class TestSupervisorAgent:
 
         # Our stub wrap() returns a dict, so result should be that dict
         assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Subagent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestSubagent:
+    """Unit tests for ``build_subagent_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the subagent module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.subagent",
+        )
+        mod = importlib.import_module("research.agents.subagent")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("google-gla:gemini-2.5-flash")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "google-gla:gemini-2.5-flash"
+
+    def test_output_type_is_subagent_findings(self, monkeypatch):
+        """Factory sets output_type=SubagentFindings on the agent."""
+        from research.contracts.decisions import SubagentFindings
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is SubagentFindings
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the subagent prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+        assert "research subagent" in prompt.lower()
+
+    def test_prompt_covers_key_concepts(self, monkeypatch):
+        """Subagent prompt covers search, fetch, findings, confidence, and excerpts."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        assert "search" in prompt
+        assert "fetch" in prompt
+        assert "findings" in prompt
+        assert "confidence" in prompt
+        assert "excerpt" in prompt
+        assert "doi" in prompt or "arxiv" in prompt
+
+    def test_tools_passed_through(self, monkeypatch):
+        """When tools are provided, they are passed to the Agent constructor."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+
+        def fake_search():
+            pass
+
+        def fake_fetch():
+            pass
+
+        tools = [fake_search, fake_fetch]
+        mod.build_subagent_agent("test-model", tools=tools)
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["tools"] is tools
+        assert len(agent.kwargs["tools"]) == 2
+
+    def test_no_tools_when_none(self, monkeypatch):
+        """When tools is None, no tools kwarg is passed to the Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model", tools=None)
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_no_tools_when_empty_list(self, monkeypatch):
+        """When tools is an empty list, no tools kwarg is passed to the Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model", tools=[])
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='subagent'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_subagent_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "subagent"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_subagent_agent("test-model")
+
+        # Our stub wrap() returns a dict, so result should be that dict
+        assert result is wrap_calls[0]
