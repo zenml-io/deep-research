@@ -20,15 +20,20 @@ dependencies = [
 evals = [
   "pydantic-evals[logfire]",
 ]
+dev = [
+  "pytest-timeout",
+]
 
 [tool.setuptools.packages.find]
-include = ["deep_research*"]
+include = ["research*", "deep_research*"]
 
 [tool.setuptools.package-data]
 "deep_research.prompts" = ["*.md"]
+"research.prompts" = ["*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+timeout = 60
 
 [tool.uv.workspace]
 members = [
@@ -36,7 +41,7 @@ members = [
 ]
 
 [tool.uv.sources]
-kitaru = { path = "../kitaru/kitaru", editable = true }
+kitaru = { path = "../../../kitaru/kitaru", editable = true }
 
 [tool.uv]
 override-dependencies = [
