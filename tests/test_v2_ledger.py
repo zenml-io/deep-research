@@ -577,3 +577,476 @@ class TestManagedLedgerGetById:
     def test_get_by_id_on_empty_ledger(self):
         ml = ManagedLedger()
         assert ml.get_by_id("ev_1") is None
+
+
+# ---------------------------------------------------------------------------
+# Ledger Projection & Windowing
+# ---------------------------------------------------------------------------
+
+from research.contracts.evidence import EvidenceLedger
+from research.ledger.projection import (
+    ProjectedItem,
+    _COMPACT_SYNTHESIS_LIMIT,
+    format_projection,
+    project_ledger,
+)
+
+
+def _make_ledger(items: list[EvidenceItem]) -> EvidenceLedger:
+    """Helper to build an EvidenceLedger from a list of items."""
+    return EvidenceLedger(items=items)
+
+
+class TestProjectLedgerWindowing:
+    """Items within the recency window are shown in full."""
+
+    def test_items_within_window_shown_in_full(self):
+        """Items added in the last `window_iterations` iterations are full."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_1",
+                    title="Recent",
+                    synthesis="Full synthesis text",
+                    iteration_added=5,
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=6, window_iterations=3)
+        assert len(result) == 1
+        assert result[0].is_compact is False
+        assert result[0].synthesis == "Full synthesis text"
+
+    def test_older_items_compacted(self):
+        """Items older than the window are compacted with truncated synthesis."""
+        long_synthesis = "A" * 200
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_old",
+                    title="Old Item",
+                    synthesis=long_synthesis,
+                    iteration_added=0,
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=5, window_iterations=3)
+        assert len(result) == 1
+        assert result[0].is_compact is True
+        assert result[0].synthesis == "A" * _COMPACT_SYNTHESIS_LIMIT + "..."
+
+    def test_compact_synthesis_short_no_ellipsis(self):
+        """Compact items with short synthesis don't get '...' appended."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_old",
+                    title="Old",
+                    synthesis="Short",
+                    iteration_added=0,
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=5, window_iterations=3)
+        assert result[0].is_compact is True
+        assert result[0].synthesis == "Short"
+
+    def test_all_items_in_window_no_compaction(self):
+        """When all items are within window, none are compacted."""
+        ledger = _make_ledger(
+            [
+                _make_item(evidence_id="ev_1", synthesis="S1", iteration_added=3),
+                _make_item(evidence_id="ev_2", synthesis="S2", iteration_added=4),
+                _make_item(evidence_id="ev_3", synthesis="S3", iteration_added=5),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=5, window_iterations=3)
+        assert all(not item.is_compact for item in result)
+
+    def test_window_iterations_zero_compacts_all_except_pinned(self):
+        """window_iterations=0 means everything is compact (except pinned)."""
+        ledger = _make_ledger(
+            [
+                _make_item(evidence_id="ev_1", synthesis="A" * 200, iteration_added=5),
+                _make_item(
+                    evidence_id="ev_pinned", synthesis="Pinned text", iteration_added=5
+                ),
+            ]
+        )
+        result = project_ledger(
+            ledger, iteration_index=5, window_iterations=0, pinned_ids=["ev_pinned"]
+        )
+        # ev_1 should be compact (window=0 so nothing is in-window)
+        assert result[0].is_compact is True
+        # ev_pinned should be full (pinned)
+        assert result[1].is_compact is False
+
+    def test_exact_window_boundary_is_full(self):
+        """Items at the exact window boundary (age == window_iterations - 1) are full.
+
+        Condition: iteration_index - item.iteration_added < window_iterations
+        So age = 2, window = 3 -> 2 < 3 -> full (in window).
+        """
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_boundary",
+                    synthesis="At boundary",
+                    iteration_added=3,
+                ),
+            ]
+        )
+        # iteration_index=5, iteration_added=3 -> age=2, window=3 -> 2 < 3 -> full
+        result = project_ledger(ledger, iteration_index=5, window_iterations=3)
+        assert result[0].is_compact is False
+
+    def test_just_outside_window_is_compact(self):
+        """Items just outside the window boundary are compact.
+
+        Condition: iteration_index - item.iteration_added >= window_iterations
+        So age = 3, window = 3 -> 3 >= 3 -> compact.
+        """
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_outside", synthesis="A" * 200, iteration_added=2
+                ),
+            ]
+        )
+        # iteration_index=5, iteration_added=2 -> age=3, window=3 -> 3 >= 3 -> compact
+        result = project_ledger(ledger, iteration_index=5, window_iterations=3)
+        assert result[0].is_compact is True
+
+
+class TestProjectLedgerPinning:
+    """Pinned items are always shown in full regardless of age."""
+
+    def test_pinned_old_item_shown_in_full(self):
+        """A pinned item outside the window is still shown in full."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_old_pinned",
+                    title="Old Pinned",
+                    synthesis="Full text here",
+                    iteration_added=0,
+                ),
+            ]
+        )
+        result = project_ledger(
+            ledger,
+            iteration_index=10,
+            pinned_ids=["ev_old_pinned"],
+            window_iterations=3,
+        )
+        assert result[0].is_compact is False
+        assert result[0].synthesis == "Full text here"
+
+    def test_pinned_ids_none_treated_as_empty(self):
+        """pinned_ids=None should not cause errors."""
+        ledger = _make_ledger(
+            [
+                _make_item(evidence_id="ev_1", synthesis="A" * 200, iteration_added=0),
+            ]
+        )
+        result = project_ledger(
+            ledger, iteration_index=10, pinned_ids=None, window_iterations=3
+        )
+        assert result[0].is_compact is True
+
+    def test_pinned_nonexistent_id_ignored(self):
+        """Pinning an ID that doesn't exist in the ledger has no effect."""
+        ledger = _make_ledger(
+            [
+                _make_item(evidence_id="ev_1", synthesis="A" * 200, iteration_added=0),
+            ]
+        )
+        result = project_ledger(
+            ledger,
+            iteration_index=10,
+            pinned_ids=["ev_nonexistent"],
+            window_iterations=3,
+        )
+        assert result[0].is_compact is True
+
+    def test_mixed_pinned_and_windowed(self):
+        """Mix of pinned, windowed, and compact items."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_old",
+                    title="Old",
+                    synthesis="A" * 200,
+                    iteration_added=0,
+                ),
+                _make_item(
+                    evidence_id="ev_pinned",
+                    title="Pinned",
+                    synthesis="Pinned synthesis",
+                    iteration_added=0,
+                ),
+                _make_item(
+                    evidence_id="ev_recent",
+                    title="Recent",
+                    synthesis="Recent synthesis",
+                    iteration_added=8,
+                ),
+            ]
+        )
+        result = project_ledger(
+            ledger, iteration_index=9, pinned_ids=["ev_pinned"], window_iterations=3
+        )
+        assert result[0].is_compact is True  # old, not pinned
+        assert result[1].is_compact is False  # old but pinned
+        assert result[2].is_compact is False  # recent, in window
+
+
+class TestProjectLedgerEdgeCases:
+    """Edge cases for ledger projection."""
+
+    def test_empty_ledger_returns_empty_list(self):
+        ledger = _make_ledger([])
+        result = project_ledger(ledger, iteration_index=0)
+        assert result == []
+
+    def test_deterministic_same_inputs_same_outputs(self):
+        """Projection is deterministic: same inputs produce identical output."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_1",
+                    title="A",
+                    synthesis="Synth A",
+                    iteration_added=0,
+                    doi="10.1234/a",
+                ),
+                _make_item(
+                    evidence_id="ev_2",
+                    title="B",
+                    synthesis="Synth B",
+                    iteration_added=2,
+                    arxiv_id="2301.12345",
+                ),
+                _make_item(
+                    evidence_id="ev_3",
+                    title="C",
+                    synthesis="Synth C",
+                    iteration_added=4,
+                ),
+            ]
+        )
+        pinned = ["ev_1"]
+        r1 = project_ledger(
+            ledger, iteration_index=5, pinned_ids=pinned, window_iterations=3
+        )
+        r2 = project_ledger(
+            ledger, iteration_index=5, pinned_ids=pinned, window_iterations=3
+        )
+        assert r1 == r2
+
+    def test_canonical_id_populated_from_doi(self):
+        """ProjectedItem.canonical_id is populated from DOI."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_1",
+                    synthesis="S",
+                    iteration_added=0,
+                    doi="10.1234/foo",
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=0, window_iterations=3)
+        assert result[0].canonical_id == "10.1234/foo"
+
+    def test_canonical_id_populated_from_arxiv(self):
+        """ProjectedItem.canonical_id is populated from arXiv ID."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_1",
+                    synthesis="S",
+                    iteration_added=0,
+                    arxiv_id="2301.12345v2",
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=0, window_iterations=3)
+        assert result[0].canonical_id == "2301.12345"
+
+    def test_canonical_id_none_when_no_identifiers(self):
+        """ProjectedItem.canonical_id is None when no identifiers exist."""
+        ledger = _make_ledger(
+            [
+                _make_item(evidence_id="ev_1", synthesis="S", iteration_added=0),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=0, window_iterations=3)
+        assert result[0].canonical_id is None
+
+    def test_source_type_carried_through(self):
+        """source_type from EvidenceItem is carried through to ProjectedItem."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_1",
+                    synthesis="S",
+                    iteration_added=0,
+                    source_type="preprint",
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=0, window_iterations=3)
+        assert result[0].source_type == "preprint"
+
+    def test_preserves_item_order(self):
+        """Projected items preserve the order of ledger items."""
+        ledger = _make_ledger(
+            [
+                _make_item(
+                    evidence_id="ev_a", title="A", synthesis="S", iteration_added=0
+                ),
+                _make_item(
+                    evidence_id="ev_b", title="B", synthesis="S", iteration_added=1
+                ),
+                _make_item(
+                    evidence_id="ev_c", title="C", synthesis="S", iteration_added=2
+                ),
+            ]
+        )
+        result = project_ledger(ledger, iteration_index=3, window_iterations=3)
+        assert [r.evidence_id for r in result] == ["ev_a", "ev_b", "ev_c"]
+
+
+class TestFormatProjection:
+    """Tests for format_projection output formatting."""
+
+    def test_empty_projection_returns_empty_string(self):
+        assert format_projection([]) == ""
+
+    def test_non_empty_projection_returns_non_empty_string(self):
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="Test",
+                source_type="journal",
+                canonical_id="10.1234/foo",
+                synthesis="A synthesis",
+                is_compact=False,
+            ),
+        ]
+        result = format_projection(items)
+        assert len(result) > 0
+
+    def test_full_item_includes_source_type(self):
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="Test Paper",
+                source_type="journal",
+                canonical_id="10.1234/foo",
+                synthesis="Full synthesis text",
+                is_compact=False,
+            ),
+        ]
+        result = format_projection(items)
+        assert "[FULL]" in result
+        assert "Test Paper" in result
+        assert "journal" in result
+        assert "10.1234/foo" in result
+        assert "Full synthesis text" in result
+
+    def test_compact_item_format(self):
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="Old Paper",
+                source_type="preprint",
+                canonical_id="2301.12345",
+                synthesis="Truncated...",
+                is_compact=True,
+            ),
+        ]
+        result = format_projection(items)
+        assert "[COMPACT]" in result
+        assert "Old Paper" in result
+        assert "2301.12345" in result
+        assert "Truncated..." in result
+        # Compact items do NOT show source_type
+        assert "preprint" not in result
+
+    def test_sections_separated_by_dashes(self):
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="A",
+                source_type=None,
+                canonical_id=None,
+                synthesis="S1",
+                is_compact=False,
+            ),
+            ProjectedItem(
+                evidence_id="ev_2",
+                title="B",
+                source_type=None,
+                canonical_id=None,
+                synthesis="S2",
+                is_compact=True,
+            ),
+        ]
+        result = format_projection(items)
+        assert "\n---\n" in result
+
+    def test_full_item_without_source_type_or_canonical_id(self):
+        """Full item with no source_type and no canonical_id omits those lines."""
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="No Extras",
+                source_type=None,
+                canonical_id=None,
+                synthesis="Just synthesis",
+                is_compact=False,
+            ),
+        ]
+        result = format_projection(items)
+        assert "[FULL] No Extras" in result
+        assert "Source:" not in result
+        assert "ID:" not in result
+        assert "Just synthesis" in result
+
+    def test_compact_item_without_canonical_id(self):
+        """Compact item with no canonical_id omits the ID line."""
+        items = [
+            ProjectedItem(
+                evidence_id="ev_1",
+                title="No ID",
+                source_type=None,
+                canonical_id=None,
+                synthesis="Brief",
+                is_compact=True,
+            ),
+        ]
+        result = format_projection(items)
+        assert "[COMPACT] No ID" in result
+        assert "ID:" not in result
+        assert "Brief" in result
+
+
+class TestProjectionReExports:
+    """Verify that projection symbols are re-exported from ledger __init__."""
+
+    def test_project_ledger_importable(self):
+        from research.ledger import project_ledger as fn
+
+        assert callable(fn)
+
+    def test_format_projection_importable(self):
+        from research.ledger import format_projection as fn
+
+        assert callable(fn)
+
+    def test_projected_item_importable(self):
+        from research.ledger import ProjectedItem as cls
+
+        assert cls is not None
