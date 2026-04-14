@@ -733,3 +733,594 @@ class TestProviderReExports:
         from research.providers import build_async_client
 
         assert callable(build_async_client)
+
+    def test_fetch_url_content_importable(self):
+        from research.providers import fetch_url_content
+
+        assert callable(fetch_url_content)
+
+    def test_code_exec_importable(self):
+        from research.providers import CodeExecResult, SandboxExecutor
+
+        assert CodeExecResult is not None
+        assert SandboxExecutor is not None
+
+    def test_agent_tool_surface_importable(self):
+        from research.providers import AgentToolSurface, build_tool_surface
+
+        assert AgentToolSurface is not None
+        assert callable(build_tool_surface)
+
+
+# ===========================================================================
+# fetch.py — async URL content fetcher
+# ===========================================================================
+
+
+class TestHTMLTextExtractor:
+    """Tests for the HTML→text parser."""
+
+    def test_basic_text_extraction(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed("<html><body><p>Hello world</p></body></html>")
+        assert parser.text() == "Hello world"
+
+    def test_strips_script_tags(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed(
+            "<html><body><script>var x = 1;</script><p>Visible text</p></body></html>"
+        )
+        assert parser.text() == "Visible text"
+
+    def test_strips_style_tags(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed(
+            "<html><body>"
+            "<style>.foo { color: red; }</style>"
+            "<p>Visible text</p>"
+            "</body></html>"
+        )
+        assert parser.text() == "Visible text"
+
+    def test_strips_noscript_tags(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed(
+            "<html><body>"
+            "<noscript>Enable JavaScript</noscript>"
+            "<p>Main content</p>"
+            "</body></html>"
+        )
+        assert parser.text() == "Main content"
+
+    def test_nested_ignored_tags(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        # Two separate script blocks — each is properly stripped
+        parser.feed(
+            "<html><body>"
+            "<script>first block</script>"
+            "<script>second block</script>"
+            "<p>Visible</p>"
+            "</body></html>"
+        )
+        assert parser.text() == "Visible"
+
+    def test_collapses_whitespace(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed("<p>  Hello   world  </p>")
+        assert parser.text() == "Hello world"
+
+    def test_empty_html(self):
+        from research.providers.fetch import _HTMLTextExtractor
+
+        parser = _HTMLTextExtractor()
+        parser.feed("<html><body></body></html>")
+        assert parser.text() == ""
+
+
+class TestFetchUrlContent:
+    """Tests for the async fetch_url_content function."""
+
+    def test_skips_pdf_urls(self):
+        from research.providers.fetch import fetch_url_content
+
+        result = asyncio.run(fetch_url_content("https://example.com/paper.pdf"))
+        assert result is None
+
+    def test_skips_pdf_case_insensitive(self):
+        from research.providers.fetch import fetch_url_content
+
+        result = asyncio.run(fetch_url_content("https://example.com/paper.PDF"))
+        assert result is None
+
+    def test_fetches_html_content(self):
+        from research.providers.fetch import fetch_url_content
+
+        html = "<html><body><p>Test content here</p></body></html>"
+        mock_response = httpx.Response(
+            200,
+            text=html,
+            headers={"content-type": "text/html; charset=utf-8"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result == "Test content here"
+
+    def test_returns_none_for_non_text_content(self):
+        from research.providers.fetch import fetch_url_content
+
+        mock_response = httpx.Response(
+            200,
+            content=b"\x00\x01\x02\x03",
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request("GET", "https://example.com/binary"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com/binary")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_truncates_to_max_chars(self):
+        from research.providers.fetch import fetch_url_content
+
+        long_text = "A" * 200
+        html = f"<html><body><p>{long_text}</p></body></html>"
+        mock_response = httpx.Response(
+            200,
+            text=html,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com", max_chars=50)
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert len(result) == 50
+
+    def test_returns_none_on_http_error(self):
+        from research.providers.fetch import fetch_url_content
+
+        async def _run():
+            async def mock_retry(*args, **kwargs):
+                raise httpx.HTTPStatusError(
+                    "server error",
+                    request=httpx.Request("GET", "https://example.com"),
+                    response=httpx.Response(500),
+                )
+
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                side_effect=mock_retry,
+            ):
+                return await fetch_url_content("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_returns_none_on_connection_error(self):
+        from research.providers.fetch import fetch_url_content
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                side_effect=httpx.ConnectError("refused"),
+            ):
+                return await fetch_url_content("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_returns_none_for_empty_html(self):
+        from research.providers.fetch import fetch_url_content
+
+        mock_response = httpx.Response(
+            200,
+            text="<html><body>   </body></html>",
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_strips_script_and_style_from_fetched_html(self):
+        from research.providers.fetch import fetch_url_content
+
+        html = (
+            "<html><head><style>body{color:red}</style></head>"
+            "<body><script>alert(1)</script>"
+            "<noscript>No JS</noscript>"
+            "<p>Real content</p></body></html>"
+        )
+        mock_response = httpx.Response(
+            200,
+            text=html,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result == "Real content"
+
+    def test_accepts_plain_text_content_type(self):
+        from research.providers.fetch import fetch_url_content
+
+        mock_response = httpx.Response(
+            200,
+            text="Plain text content",
+            headers={"content-type": "text/plain"},
+            request=httpx.Request("GET", "https://example.com/file.txt"),
+        )
+
+        async def _run():
+            with patch(
+                "research.providers.fetch.request_with_retry",
+                new=AsyncMock(return_value=mock_response),
+            ):
+                return await fetch_url_content("https://example.com/file.txt")
+
+        result = asyncio.run(_run())
+        assert result == "Plain text content"
+
+
+# ===========================================================================
+# code_exec.py — sandbox execution interface
+# ===========================================================================
+
+
+class TestCodeExecResult:
+    def test_success_result(self):
+        from research.providers.code_exec import CodeExecResult
+
+        r = CodeExecResult(stdout="hello\n", stderr="", exit_code=0)
+        assert r.success is True
+        assert r.stdout == "hello\n"
+        assert r.stderr == ""
+        assert r.timed_out is False
+        assert r.metadata == {}
+
+    def test_failure_result(self):
+        from research.providers.code_exec import CodeExecResult
+
+        r = CodeExecResult(stdout="", stderr="error", exit_code=1)
+        assert r.success is False
+
+    def test_timed_out_is_not_success(self):
+        from research.providers.code_exec import CodeExecResult
+
+        r = CodeExecResult(stdout="partial", stderr="", exit_code=0, timed_out=True)
+        assert r.success is False
+
+    def test_is_frozen(self):
+        from research.providers.code_exec import CodeExecResult
+
+        r = CodeExecResult(stdout="", stderr="", exit_code=0)
+        with pytest.raises(AttributeError):
+            r.exit_code = 1  # type: ignore[misc]
+
+    def test_with_metadata(self):
+        from research.providers.code_exec import CodeExecResult
+
+        r = CodeExecResult(
+            stdout="", stderr="", exit_code=0, metadata={"runtime_ms": 120}
+        )
+        assert r.metadata == {"runtime_ms": 120}
+
+
+class TestSandboxExecutor:
+    def test_stub_raises_not_available(self):
+        from research.providers.code_exec import (
+            SandboxExecutor,
+            SandboxNotAvailableError,
+        )
+
+        executor = SandboxExecutor(backend="docker")
+
+        async def _run():
+            return await executor.execute("print('hello')")
+
+        with pytest.raises(SandboxNotAvailableError, match="docker.*not implemented"):
+            asyncio.run(_run())
+
+    def test_stores_config(self):
+        from research.providers.code_exec import SandboxExecutor
+
+        executor = SandboxExecutor(
+            backend="e2b",
+            timeout_sec=60,
+            max_output_chars=10_000,
+            allow_network=True,
+        )
+        assert executor.backend == "e2b"
+        assert executor.timeout_sec == 60
+        assert executor.max_output_chars == 10_000
+        assert executor.allow_network is True
+
+    def test_defaults(self):
+        from research.providers.code_exec import SandboxExecutor
+
+        executor = SandboxExecutor(backend="docker")
+        assert executor.timeout_sec == 30
+        assert executor.max_output_chars == 20_000
+        assert executor.allow_network is False
+
+
+# ===========================================================================
+# agent_tools.py — tool surface for subagents
+# ===========================================================================
+
+
+class TestAgentToolSurface:
+    def _make_config(
+        self,
+        sandbox_enabled: bool = False,
+        sandbox_backend: str | None = None,
+        providers: str = "arxiv",
+    ) -> ResearchConfig:
+        settings = ResearchSettings(
+            enabled_providers=providers,
+            sandbox_enabled=sandbox_enabled,
+            sandbox_backend=sandbox_backend,
+        )
+        return ResearchConfig.for_tier("quick", settings=settings)
+
+    def test_available_tools_without_sandbox(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(sandbox_enabled=False)
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        tools = surface.available_tools()
+        assert tools == ["search", "fetch"]
+
+    def test_available_tools_with_sandbox(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(sandbox_enabled=True, sandbox_backend="docker")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        tools = surface.available_tools()
+        assert tools == ["search", "fetch", "code_exec"]
+
+    def test_sandbox_enabled_but_no_backend_omits_code_exec(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(sandbox_enabled=True, sandbox_backend=None)
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        tools = surface.available_tools()
+        assert tools == ["search", "fetch"]
+
+    def test_search_delegates_to_providers(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(providers="arxiv")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        mock_result = SearchResult(
+            url="https://arxiv.org/abs/1234",
+            title="Test",
+            snippet="A test paper",
+            provider="arxiv",
+        )
+
+        async def _run():
+            # Patch the arxiv provider's search method
+            provider = registry.get_provider("arxiv")
+            assert provider is not None
+            with patch.object(
+                provider, "search", new=AsyncMock(return_value=[mock_result])
+            ):
+                return await surface.search(["test query"])
+
+        results = asyncio.run(_run())
+        assert len(results) == 1
+        assert results[0].title == "Test"
+
+    def test_search_returns_empty_when_no_active_providers(self, monkeypatch):
+        from research.providers.agent_tools import AgentToolSurface
+
+        monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+        config = self._make_config(providers="brave")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        # Brave won't be active without its API key
+        async def _run():
+            return await surface.search(["test"])
+
+        results = asyncio.run(_run())
+        assert results == []
+
+    def test_search_handles_provider_exception(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(providers="arxiv")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        async def _run():
+            provider = registry.get_provider("arxiv")
+            assert provider is not None
+            with patch.object(
+                provider,
+                "search",
+                new=AsyncMock(side_effect=RuntimeError("provider crash")),
+            ):
+                return await surface.search(["test"])
+
+        results = asyncio.run(_run())
+        assert results == []
+
+    def test_fetch_delegates_to_fetch_url_content(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config()
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        async def _run():
+            with patch(
+                "research.providers.agent_tools.fetch_url_content",
+                new=AsyncMock(return_value="Fetched content"),
+            ):
+                return await surface.fetch("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result == "Fetched content"
+
+    def test_fetch_returns_none_on_exception(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config()
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        async def _run():
+            with patch(
+                "research.providers.agent_tools.fetch_url_content",
+                new=AsyncMock(side_effect=RuntimeError("unexpected")),
+            ):
+                return await surface.fetch("https://example.com")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_code_exec_returns_none_when_sandbox_disabled(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(sandbox_enabled=False)
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        async def _run():
+            return await surface.code_exec("print('hello')")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+    def test_code_exec_delegates_to_sandbox(self):
+        from research.providers.agent_tools import AgentToolSurface
+        from research.providers.code_exec import CodeExecResult
+
+        config = self._make_config(sandbox_enabled=True, sandbox_backend="docker")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        mock_result = CodeExecResult(stdout="hello\n", stderr="", exit_code=0)
+
+        async def _run():
+            assert surface._sandbox is not None
+            with patch.object(
+                surface._sandbox,
+                "execute",
+                new=AsyncMock(return_value=mock_result),
+            ):
+                return await surface.code_exec("print('hello')")
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert result.stdout == "hello\n"
+        assert result.success is True
+
+
+class TestBuildToolSurface:
+    def test_factory_returns_surface(self):
+        from research.providers.agent_tools import AgentToolSurface, build_tool_surface
+
+        settings = ResearchSettings(enabled_providers="arxiv")
+        config = ResearchConfig.for_tier("quick", settings=settings)
+        registry = ProviderRegistry(config)
+
+        surface = build_tool_surface(config, registry)
+        assert isinstance(surface, AgentToolSurface)
+        assert "search" in surface.available_tools()
+        assert "fetch" in surface.available_tools()
+
+    def test_factory_with_sandbox(self):
+        from research.providers.agent_tools import build_tool_surface
+
+        settings = ResearchSettings(
+            enabled_providers="arxiv",
+            sandbox_enabled=True,
+            sandbox_backend="docker",
+        )
+        config = ResearchConfig.for_tier("quick", settings=settings)
+        registry = ProviderRegistry(config)
+
+        surface = build_tool_surface(config, registry)
+        assert "code_exec" in surface.available_tools()
+
+
+class TestToolCallResult:
+    def test_success_result(self):
+        from research.providers.agent_tools import ToolCallResult
+
+        r = ToolCallResult(tool="search", success=True, data=[])
+        assert r.tool == "search"
+        assert r.success is True
+        assert r.data == []
+        assert r.error is None
+
+    def test_error_result(self):
+        from research.providers.agent_tools import ToolCallResult
+
+        r = ToolCallResult(tool="fetch", success=False, error="timeout")
+        assert r.success is False
+        assert r.error == "timeout"
+
+    def test_is_frozen(self):
+        from research.providers.agent_tools import ToolCallResult
+
+        r = ToolCallResult(tool="search", success=True)
+        with pytest.raises(AttributeError):
+            r.success = False  # type: ignore[misc]
