@@ -635,3 +635,343 @@ class TestFlowConfigDefaults:
         flow_mod.deep_research("test", config=cfg)
 
         assert scope_models[0] == "test:gen"
+
+
+# ---------------------------------------------------------------------------
+# Failure semantics tests
+# ---------------------------------------------------------------------------
+
+
+def _make_failing_then_succeeding_stub(fail_count, success_value):
+    """Stub that fails `fail_count` times then returns success_value."""
+    calls = [0]
+
+    def stub(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] <= fail_count:
+            raise RuntimeError(f"Simulated failure #{calls[0]}")
+        return success_value
+
+    stub.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: stub(*a, **kw))
+    return stub, calls
+
+
+def _make_always_failing_stub():
+    """Stub that always raises RuntimeError."""
+    calls = [0]
+
+    def stub(*args, **kwargs):
+        calls[0] += 1
+        raise RuntimeError(f"Simulated failure #{calls[0]}")
+
+    stub.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: stub(*a, **kw))
+    return stub, calls
+
+
+class TestSupervisorRetry:
+    """Supervisor gets one retry on failure; second failure raises SupervisorError."""
+
+    def test_supervisor_retry_on_first_failure(self, monkeypatch):
+        """Supervisor fails once, retries, succeeds on second call."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        supervisor_stub, calls = _make_failing_then_succeeding_stub(
+            fail_count=1, success_value=_DECISION_DONE
+        )
+
+        _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=supervisor_stub)
+
+        cfg = _make_config(max_iterations=5)
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        # Should succeed — retry worked
+        assert isinstance(result, InvestigationPackage)
+        # Supervisor was called twice (first fail + retry success)
+        assert calls[0] == 2
+
+    def test_supervisor_double_failure_raises(self, monkeypatch):
+        """Supervisor fails twice → SupervisorError with ledger preserved."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        supervisor_stub, calls = _make_always_failing_stub()
+
+        _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=supervisor_stub)
+
+        cfg = _make_config(max_iterations=5)
+
+        with pytest.raises(flow_mod.SupervisorError) as exc_info:
+            flow_mod.deep_research("test question", config=cfg)
+
+        # Two attempts were made
+        assert calls[0] == 2
+        # Error carries the ledger
+        assert exc_info.value.ledger is not None
+        assert isinstance(exc_info.value.ledger, EvidenceLedger)
+
+
+class TestFinalizerFailure:
+    """Finalizer failure handling based on allow_unfinalized_package config."""
+
+    def test_finalizer_failure_with_allow_unfinalized(self, monkeypatch):
+        """run_finalize raises → allow_unfinalized_package=True → package with final_report=None."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        finalizer_stub, _calls = _make_always_failing_stub()
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
+
+        cfg = _make_config()
+        # Need to override allow_unfinalized_package — ResearchConfig is frozen,
+        # so we rebuild with the flag set.
+        cfg = ResearchConfig(
+            tier=cfg.tier,
+            budget=cfg.budget,
+            slots=cfg.slots,
+            max_iterations=cfg.max_iterations,
+            max_parallel_subagents=cfg.max_parallel_subagents,
+            ledger_window_iterations=cfg.ledger_window_iterations,
+            grounding_min_ratio=cfg.grounding_min_ratio,
+            max_supplemental_loops=cfg.max_supplemental_loops,
+            wait_timeout_seconds=cfg.wait_timeout_seconds,
+            allow_unfinalized_package=True,
+            strict_unknown_model_cost=cfg.strict_unknown_model_cost,
+            sandbox_enabled=cfg.sandbox_enabled,
+            sandbox_backend=cfg.sandbox_backend,
+            enabled_providers=cfg.enabled_providers,
+        )
+
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert result.final_report is None
+        # stop_reason preserves the iteration loop's reason; finalizer_failed
+        # only appears when there was no prior stop reason.
+        assert result.metadata.stop_reason == "supervisor_done"
+        # Draft and critique should still be present
+        assert result.draft is not None
+        assert result.critique is not None
+
+    def test_finalizer_failure_without_allow_raises(self, monkeypatch):
+        """run_finalize raises → allow_unfinalized_package=False → FinalizerError."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        finalizer_stub, _calls = _make_always_failing_stub()
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
+
+        cfg = _make_config()  # allow_unfinalized_package defaults to False
+
+        with pytest.raises(flow_mod.FinalizerError):
+            flow_mod.deep_research("test question", config=cfg)
+
+    def test_finalizer_returns_none_with_allow_unfinalized(self, monkeypatch):
+        """run_finalize returns None directly → allow_unfinalized_package=True → package produced."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        none_stub = make_checkpoint_stub(None)
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_finalize", none_stub)
+
+        cfg = ResearchConfig(
+            tier="standard",
+            budget=BudgetConfig(soft_budget_usd=1.0),
+            slots={
+                "generator": ModelSlotConfig(provider="test", model="gen"),
+                "subagent": ModelSlotConfig(provider="test", model="sub"),
+                "reviewer": ModelSlotConfig(provider="test", model="rev"),
+            },
+            max_iterations=5,
+            max_parallel_subagents=3,
+            ledger_window_iterations=3,
+            grounding_min_ratio=0.0,
+            max_supplemental_loops=1,
+            wait_timeout_seconds=3600,
+            allow_unfinalized_package=True,
+            strict_unknown_model_cost=False,
+            sandbox_enabled=False,
+            sandbox_backend=None,
+            enabled_providers=["arxiv"],
+        )
+
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert result.final_report is None
+        # stop_reason preserves the iteration loop's reason when one exists
+        assert result.metadata.stop_reason == "supervisor_done"
+
+    def test_finalizer_returns_none_without_allow_raises(self, monkeypatch):
+        """run_finalize returns None → allow_unfinalized_package=False → FinalizerError."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        none_stub = make_checkpoint_stub(None)
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_finalize", none_stub)
+
+        cfg = _make_config()  # allow_unfinalized_package defaults to False
+
+        with pytest.raises(flow_mod.FinalizerError):
+            flow_mod.deep_research("test question", config=cfg)
+
+    def test_finalizer_failed_sets_stop_reason_when_no_prior(self, monkeypatch):
+        """When no iteration stop_reason exists, finalizer_failed becomes stop_reason."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        finalizer_stub, _calls = _make_always_failing_stub()
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
+
+        # max_iterations=0 → no iterations run → stop_reason stays None
+        cfg = ResearchConfig(
+            tier="standard",
+            budget=BudgetConfig(soft_budget_usd=1.0),
+            slots={
+                "generator": ModelSlotConfig(provider="test", model="gen"),
+                "subagent": ModelSlotConfig(provider="test", model="sub"),
+                "reviewer": ModelSlotConfig(provider="test", model="rev"),
+            },
+            max_iterations=0,
+            max_parallel_subagents=3,
+            ledger_window_iterations=3,
+            grounding_min_ratio=0.0,
+            max_supplemental_loops=1,
+            wait_timeout_seconds=3600,
+            allow_unfinalized_package=True,
+            strict_unknown_model_cost=False,
+            sandbox_enabled=False,
+            sandbox_backend=None,
+            enabled_providers=["arxiv"],
+        )
+
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert result.final_report is None
+        assert result.metadata.stop_reason == "finalizer_failed"
+
+
+class TestBudgetExhaustion:
+    """Budget exhaustion sets stop_reason but downstream phases still run."""
+
+    def test_budget_exhaustion_still_produces_deliverable(self, monkeypatch):
+        """Budget exceeded after iteration → stop_reason set, deliverable still produced."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        # Track that downstream checkpoints are actually called
+        draft_calls = [0]
+        critique_calls = [0]
+        finalize_calls = [0]
+        assemble_calls = [0]
+
+        def track_draft(*args, **kwargs):
+            draft_calls[0] += 1
+            return _DRAFT
+
+        track_draft.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: _DRAFT)
+
+        def track_critique(*args, **kwargs):
+            critique_calls[0] += 1
+            return _CRITIQUE_OK
+
+        track_critique.submit = lambda *a, **kw: types.SimpleNamespace(
+            load=lambda: _CRITIQUE_OK
+        )
+
+        def track_finalize(*args, **kwargs):
+            finalize_calls[0] += 1
+            return _FINAL
+
+        track_finalize.submit = lambda *a, **kw: types.SimpleNamespace(
+            load=lambda: _FINAL
+        )
+
+        def track_assemble(**kwargs):
+            assemble_calls[0] += 1
+            return InvestigationPackage(
+                metadata=kwargs["metadata"],
+                brief=kwargs["brief"],
+                plan=kwargs["plan"],
+                ledger=kwargs["ledger"],
+                iterations=kwargs["iterations"],
+                draft=kwargs["draft"],
+                critique=kwargs["critique"],
+                final_report=kwargs["final_report"],
+            )
+
+        track_assemble.submit = lambda *a, **kw: types.SimpleNamespace(
+            load=lambda: track_assemble(*a, **kw)
+        )
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_draft", track_draft)
+        monkeypatch.setattr(flow_mod, "run_critique", track_critique)
+        monkeypatch.setattr(flow_mod, "run_finalize", track_finalize)
+        monkeypatch.setattr(flow_mod, "assemble_package", track_assemble)
+
+        # Create config with budget already exhausted
+        budget = BudgetConfig(soft_budget_usd=0.01, spent_usd=0.02)
+        cfg = ResearchConfig(
+            tier="standard",
+            budget=budget,
+            slots={
+                "generator": ModelSlotConfig(provider="test", model="gen"),
+                "subagent": ModelSlotConfig(provider="test", model="sub"),
+                "reviewer": ModelSlotConfig(provider="test", model="rev"),
+            },
+            max_iterations=5,
+            max_parallel_subagents=3,
+            ledger_window_iterations=3,
+            grounding_min_ratio=0.0,
+            max_supplemental_loops=1,
+            wait_timeout_seconds=3600,
+            allow_unfinalized_package=False,
+            strict_unknown_model_cost=False,
+            sandbox_enabled=False,
+            sandbox_backend=None,
+            enabled_providers=["arxiv"],
+        )
+
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert result.metadata.stop_reason == "budget_exhausted"
+        # All downstream phases ran
+        assert draft_calls[0] == 1
+        assert critique_calls[0] == 1
+        assert finalize_calls[0] == 1
+        assert assemble_calls[0] == 1
+
+
+class TestSubagentDegradedResult:
+    """Subagent degraded results flow through the iteration record."""
+
+    def test_subagent_degraded_result_in_iteration(self, monkeypatch):
+        """Subagent returns degraded (empty) findings — still recorded in iteration."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        degraded_findings = SubagentFindings(
+            findings=[],
+            source_references=[],
+            confidence_notes="Subagent failed: simulated error",
+        )
+
+        degraded_stub = make_checkpoint_stub(degraded_findings)
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_subagent", degraded_stub)
+
+        cfg = _make_config(max_iterations=5)
+        result = flow_mod.deep_research("test question", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        # The degraded subagent result is present in iteration records
+        assert len(result.iterations) >= 1
+        first_iter = result.iterations[0]
+        for sa_result in first_iter.subagent_results:
+            assert sa_result.findings == []
+            assert "Subagent failed" in (sa_result.confidence_notes or "")

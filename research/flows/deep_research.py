@@ -4,13 +4,15 @@ Thin @flow entry point (~130 lines) that delegates ALL logic to checkpoints.
 Pipeline phases:
   1. scope -> ResearchBrief
   2. plan  -> ResearchPlan
-  3. Iteration loop: supervisor -> fan-out subagents -> merge -> convergence
+  3. Iteration loop: supervisor -> subagents -> merge -> convergence
   4. draft -> critique -> (optional supplemental loop) -> finalize -> assemble
 """
 
 from __future__ import annotations
 
-from kitaru import flow, wait
+import logging
+
+from kitaru import flow
 
 # Import all checkpoints at module top level (enables monkeypatching in tests)
 from research.checkpoints.assemble import assemble_package
@@ -33,9 +35,36 @@ from research.contracts.package import InvestigationPackage, RunMetadata
 from research.flows.convergence import check_convergence
 from research.ledger.projection import format_projection, project_ledger
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Error types
+# ---------------------------------------------------------------------------
+
 
 class FlowTimeoutError(Exception):
     """Raised when a flow-level wait() exceeds config.wait_timeout_seconds."""
+
+
+class SupervisorError(Exception):
+    """Raised when the supervisor fails twice consecutively.
+
+    Carries the last valid ledger state so operators can inspect progress
+    and replay from the last good checkpoint.
+    """
+
+    def __init__(self, message: str, ledger: EvidenceLedger | None = None):
+        super().__init__(message)
+        self.ledger = ledger
+
+
+class FinalizerError(Exception):
+    """Raised when the finalizer fails and allow_unfinalized_package is False.
+
+    Draft and critique are preserved in the flow's checkpoint history for
+    replay after the underlying issue is fixed.
+    """
 
 
 def _fan_out_subagents(tasks, model_name: str, max_parallel: int):
@@ -46,6 +75,42 @@ def _fan_out_subagents(tasks, model_name: str, max_parallel: int):
         handles = [run_subagent.submit(t, model_name) for t in batch]
         results.extend(h.load() for h in handles)
     return results
+
+
+def _run_supervisor_with_retry(
+    brief,
+    plan,
+    projection: str,
+    remaining: float,
+    iteration_index: int,
+    gen_model: str,
+    ledger: EvidenceLedger,
+):
+    """Call run_supervisor with one retry on failure.
+
+    On first failure: log warning, retry once.
+    On second failure: raise SupervisorError with the last valid ledger.
+    """
+    try:
+        return run_supervisor(
+            brief, plan, projection, remaining, iteration_index, gen_model
+        )
+    except Exception as first_err:
+        logger.warning(
+            "Supervisor failed (attempt 1/2) at iteration %d: %s",
+            iteration_index,
+            first_err,
+        )
+        try:
+            return run_supervisor(
+                brief, plan, projection, remaining, iteration_index, gen_model
+            )
+        except Exception as second_err:
+            raise SupervisorError(
+                f"Supervisor failed twice at iteration {iteration_index}: "
+                f"first={first_err!r}, second={second_err!r}",
+                ledger=ledger,
+            ) from second_err
 
 
 def _run_iteration(
@@ -71,8 +136,8 @@ def _run_iteration(
     )
     remaining = cfg.budget.soft_budget_usd - cfg.budget.spent_usd
 
-    decision = run_supervisor(
-        brief, plan, projection, remaining, iteration_index, gen_model
+    decision = _run_supervisor_with_retry(
+        brief, plan, projection, remaining, iteration_index, gen_model, ledger
     )
 
     # Fan-out subagents (batched by max_parallel_subagents)
@@ -159,7 +224,23 @@ def deep_research(
         # stops because supplemental_loops == max_supplemental_loops.
 
     # Phase 7: Finalize
-    final_report = run_finalize(draft, critique, gen_model)
+    try:
+        final_report = run_finalize(draft, critique, gen_model)
+    except Exception as finalize_err:
+        logger.warning("Finalizer failed: %s", finalize_err)
+        final_report = None
+
+    if final_report is None:
+        if cfg.allow_unfinalized_package:
+            logger.warning(
+                "Finalizer produced no report; proceeding with unfinalized package."
+            )
+            stop_reason = stop_reason or "finalizer_failed"
+        else:
+            raise FinalizerError(
+                "Finalizer failed and allow_unfinalized_package is False. "
+                "Draft and critique are preserved in checkpoint history for replay."
+            )
 
     # Phase 8: Assemble
     fin = finalize_run_metadata(stamp.started_at)
