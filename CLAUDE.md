@@ -87,7 +87,7 @@ uv run python run_v2.py --tier exhaustive "Comprehensive survey of transformer a
 
 ```bash
 # Tests (V2)
-uv run pytest tests/test_v2_*.py -v       # all V2 tests (586 tests)
+uv run pytest tests/test_v2_*.py -v       # all V2 tests
 uv run pytest tests/test_v2_agents.py -v   # single file
 uv run pytest tests/test_v2_agents.py::TestScopeAgent -v  # single class
 
@@ -107,7 +107,7 @@ uv run python -m evals.runner --use-llm-judge          # enable LLM scoring
 
 The system has three layers:
 
-1. **Flow** (`research/flows/deep_research.py`) — The `@flow`-decorated entry point. Orchestrates phases, owns the iteration loop, and enforces convergence. ~268 lines.
+1. **Flow** (`research/flows/deep_research.py`) — The `@flow`-decorated entry point. Orchestrates phases, owns the iteration loop, and enforces convergence.
 
 2. **Checkpoints** (`research/checkpoints/`) — Each research phase is a `@checkpoint` function (Kitaru). Types are `"llm_call"` or `"tool_call"`. Checkpoints are the replay boundary — on crash recovery, completed checkpoints return cached results.
 

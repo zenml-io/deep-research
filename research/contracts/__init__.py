@@ -8,6 +8,7 @@ from research.contracts.iteration import IterationRecord
 from research.contracts.package import (
     CouncilComparison,
     CouncilPackage,
+    EvidenceStats,
     InvestigationPackage,
     RunMetadata,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "CritiqueDimensionScore",
     "CritiqueReport",
     "FinalReport",
+    "EvidenceStats",
     "RunMetadata",
     "InvestigationPackage",
     "CouncilComparison",

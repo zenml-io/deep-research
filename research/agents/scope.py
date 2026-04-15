@@ -2,25 +2,15 @@
 
 from __future__ import annotations
 
-from pydantic_ai import Agent
-
-from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
+from research.agents._factory import _build_agent
 from research.contracts import ResearchBrief
-from research.prompts import get_prompt
 
 
 def build_scope_agent(model_name: str):
-    """Build the scoping agent that normalizes user requests into briefs.
-
-    Args:
-        model_name: PydanticAI model string (e.g. ``"google-gla:gemini-2.5-flash"``).
-
-    Returns:
-        A :class:`KitaruAgent` with ``ResearchBrief`` output type.
-    """
-    agent = Agent(
+    """Build the scoping agent that normalizes user requests into briefs."""
+    return _build_agent(
         model_name,
+        name="scope",
+        prompt_name="scope",
         output_type=ResearchBrief,
-        system_prompt=get_prompt("scope").text,
     )
-    return KitaruAgent(agent, name="scope", capture=CapturePolicy(tool_capture="full"))

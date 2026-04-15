@@ -6,10 +6,9 @@ summaries and statistics from an already-assembled package.
 
 from __future__ import annotations
 
-from typing import Any
 from urllib.parse import urlparse
 
-from research.contracts.package import InvestigationPackage
+from research.contracts.package import EvidenceStats, InvestigationPackage
 
 
 def compute_run_summary(package: InvestigationPackage) -> str:
@@ -52,7 +51,7 @@ def compute_evidence_stats(
     package: InvestigationPackage,
     *,
     relevance_threshold: float = 0.7,
-) -> dict[str, Any]:
+) -> EvidenceStats:
     """Compute statistics about the evidence ledger.
 
     Parameters
@@ -62,12 +61,6 @@ def compute_evidence_stats(
     relevance_threshold:
         Not used for filtering (evidence items don't carry a numeric
         relevance score in the V2 contract), but reserved for future use.
-
-    Returns
-    -------
-    dict with keys:
-        total_items, unique_domains, providers, items_with_doi,
-        items_with_arxiv_id, items_with_url, iterations_represented.
     """
     items = package.ledger.items
     domains: set[str] = set()
@@ -92,12 +85,9 @@ def compute_evidence_stats(
         url = item.canonical_url or item.url
         if url:
             items_with_url += 1
-            try:
-                parsed = urlparse(url)
-                if parsed.hostname:
-                    domains.add(parsed.hostname)
-            except Exception:  # noqa: BLE001
-                pass
+            parsed = urlparse(url)
+            if parsed.hostname:
+                domains.add(parsed.hostname)
 
     return {
         "total_items": len(items),

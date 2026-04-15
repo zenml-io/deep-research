@@ -71,6 +71,8 @@ The engine uses three LLM providers across its agent pipeline. The cross-provide
 | Judge | — | `google-gla:gemini-3.1-pro-preview` | `google-gla:gemini-3.1-pro-preview` |
 | 2nd Reviewer | — | — | `google-gla:gemini-3.1-pro-preview` |
 
+The **exhaustive** tier uses the same model assignments as deep, with 10 parallel subagents, a $3.00 budget, and no early stopping.
+
 **Option A — All three providers (recommended for deep tier)**
 
 ```bash
@@ -194,7 +196,7 @@ Kitaru @flow / @checkpoint              PydanticAI Agent + KitaruAgent
 └──────────────────────────────┘       └─────────────────────────────┘
 ```
 
-1. **Flow** (`research/flows/deep_research.py`) — The `@flow`-decorated entry point. Orchestrates phases, owns the iteration loop, and enforces convergence. ~268 lines.
+1. **Flow** (`research/flows/deep_research.py`) — The `@flow`-decorated entry point. Orchestrates phases, owns the iteration loop, and enforces convergence.
 
 2. **Checkpoints** (`research/checkpoints/`) — Each research phase is a `@checkpoint` function. Types are `"llm_call"` or `"tool_call"`. Checkpoints are the replay boundary — on crash recovery, completed checkpoints return cached results.
 
@@ -245,11 +247,12 @@ A separate `council_research()` flow runs the full pipeline once per generator m
 
 | Tier | Max Iterations | Cost Budget | Critique | Judge | 2nd Reviewer |
 |---|---|---|---|---|---|
-| **quick** | 2 | $0.05 | Single | No | No |
+| **quick** | 2 | $0.10 | Single | No | No |
 | **standard** | 5 | $0.10 | Single | Yes | No |
-| **deep** | 10 | $1.00 | Dual | Yes | Yes |
+| **deep** | 10 | $0.10 | Dual | Yes | Yes |
+| **exhaustive** | 20 | $3.00 | Dual | Yes | Yes |
 
-All tiers fan out up to 3 parallel subagents per iteration.
+Quick/standard/deep fan out 3 parallel subagents per iteration; exhaustive fans out 10.
 
 ## Configuration
 
@@ -306,7 +309,7 @@ uv run pytest tests/test_v2_agents.py -v
 uv run pytest tests/test_v2_agents.py::TestScopeAgent::test_creates_agent_with_correct_model -v
 ```
 
-554 V2 tests covering agents, checkpoints, config, convergence, contracts, council, flow orchestration, integration, architectural invariants, evidence ledger, package export, prompts, and search providers. All tests run offline using stubs — no API keys or network access required.
+V2 tests covering agents, checkpoints, config, convergence, contracts, council, flow orchestration, integration, architectural invariants, evidence ledger, package export, prompts, and search providers. All tests run offline using stubs — no API keys or network access required.
 
 ### Testing patterns
 
@@ -363,7 +366,7 @@ research/                       # V2 package
 │   ├── iteration.py            #   IterationRecord
 │   └── package.py              #   InvestigationPackage, CouncilPackage
 ├── flows/                      # Kitaru @flow orchestration
-│   ├── deep_research.py        #   Main research flow (~268 lines)
+│   ├── deep_research.py        #   Main research flow
 │   ├── council.py              #   Multi-generator council flow
 │   ├── convergence.py          #   Stop rule evaluation
 │   └── budget.py               #   Token cost estimation

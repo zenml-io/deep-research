@@ -6,12 +6,44 @@ that capture everything produced during a research run.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from research.contracts.base import StrictBase
 from research.contracts.brief import ResearchBrief
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.plan import ResearchPlan
 from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
+
+
+class EvidenceStats(TypedDict):
+    """Typed shape for evidence-ledger statistics.
+
+    Returned by ``research.package.assembly.compute_evidence_stats()``.
+    Replaces an anonymous ``dict[str, Any]`` with a statically-checkable
+    contract so downstream consumers can rely on specific keys.
+    """
+
+    total_items: int
+    """Number of evidence items in the ledger."""
+
+    unique_domains: list[str]
+    """Sorted list of unique hostnames extracted from evidence URLs."""
+
+    providers: list[str]
+    """Sorted list of search providers that contributed evidence."""
+
+    items_with_doi: int
+    """Count of evidence items that have a DOI."""
+
+    items_with_arxiv_id: int
+    """Count of evidence items that have an arXiv ID."""
+
+    items_with_url: int
+    """Count of evidence items that have a URL (canonical or raw)."""
+
+    iterations_represented: list[int]
+    """Sorted list of iteration indices that contributed evidence."""
 
 
 class RunMetadata(StrictBase):

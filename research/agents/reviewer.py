@@ -1,41 +1,22 @@
-"""Reviewer agent — critiques a draft report using a structured rubric."""
+"""Reviewer agent — critiques a draft report using a structured rubric.
+
+On the deep tier, two reviewers from different providers produce independent
+critiques that the pipeline merges (union of issues, averaged scores). This
+prompt is designed for a single reviewer; merging is handled externally in
+the critique checkpoint.
+"""
 
 from __future__ import annotations
 
-from pydantic_ai import Agent
-
-from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
+from research.agents._factory import _build_agent
 from research.contracts.reports import CritiqueReport
-from research.prompts import get_prompt
 
 
 def build_reviewer_agent(model_name: str):
-    """Build the reviewer agent that critiques draft reports.
-
-    The reviewer evaluates a draft report across three dimensions
-    (source_reliability, completeness, grounding) and produces a
-    ``CritiqueReport`` with scored dimensions, specific issues, and
-    a ``require_more_research`` flag.
-
-    **No tools.** The reviewer is a pure evaluation agent — it does not
-    search for or modify evidence.
-
-    On the deep tier, two reviewers from different providers produce
-    independent critiques that the pipeline merges (union of issues,
-    averaged scores). This prompt is designed for a single reviewer;
-    merging is handled externally.
-
-    Args:
-        model_name: PydanticAI model string (e.g. ``"anthropic:claude-sonnet-4-20250514"``).
-
-    Returns:
-        A :class:`KitaruAgent` with ``CritiqueReport`` output type.
-    """
-    agent = Agent(
+    """Build the reviewer agent that critiques draft reports."""
+    return _build_agent(
         model_name,
+        name="reviewer",
+        prompt_name="reviewer",
         output_type=CritiqueReport,
-        system_prompt=get_prompt("reviewer").text,
-    )
-    return KitaruAgent(
-        agent, name="reviewer", capture=CapturePolicy(tool_capture="full")
     )
