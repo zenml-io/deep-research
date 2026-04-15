@@ -76,26 +76,37 @@ Distilled findings from your research. Each finding should be:
 Aim for 3–8 findings per task. Quality over quantity.
 
 ### `source_references` (list of strings)
-Structured references for every source you consulted (not just the ones that yielded findings). Each reference should include as many identifiers as possible:
+Structured references for every source you consulted (not just the ones that yielded findings). **Each reference MUST use the pipe-separated format below** so the system can automatically extract identifiers for deduplication and tracking.
 
-- **DOI**: If the source has a DOI, include it (e.g., `doi:10.1234/example`)
-- **arXiv ID**: For preprints, include the arXiv ID (e.g., `arxiv:2305.18290`)
-- **Canonical URL**: The stable URL for the source
-- **Title and authors**: Human-readable citation
+**Required format:** `"<human-readable citation> | <identifier_1> | <identifier_2> | <url>"`
 
-Format each reference as a single string with identifiers separated by pipes:
-`"Rafailov et al. (2023) Direct Preference Optimization | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"`
+- **DOI**: Prefix with `doi:` (e.g., `doi:10.1234/example`)
+- **arXiv ID**: Prefix with `arxiv:` (e.g., `arxiv:2305.18290`)
+- **URL**: Include the canonical URL (prefer `doi.org/`, `arxiv.org/abs/`, or publisher URLs over aggregator links)
 
-Include all sources you searched and fetched, even if they didn't yield usable findings — this helps the system track what's been explored.
+**Examples:**
+- `"Rafailov et al. (2023) Direct Preference Optimization | doi:10.48550/arXiv.2305.18290 | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"`
+- `"Brave Search API Documentation | https://docs.brave.com/api"`
+- `"Touvron et al. (2023) LLaMA 2 | arxiv:2307.09288 | https://arxiv.org/abs/2307.09288"`
+
+**CRITICAL — index alignment:** `source_references[i]` MUST correspond to `findings[i]`. The system uses this 1:1 mapping to attach provenance (DOI, arXiv ID, URL) to each finding. Breaking the mapping degrades deduplication and evidence tracking.
+
+**CRITICAL:** The `doi:` and `arxiv:` prefixes are machine-parsed. Always include them when available. Omitting these prefixes degrades deduplication across iterations.
+
+**Extra consulted sources** that did not produce a finding belong in `confidence_notes`, NOT padded at the end of `source_references`. Padding breaks the index alignment above.
 
 ### `excerpts` (list of strings)
 Verbatim excerpts from sources that directly support your key findings. Each excerpt should:
 - Be copied exactly from the source (no paraphrasing)
-- Be prefixed with the source identifier: `[arxiv:2305.18290] "Our method achieves..."`
+- **Be prefixed with the source identifier in brackets:** `[arxiv:2305.18290] "Our method achieves..."` or `[doi:10.1234/foo] "Results show..."`
 - Be concise — extract the relevant sentence or paragraph, not entire sections
 - Support a specific finding — don't include excerpts that are only tangentially related
 
+**The bracket prefix is machine-parsed to match excerpts to their source.** Use the same `arxiv:` or `doi:` identifier that appears in the corresponding source_reference entry.
+
 Include 2–5 excerpts for the most important findings. Not every finding needs an excerpt, but the strongest claims should have direct textual support.
+
+**CRITICAL — source-identifiable excerpts:** Every excerpt MUST start with a bracket prefix matching its source (e.g., `[arxiv:2305.18290]` or `[doi:10.1234/foo]`). Excerpts without a source prefix cannot be attributed and will be dropped by the system.
 
 ### `confidence_notes` (string or null)
 Honest assessment of the reliability and completeness of your findings. Address:

@@ -26,6 +26,22 @@ from research.config.budget import BudgetConfig
 
 logger = logging.getLogger(__name__)
 
+# Module-level active tracker.  Set by the flow before running
+# checkpoints so that budget-aware agents can record usage without
+# requiring callers to thread a tracker through every call site.
+_active_tracker: BudgetTracker | None = None
+
+
+def set_active_tracker(tracker: BudgetTracker | None) -> None:
+    """Set (or clear) the module-level budget tracker for the current run."""
+    global _active_tracker  # noqa: PLW0603
+    _active_tracker = tracker
+
+
+def get_active_tracker() -> BudgetTracker | None:
+    """Return the currently-active tracker, or ``None``."""
+    return _active_tracker
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -58,6 +74,28 @@ class ModelPricing:
 # Prefix matching is used so ``gateway/openai:gpt-4o-mini`` resolves to
 # the ``openai:gpt-4o-mini`` entry.
 DEFAULT_MODEL_PRICING: dict[str, ModelPricing] = {
+    # ── Active V2 tier models (defaults.py) ──────────────────────────
+    "anthropic:claude-sonnet-4-6": ModelPricing(
+        input_per_million_usd=3.00,
+        output_per_million_usd=15.00,
+    ),
+    "anthropic:claude-opus-4-6": ModelPricing(
+        input_per_million_usd=15.00,
+        output_per_million_usd=75.00,
+    ),
+    "google-gla:gemini-3.1-flash-lite-preview": ModelPricing(
+        input_per_million_usd=0.15,
+        output_per_million_usd=0.60,
+    ),
+    "google-gla:gemini-3.1-pro-preview": ModelPricing(
+        input_per_million_usd=1.25,
+        output_per_million_usd=10.00,
+    ),
+    "openai:gpt-5.4-mini": ModelPricing(
+        input_per_million_usd=0.15,
+        output_per_million_usd=0.60,
+    ),
+    # ── Legacy / fallback models ─────────────────────────────────────
     "google-gla:gemini-2.5-flash": ModelPricing(
         input_per_million_usd=0.15,
         output_per_million_usd=0.60,

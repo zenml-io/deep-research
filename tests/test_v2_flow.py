@@ -1010,3 +1010,234 @@ class TestSubagentDegradedResult:
         for sa_result in first_iter.subagent_results:
             assert sa_result.findings == []
             assert "Subagent failed" in (sa_result.confidence_notes or "")
+
+
+class TestToolSurfaceThreading:
+    """Tools are threaded from the flow through to subagent submissions."""
+
+    def test_subagents_receive_tools(self, monkeypatch):
+        """run_subagent.submit() receives tools kwarg from the flow."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        received_tools: list = []
+
+        def subagent_stub(*args, **kwargs):
+            return _FINDINGS
+
+        def subagent_submit(*args, **kwargs):
+            kwargs.pop("after", None)
+            kwargs.pop("id", None)
+            received_tools.append(kwargs.get("tools"))
+            return types.SimpleNamespace(load=lambda: _FINDINGS)
+
+        subagent_stub.submit = subagent_submit
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_subagent", subagent_stub)
+
+        # Patch ProviderRegistry and build_tool_surface to avoid real providers
+        fake_tools = [lambda: "search", lambda: "fetch"]
+        monkeypatch.setattr(
+            flow_mod,
+            "ProviderRegistry",
+            lambda cfg: None,
+        )
+        monkeypatch.setattr(
+            flow_mod,
+            "build_tool_surface",
+            lambda cfg, registry: types.SimpleNamespace(
+                as_pydantic_tools=lambda: fake_tools
+            ),
+        )
+
+        cfg = _make_config(max_iterations=5)
+        flow_mod.deep_research("test", config=cfg)
+
+        # At least one subagent should have received tools
+        assert len(received_tools) >= 1
+        assert received_tools[0] is fake_tools
+
+    def test_tool_surface_failure_degrades_gracefully(self, monkeypatch):
+        """If tool surface construction fails, subagents get tools=None."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        received_tools: list = []
+
+        def subagent_stub(*args, **kwargs):
+            return _FINDINGS
+
+        def subagent_submit(*args, **kwargs):
+            kwargs.pop("after", None)
+            kwargs.pop("id", None)
+            received_tools.append(kwargs.get("tools"))
+            return types.SimpleNamespace(load=lambda: _FINDINGS)
+
+        subagent_stub.submit = subagent_submit
+
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "run_subagent", subagent_stub)
+
+        # Make ProviderRegistry raise to simulate failure
+        def failing_registry(cfg):
+            raise RuntimeError("No providers available")
+
+        monkeypatch.setattr(flow_mod, "ProviderRegistry", failing_registry)
+
+        cfg = _make_config(max_iterations=5)
+        result = flow_mod.deep_research("test", config=cfg)
+
+        # Flow should still complete
+        assert isinstance(result, InvestigationPackage)
+        # Subagents should have received None for tools
+        assert all(t is None for t in received_tools)
+
+
+class TestPinnedIdsPropagate:
+    """Pinned evidence IDs from supervisor decisions propagate to the next projection."""
+
+    def test_pinned_ids_from_previous_decision_passed_to_projection(self, monkeypatch):
+        """Supervisor's pinned_evidence_ids affect the next iteration's projection."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        projection_calls: list[str] = []
+        original_format = flow_mod.format_projection
+        original_project = flow_mod.project_ledger
+
+        call_count = [0]
+        pinned_ids_received: list = []
+
+        def tracking_project(ledger, iteration_index, pinned_ids=None, **kwargs):
+            pinned_ids_received.append(pinned_ids or [])
+            return original_project(ledger, iteration_index, pinned_ids=pinned_ids, **kwargs)
+
+        monkeypatch.setattr(flow_mod, "project_ledger", tracking_project)
+
+        # Supervisor returns pinned IDs on first call, then stops on second
+        decision_with_pins = SupervisorDecision(
+            done=False,
+            rationale="continuing with pins",
+            gaps=["gap1"],
+            subagent_tasks=[
+                SubagentTask(task_description="search", target_subtopic="t"),
+            ],
+            pinned_evidence_ids=["ev_important_001", "ev_important_002"],
+        )
+
+        def supervisor_with_pins(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return decision_with_pins
+            return _DECISION_DONE
+
+        with_submit(supervisor_with_pins)
+
+        _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=supervisor_with_pins)
+
+        # Patch out tool surface to avoid real providers
+        monkeypatch.setattr(
+            flow_mod, "ProviderRegistry", lambda cfg: None
+        )
+        monkeypatch.setattr(
+            flow_mod, "build_tool_surface",
+            lambda cfg, registry: types.SimpleNamespace(as_pydantic_tools=lambda: []),
+        )
+
+        cfg = _make_config(max_iterations=5)
+        flow_mod.deep_research("test", config=cfg)
+
+        # First iteration should have empty pinned_ids (no prior decision)
+        assert pinned_ids_received[0] == []
+        # Second iteration should have the pins from the first decision
+        assert pinned_ids_received[1] == ["ev_important_001", "ev_important_002"]
+
+
+class TestStalePinnedIdsIgnored:
+    """Stale pinned evidence IDs (not in ledger) are safely ignored."""
+
+    def test_stale_pinned_ids_do_not_crash_projection(self, monkeypatch):
+        """Supervisor returns pinned IDs that don't exist in the ledger — flow still completes."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        call_count = [0]
+        pinned_ids_received: list = []
+
+        original_project = flow_mod.project_ledger
+
+        def tracking_project(ledger, iteration_index, pinned_ids=None, **kwargs):
+            pinned_ids_received.append(pinned_ids or [])
+            return original_project(
+                ledger, iteration_index, pinned_ids=pinned_ids, **kwargs
+            )
+
+        monkeypatch.setattr(flow_mod, "project_ledger", tracking_project)
+
+        # Supervisor returns stale pinned IDs on first call
+        decision_with_stale_pins = SupervisorDecision(
+            done=False,
+            rationale="continuing",
+            gaps=["gap"],
+            subagent_tasks=[
+                SubagentTask(task_description="search", target_subtopic="t"),
+            ],
+            pinned_evidence_ids=["nonexistent_001", "nonexistent_002"],
+        )
+
+        def supervisor_stale_pins(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return decision_with_stale_pins
+            return _DECISION_DONE
+
+        with_submit(supervisor_stale_pins)
+
+        _patch_all_checkpoints(
+            monkeypatch, flow_mod, supervisor_stub=supervisor_stale_pins
+        )
+
+        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
+        monkeypatch.setattr(
+            flow_mod,
+            "build_tool_surface",
+            lambda cfg, registry: types.SimpleNamespace(as_pydantic_tools=lambda: []),
+        )
+
+        cfg = _make_config(max_iterations=5)
+        result = flow_mod.deep_research("test", config=cfg)
+
+        # Flow completes without error
+        assert isinstance(result, InvestigationPackage)
+        # Second iteration received the stale IDs — they're just ignored by projection
+        assert pinned_ids_received[1] == ["nonexistent_001", "nonexistent_002"]
+
+
+class TestSupervisorContextEnrichment:
+    """Supervisor receives max_iterations and ledger_size in its prompt data."""
+
+    def test_supervisor_receives_max_iterations_and_ledger_size(self, monkeypatch):
+        """run_supervisor is called with max_iterations and ledger_size kwargs."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        supervisor_kwargs: list[dict] = []
+
+        def tracking_supervisor(*args, **kwargs):
+            supervisor_kwargs.append(kwargs)
+            return _DECISION_DONE
+
+        with_submit(tracking_supervisor)
+
+        _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=tracking_supervisor)
+
+        # Patch out tool surface
+        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
+        monkeypatch.setattr(
+            flow_mod, "build_tool_surface",
+            lambda cfg, registry: types.SimpleNamespace(as_pydantic_tools=lambda: []),
+        )
+
+        cfg = _make_config(max_iterations=7)
+        flow_mod.deep_research("test", config=cfg)
+
+        assert len(supervisor_kwargs) >= 1
+        kw = supervisor_kwargs[0]
+        assert kw.get("max_iterations") == 7
+        assert "ledger_size" in kw

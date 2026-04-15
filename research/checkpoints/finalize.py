@@ -6,6 +6,7 @@ import logging
 from kitaru import checkpoint
 
 from research.agents.finalizer import build_finalizer_agent
+from research.contracts.evidence import EvidenceLedger
 from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 def run_finalize(
     draft: DraftReport,
     critique: CritiqueReport,
+    ledger: EvidenceLedger,
     model_name: str,
     stop_reason: str | None = None,
 ) -> FinalReport | None:
@@ -31,6 +33,7 @@ def run_finalize(
     Args:
         draft: The draft report.
         critique: The critique report to apply.
+        ledger: The evidence ledger (for grounded repairs).
         model_name: PydanticAI model string for the finalizer agent.
         stop_reason: Why the research loop terminated.
 
@@ -43,6 +46,8 @@ def run_finalize(
             {
                 "draft": draft.model_dump(mode="json"),
                 "critique": critique.model_dump(mode="json"),
+                "ledger": ledger.model_dump(mode="json"),
+                "stop_reason": stop_reason,
             },
             indent=2,
         )

@@ -159,3 +159,94 @@ class TestRegistry:
         """Every prompt has non-empty text content."""
         for name, record in PROMPTS.items():
             assert len(record.text.strip()) > 0, f"Prompt {name!r} has empty text"
+
+
+# ---------------------------------------------------------------------------
+# Report quality prompt alignment tests
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratorPromptSubstance:
+    """Verify the generator prompt biases toward substantial, evidence-backed output."""
+
+    @pytest.fixture()
+    def gen_text(self) -> str:
+        return get_prompt("generator").text
+
+    def test_word_count_guidance(self, gen_text: str):
+        """Generator prompt should mention target word count."""
+        assert "1000" in gen_text
+        assert "1500" in gen_text
+
+    def test_plan_coverage_requirement(self, gen_text: str):
+        """Generator prompt requires covering every plan subtopic with evidence."""
+        assert "subtopic" in gen_text.lower()
+        assert "key question" in gen_text.lower()
+
+
+class TestFinalizerPromptContext:
+    """Verify the finalizer prompt documents its full input context."""
+
+    @pytest.fixture()
+    def fin_text(self) -> str:
+        return get_prompt("finalizer").text
+
+    def test_ledger_in_input_description(self, fin_text: str):
+        """Finalizer prompt should describe the evidence ledger as an input."""
+        assert "Evidence ledger" in fin_text or "evidence ledger" in fin_text
+
+    def test_stop_reason_in_input_description(self, fin_text: str):
+        """Finalizer prompt should describe stop_reason as an input."""
+        assert "stop_reason" in fin_text or "Stop reason" in fin_text
+
+    def test_stop_reason_behavior_guidance(self, fin_text: str):
+        """Finalizer prompt should guide behavior for early termination."""
+        assert "budget_exhausted" in fin_text
+        assert "Limitations" in fin_text
+
+
+class TestPlannerPromptSections:
+    """Verify the planner prompt guides reportable section structure."""
+
+    @pytest.fixture()
+    def plan_text(self) -> str:
+        return get_prompt("planner").text
+
+    def test_reportable_section_guidance(self, plan_text: str):
+        """Planner prompt should mention reportable sections."""
+        assert "reportable" in plan_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Subagent prompt alignment tests
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentPromptAlignment:
+    """Verify the subagent prompt contains critical alignment instructions."""
+
+    @pytest.fixture()
+    def subagent_text(self) -> str:
+        return get_prompt("subagent").text
+
+    def test_findings_source_references_index_mapping(self, subagent_text: str):
+        """Prompt instructs that source_references[i] maps to findings[i]."""
+        assert "source_references[i]" in subagent_text
+        assert "findings[i]" in subagent_text
+
+    def test_extra_sources_go_to_confidence_notes(self, subagent_text: str):
+        """Prompt instructs extra consulted sources go in confidence_notes."""
+        assert "confidence_notes" in subagent_text
+        # Should mention that extra sources don't belong in source_references
+        assert "Extra consulted sources" in subagent_text
+
+    def test_excerpt_bracket_prefix_required(self, subagent_text: str):
+        """Prompt requires bracket prefix on excerpts for attribution."""
+        assert "source-identifiable excerpts" in subagent_text or "bracket prefix" in subagent_text
+        assert "will be dropped" in subagent_text
+
+    def test_doi_arxiv_prefixes_are_critical(self, subagent_text: str):
+        """Prompt marks doi:/arxiv: prefixes as machine-parsed and critical."""
+        assert "doi:" in subagent_text
+        assert "arxiv:" in subagent_text
+        assert "machine-parsed" in subagent_text

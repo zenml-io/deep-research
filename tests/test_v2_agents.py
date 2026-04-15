@@ -148,8 +148,8 @@ class TestScopeAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_scope_agent("test-model")
 
-        # Our stub KitaruAgent() stores the instance in wrap_calls
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
     def test_capture_policy_is_full(self, monkeypatch):
         """Factory passes CapturePolicy(tool_capture='full') to KitaruAgent."""
@@ -222,8 +222,8 @@ class TestPlannerAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_planner_agent("test-model")
 
-        # Our stub KitaruAgent() stores the instance in wrap_calls
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +309,8 @@ class TestSupervisorAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_supervisor_agent("test-model")
 
-        # Our stub KitaruAgent() stores the instance in wrap_calls
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +420,8 @@ class TestSubagent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_subagent_agent("test-model")
 
-        # Our stub KitaruAgent() stores the instance in wrap_calls
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +499,8 @@ class TestGeneratorAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_generator_agent("test-model")
 
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +581,8 @@ class TestReviewerAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_reviewer_agent("test-model")
 
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +660,8 @@ class TestFinalizerAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_finalizer_agent("test-model")
 
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -741,4 +744,5 @@ class TestJudgeAgent:
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_judge_agent("test-model")
 
-        assert result is wrap_calls[0]
+        # Factory wraps KitaruAgent in BudgetAwareAgent
+        assert result._wrapped is wrap_calls[0]

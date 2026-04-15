@@ -11,6 +11,8 @@ import logging
 from kitaru import checkpoint
 
 from research.agents.reviewer import build_reviewer_agent
+from research.contracts.evidence import EvidenceLedger
+from research.contracts.plan import ResearchPlan
 from research.contracts.reports import (
     CritiqueDimensionScore,
     CritiqueReport,
@@ -75,6 +77,8 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
 @checkpoint(type="llm_call")
 def run_critique(
     draft: DraftReport,
+    plan: ResearchPlan,
+    ledger: EvidenceLedger,
     model_name: str,
     second_model_name: str | None = None,
 ) -> CritiqueReport:
@@ -86,13 +90,22 @@ def run_critique(
 
     Args:
         draft: The draft report to critique.
+        plan: The research plan (for completeness checking).
+        ledger: The evidence ledger (for grounding verification).
         model_name: PydanticAI model string for the primary reviewer.
         second_model_name: Optional second reviewer model (deep tier).
 
     Returns:
         A CritiqueReport (merged if dual-reviewer).
     """
-    prompt = json.dumps({"draft": draft.model_dump(mode="json")}, indent=2)
+    prompt = json.dumps(
+        {
+            "draft": draft.model_dump(mode="json"),
+            "plan": plan.model_dump(mode="json"),
+            "ledger": ledger.model_dump(mode="json"),
+        },
+        indent=2,
+    )
 
     if second_model_name is None:
         # Single reviewer (standard tier)

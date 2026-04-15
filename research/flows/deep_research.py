@@ -30,9 +30,12 @@ from research.config.settings import ResearchConfig
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.package import InvestigationPackage, RunMetadata
+from research.flows.budget import BudgetTracker, set_active_tracker
 from research.flows.convergence import check_convergence
 from research.ledger.ledger import ManagedLedger
 from research.ledger.projection import format_projection, project_ledger
+from research.providers.agent_tools import build_tool_surface
+from research.providers.search import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +69,9 @@ class FinalizerError(Exception):
     """
 
 
-def _fan_out_subagents(tasks, model_name: str, max_parallel: int):
+def _fan_out_subagents(
+    tasks, model_name: str, max_parallel: int, tools: list | None = None
+):
     """Fan-out subagent tasks in batches of max_parallel, never spilling across iterations.
 
     Returns (results, submit_handles) — callers need the handles for DAG edge tracking.
@@ -75,7 +80,7 @@ def _fan_out_subagents(tasks, model_name: str, max_parallel: int):
     all_handles = []
     for batch_start in range(0, len(tasks), max_parallel):
         batch = tasks[batch_start : batch_start + max_parallel]
-        handles = [run_subagent.submit(t, model_name) for t in batch]
+        handles = [run_subagent.submit(t, model_name, tools=tools) for t in batch]
         all_handles.extend(handles)
         results.extend(h.load() for h in handles)
     return results, all_handles
@@ -90,6 +95,8 @@ def _run_supervisor_with_retry(
     gen_model: str,
     ledger: EvidenceLedger,
     breadth_first: bool = False,
+    max_iterations: int = 5,
+    ledger_size: int = 0,
 ):
     """Call run_supervisor with one retry on failure.
 
@@ -111,6 +118,8 @@ def _run_supervisor_with_retry(
             iteration_index,
             gen_model,
             breadth_first=breadth_first,
+            max_iterations=max_iterations,
+            ledger_size=ledger_size,
             id=f"supervisor_{iteration_index}_a1",
         )
         handles.append(h)
@@ -130,6 +139,8 @@ def _run_supervisor_with_retry(
                 iteration_index,
                 gen_model,
                 breadth_first=breadth_first,
+                max_iterations=max_iterations,
+                ledger_size=ledger_size,
                 id=f"supervisor_{iteration_index}_a2",
             )
             handles.append(h)
@@ -149,10 +160,13 @@ def _run_iteration(
     managed_ledger: ManagedLedger,
     iteration_index: int,
     started_at: str,
+    tools: list | None = None,
+    pinned_ids: list[str] | None = None,
 ):
     """Execute one research iteration: supervisor -> subagents -> merge -> record.
 
-    Returns (record, convergence, submit_handles) — callers need the handles for DAG edge tracking.
+    Returns (record, convergence, decision, submit_handles) — callers need
+    the handles for DAG edge tracking and decision for pinned_ids propagation.
     """
     iter_handles: list = []
 
@@ -168,6 +182,7 @@ def _run_iteration(
         project_ledger(
             ledger,
             iteration_index,
+            pinned_ids=pinned_ids,
             window_iterations=cfg.ledger_window_iterations,
         )
     )
@@ -182,12 +197,14 @@ def _run_iteration(
         gen_model,
         ledger,
         breadth_first=cfg.breadth_first,
+        max_iterations=cfg.max_iterations,
+        ledger_size=managed_ledger.size,
     )
     iter_handles.extend(sup_handles)
 
     # Fan-out subagents (batched by max_parallel_subagents)
     subagent_results, sub_handles = _fan_out_subagents(
-        decision.subagent_tasks, sub_model, cfg.max_parallel_subagents
+        decision.subagent_tasks, sub_model, cfg.max_parallel_subagents, tools=tools
     )
     iter_handles.extend(sub_handles)
 
@@ -221,7 +238,7 @@ def _run_iteration(
         respect_supervisor_done=cfg.respect_supervisor_done,
     )
 
-    return record, convergence, iter_handles
+    return record, convergence, decision, iter_handles
 
 
 @flow
@@ -240,6 +257,11 @@ def deep_research(
     one terminal step and extracts the ``InvestigationPackage`` correctly.
     """
     cfg = config or ResearchConfig.for_tier(tier)
+    tracker = BudgetTracker(
+        budget=cfg.budget,
+        strict_unknown_model_cost=cfg.strict_unknown_model_cost,
+    )
+    set_active_tracker(tracker)
     all_handles: list = []
 
     stamp_h = stamp_run_metadata.submit()
@@ -258,17 +280,30 @@ def deep_research(
     all_handles.append(plan_h)
     plan = plan_h.load()
 
+    # Phase 3: Build run-scoped tool surface for subagents
+    try:
+        registry = ProviderRegistry(cfg)
+        surface = build_tool_surface(cfg, registry)
+        tools = surface.as_pydantic_tools()
+    except Exception:
+        logger.warning("Failed to build tool surface; subagents will run without tools")
+        tools = None
+
     # Phase 3: Iteration loop
     managed_ledger = ManagedLedger()
     iterations: list[IterationRecord] = []
     stop_reason: str | None = None
+    pinned_ids: list[str] = []
 
     for i in range(cfg.max_iterations):
-        record, convergence, iter_handles = _run_iteration(
-            cfg, brief, plan, managed_ledger, i, stamp.started_at
+        record, convergence, decision, iter_handles = _run_iteration(
+            cfg, brief, plan, managed_ledger, i, stamp.started_at,
+            tools=tools,
+            pinned_ids=pinned_ids,
         )
         all_handles.extend(iter_handles)
         iterations.append(record)
+        pinned_ids = decision.pinned_evidence_ids
 
         if convergence.should_stop:
             stop_reason = convergence.reason.value
@@ -284,7 +319,7 @@ def deep_research(
     # Phase 5: Critique
     reviewer_model = cfg.slots["reviewer"].model_string
     second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-    critique_h = run_critique.submit(draft, reviewer_model, second)
+    critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
     all_handles.append(critique_h)
     critique = critique_h.load()
 
@@ -296,8 +331,10 @@ def deep_research(
     ):
         supplemental_loops += 1
         idx = len(iterations)
-        record, _conv, iter_handles = _run_iteration(
-            cfg, brief, plan, managed_ledger, idx, stamp.started_at
+        record, _conv, _decision, iter_handles = _run_iteration(
+            cfg, brief, plan, managed_ledger, idx, stamp.started_at,
+            tools=tools,
+            pinned_ids=pinned_ids,
         )
         all_handles.extend(iter_handles)
         iterations.append(record)
@@ -307,7 +344,7 @@ def deep_research(
         all_handles.append(draft_h)
         draft = draft_h.load()
 
-        critique_h = run_critique.submit(draft, reviewer_model, second)
+        critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
         all_handles.append(critique_h)
         critique = critique_h.load()
         # Second require_more_research is recorded but the while guard
@@ -315,7 +352,7 @@ def deep_research(
 
     # Phase 7: Finalize
     try:
-        finalize_h = run_finalize.submit(draft, critique, gen_model, stop_reason)
+        finalize_h = run_finalize.submit(draft, critique, ledger, gen_model, stop_reason)
         all_handles.append(finalize_h)
         final_report = finalize_h.load()
     except Exception as finalize_err:
@@ -348,6 +385,8 @@ def deep_research(
         total_iterations=len(iterations),
         stop_reason=stop_reason,
     )
+
+    set_active_tracker(None)
 
     # Return the submit handle (without .load()) so Kitaru's DAG registers
     # this checkpoint as the sole terminal step.  The ``after=all_handles``

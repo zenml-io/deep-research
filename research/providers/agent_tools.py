@@ -141,6 +141,65 @@ class AgentToolSurface:
             return None
 
     # -----------------------------------------------------------------------
+    # PydanticAI tool export
+    # -----------------------------------------------------------------------
+
+    def as_pydantic_tools(self) -> list:
+        """Return plain async callables that PydanticAI can bind as agent tools.
+
+        Each callable has proper type hints for PydanticAI's tool introspection.
+        Only includes tools that are available (code_exec omitted when sandbox
+        is not configured).
+        """
+        tools: list = []
+
+        async def search(
+            queries: list[str],
+            max_results_per_query: int = 10,
+        ) -> list[dict]:
+            """Search across all active providers. Returns list of result dicts."""
+            results = await self.search(
+                queries, max_results_per_query=max_results_per_query
+            )
+            return [
+                {
+                    "url": r.url,
+                    "title": r.title,
+                    "snippet": r.snippet,
+                    "provider": r.provider,
+                }
+                for r in results
+            ]
+
+        async def fetch(url: str) -> str:
+            """Fetch URL content and return extracted plain text."""
+            content = await self.fetch(url)
+            return content or ""
+
+        tools.append(search)
+        tools.append(fetch)
+
+        if self._sandbox is not None:
+
+            async def code_exec(
+                code: str,
+                language: str = "python",
+            ) -> dict:
+                """Execute code in a sandboxed environment."""
+                result = await self.code_exec(code, language=language)
+                if result is None:
+                    return {"success": False, "error": "Sandbox not available"}
+                return {
+                    "success": True,
+                    "stdout": getattr(result, "stdout", ""),
+                    "stderr": getattr(result, "stderr", ""),
+                }
+
+            tools.append(code_exec)
+
+        return tools
+
+    # -----------------------------------------------------------------------
     # code_exec
     # -----------------------------------------------------------------------
 

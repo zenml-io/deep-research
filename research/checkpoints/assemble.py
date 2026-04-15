@@ -199,6 +199,23 @@ def assemble_package(
                     grounding_min_ratio,
                 )
 
+    # Non-fatal underlength warning: flag short reports when evidence is plentiful
+    _UNDERLENGTH_WORD_THRESHOLD = 300
+    _UNDERLENGTH_LEDGER_MIN = 5
+    if report_content is not None:
+        word_count = len(report_content.split())
+        if (
+            word_count < _UNDERLENGTH_WORD_THRESHOLD
+            and len(ledger.items) >= _UNDERLENGTH_LEDGER_MIN
+        ):
+            logger.warning(
+                "Report is short (%d words) relative to evidence volume "
+                "(%d ledger items). Expected at least %d words.",
+                word_count,
+                len(ledger.items),
+                _UNDERLENGTH_WORD_THRESHOLD,
+            )
+
     # Record prompt hashes
     prompt_hashes = get_prompt_hashes()
 

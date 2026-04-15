@@ -550,14 +550,26 @@ class TestManagedLedgerMergeFindings:
         added = ml.merge_findings(findings, iteration=1)
         assert added[0].confidence_notes == "High confidence"
 
-    def test_merge_findings_with_excerpts(self):
+    def test_merge_findings_with_matched_excerpts(self):
+        """Excerpts with a source prefix matching a ref are kept."""
         ml = ManagedLedger()
         findings = SubagentFindings(
             findings=["A"],
-            excerpts=["verbatim quote"],
+            source_references=["Paper | arxiv:2305.18290"],
+            excerpts=['[arxiv:2305.18290] "verbatim quote"'],
         )
         added = ml.merge_findings(findings, iteration=1)
-        assert added[0].excerpts == ["verbatim quote"]
+        assert added[0].excerpts == ['[arxiv:2305.18290] "verbatim quote"']
+
+    def test_merge_findings_unmatched_excerpts_dropped(self):
+        """Excerpts without a source prefix are dropped."""
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["A"],
+            excerpts=["verbatim quote without prefix"],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert added[0].excerpts == []
 
 
 class TestManagedLedgerGetById:
@@ -1050,3 +1062,323 @@ class TestProjectionReExports:
         from research.ledger import ProjectedItem as cls
 
         assert cls is not None
+
+    def test_parse_source_reference_importable(self):
+        from research.ledger import parse_source_reference as fn
+
+        assert callable(fn)
+
+    def test_parsed_reference_importable(self):
+        from research.ledger import ParsedReference as cls
+
+        assert cls is not None
+
+
+# ---------------------------------------------------------------------------
+# Source reference parsing
+# ---------------------------------------------------------------------------
+
+from research.ledger.canonical import ParsedReference, parse_source_reference
+
+
+class TestParseSourceReference:
+    """Test extraction of structured identifiers from pipe-separated references."""
+
+    def test_arxiv_only(self):
+        ref = "Rafailov et al. (2023) DPO | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"
+        parsed = parse_source_reference(ref)
+        assert parsed.arxiv_id == "2305.18290"
+        assert parsed.url == "https://arxiv.org/abs/2305.18290"
+        assert parsed.doi is None
+
+    def test_doi_and_arxiv(self):
+        ref = "Author (2023) Title | doi:10.48550/arXiv.2305.18290 | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"
+        parsed = parse_source_reference(ref)
+        assert parsed.doi == "10.48550/arXiv.2305.18290"
+        assert parsed.arxiv_id == "2305.18290"
+        assert parsed.url == "https://arxiv.org/abs/2305.18290"
+
+    def test_doi_only(self):
+        ref = "Smith et al. (2024) | doi:10.1234/example"
+        parsed = parse_source_reference(ref)
+        assert parsed.doi == "10.1234/example"
+        assert parsed.arxiv_id is None
+
+    def test_url_only(self):
+        ref = "Brave Search API Documentation | https://docs.brave.com/api"
+        parsed = parse_source_reference(ref)
+        assert parsed.url == "https://docs.brave.com/api"
+        assert parsed.doi is None
+        assert parsed.arxiv_id is None
+
+    def test_empty_string(self):
+        parsed = parse_source_reference("")
+        assert parsed == ParsedReference()
+
+    def test_none_like_whitespace(self):
+        parsed = parse_source_reference("   ")
+        assert parsed == ParsedReference()
+
+    def test_no_identifiers(self):
+        parsed = parse_source_reference("Just a plain text citation")
+        assert parsed.doi is None
+        assert parsed.arxiv_id is None
+        assert parsed.url is None
+
+    def test_case_insensitive_prefixes(self):
+        ref = "Title | DOI:10.1234/foo | ARXIV:2301.12345"
+        parsed = parse_source_reference(ref)
+        assert parsed.doi == "10.1234/foo"
+        assert parsed.arxiv_id == "2301.12345"
+
+
+# ---------------------------------------------------------------------------
+# Improved merge_findings provenance
+# ---------------------------------------------------------------------------
+
+
+class TestMergeFindingsProvenance:
+    """Test that merge_findings populates DOI, arXiv ID, and canonical_url."""
+
+    def test_arxiv_populated_from_source_reference(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["DPO achieves comparable performance to PPO"],
+            source_references=[
+                "Rafailov et al. (2023) DPO | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert len(added) == 1
+        assert added[0].arxiv_id == "2305.18290"
+        assert added[0].url == "https://arxiv.org/abs/2305.18290"
+
+    def test_doi_populated_from_source_reference(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Key result from the paper"],
+            source_references=[
+                "Author (2024) Title | doi:10.1234/example | https://doi.org/10.1234/example"
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert len(added) == 1
+        assert added[0].doi == "10.1234/example"
+
+    def test_canonical_url_populated(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["API docs show this feature"],
+            source_references=[
+                "Docs | https://docs.example.com/api?utm_source=google"
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert len(added) == 1
+        # canonical_url should strip tracking params
+        assert added[0].canonical_url == "https://docs.example.com/api"
+
+    def test_dedup_works_with_parsed_provenance(self):
+        """Two findings with the same arXiv ID from different iterations are deduped."""
+        ml = ManagedLedger()
+        f1 = SubagentFindings(
+            findings=["Result A"],
+            source_references=["Paper A | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"],
+        )
+        f2 = SubagentFindings(
+            findings=["Result B (same paper)"],
+            source_references=["Paper A again | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"],
+        )
+        added1 = ml.merge_findings(f1, iteration=0)
+        added2 = ml.merge_findings(f2, iteration=1)
+        assert len(added1) == 1
+        assert len(added2) == 0  # deduped by arXiv ID
+        assert ml.size == 1
+
+    def test_multiple_findings_paired_with_refs(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Finding about DPO", "Finding about RLHF"],
+            source_references=[
+                "Paper 1 | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290",
+                "Paper 2 | doi:10.1234/rlhf | https://example.com/rlhf",
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added) == 2
+        assert added[0].arxiv_id == "2305.18290"
+        assert added[1].doi == "10.1234/rlhf"
+
+    def test_findings_without_matching_refs_get_no_provenance(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Finding 1", "Finding 2", "Finding 3"],
+            source_references=[
+                "Paper 1 | arxiv:2305.18290",
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added) == 3
+        assert added[0].arxiv_id == "2305.18290"
+        assert added[1].arxiv_id is None
+        assert added[2].arxiv_id is None
+
+    def test_raw_url_fallback_for_unparseable_refs(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Finding 1"],
+            source_references=["https://example.com/paper"],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added) == 1
+        assert added[0].url == "https://example.com/paper"
+        assert added[0].canonical_url == "https://example.com/paper"
+
+
+# ---------------------------------------------------------------------------
+# Excerpt bucketing
+# ---------------------------------------------------------------------------
+
+
+class TestMergeFindingsExcerptBucketing:
+    """Excerpts are matched to findings by source prefix, not broadcast."""
+
+    def test_excerpts_matched_by_arxiv_prefix(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["DPO result", "RLHF result"],
+            source_references=[
+                "Paper 1 | arxiv:2305.18290",
+                "Paper 2 | arxiv:2301.99999",
+            ],
+            excerpts=[
+                '[arxiv:2305.18290] "DPO achieves 7.8 on MT-Bench"',
+                '[arxiv:2301.99999] "RLHF requires 3x more compute"',
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added) == 2
+        assert len(added[0].excerpts) == 1
+        assert "DPO achieves" in added[0].excerpts[0]
+        assert len(added[1].excerpts) == 1
+        assert "RLHF requires" in added[1].excerpts[0]
+
+    def test_unmatched_excerpts_are_dropped(self):
+        """Unmatched excerpts (no source prefix) are dropped, not broadcast."""
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Finding 1", "Finding 2"],
+            source_references=["Paper 1 | arxiv:2305.18290", "Paper 2"],
+            excerpts=[
+                'Some unmatched excerpt without a bracket prefix',
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added[0].excerpts) == 0
+        assert len(added[1].excerpts) == 0
+
+    def test_no_excerpts_no_error(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["A finding"],
+            source_references=["A ref"],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert added[0].excerpts == []
+
+    def test_excerpts_matched_by_doi_prefix(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Result"],
+            source_references=["Paper | doi:10.1234/foo"],
+            excerpts=['[doi:10.1234/foo] "The main result is..."'],
+        )
+        added = ml.merge_findings(findings, iteration=0)
+        assert len(added[0].excerpts) == 1
+        assert "main result" in added[0].excerpts[0]
+
+
+# ---------------------------------------------------------------------------
+# Source-derived title
+# ---------------------------------------------------------------------------
+
+
+class TestMergeFindingsTitle:
+    """merge_findings prefers source-derived titles over finding truncation."""
+
+    def test_title_from_source_reference(self):
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["DPO achieves comparable performance to PPO"],
+            source_references=[
+                "Rafailov et al. (2023) Direct Preference Optimization | arxiv:2305.18290"
+            ],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert added[0].title == "Rafailov et al. (2023) Direct Preference Optimization"
+
+    def test_title_falls_back_to_truncated_finding(self):
+        """When source_reference has no human-readable title segment, use finding[:120]."""
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["A finding with no matching ref"],
+            source_references=[],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert added[0].title == "A finding with no matching ref"
+
+    def test_title_falls_back_when_ref_is_bare_url(self):
+        """A ref that is just a URL produces no title — falls back to finding."""
+        ml = ManagedLedger()
+        findings = SubagentFindings(
+            findings=["Something from example.com"],
+            source_references=["https://example.com/paper"],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        # parse_source_reference sees "https://..." as first segment, so title is None
+        assert added[0].title == "Something from example.com"
+
+    def test_title_truncated_at_120_chars_when_from_finding(self):
+        """Long finding text is truncated at 120 chars for title."""
+        ml = ManagedLedger()
+        long_finding = "A" * 200
+        findings = SubagentFindings(
+            findings=[long_finding],
+            source_references=[],
+        )
+        added = ml.merge_findings(findings, iteration=1)
+        assert len(added[0].title) == 120
+        assert added[0].title == "A" * 120
+
+
+# ---------------------------------------------------------------------------
+# ParsedReference title extraction
+# ---------------------------------------------------------------------------
+
+
+class TestParsedReferenceTitle:
+    """parse_source_reference extracts human-readable title from first pipe segment."""
+
+    def test_title_extracted_from_first_segment(self):
+        ref = "Rafailov et al. (2023) DPO | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290"
+        parsed = parse_source_reference(ref)
+        assert parsed.title == "Rafailov et al. (2023) DPO"
+
+    def test_no_title_when_first_segment_is_url(self):
+        ref = "https://example.com/paper | doi:10.1234/foo"
+        parsed = parse_source_reference(ref)
+        assert parsed.title is None
+
+    def test_no_title_for_empty_ref(self):
+        parsed = parse_source_reference("")
+        assert parsed.title is None
+
+    def test_title_with_single_segment_no_pipe(self):
+        ref = "Just a plain text citation"
+        parsed = parse_source_reference(ref)
+        assert parsed.title == "Just a plain text citation"
+
+    def test_title_stripped_of_whitespace(self):
+        ref = "  Author (2024) Title  | doi:10.1234/foo"
+        parsed = parse_source_reference(ref)
+        assert parsed.title == "Author (2024) Title"

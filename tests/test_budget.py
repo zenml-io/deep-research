@@ -34,7 +34,16 @@ class TestModelPricing:
             p.input_per_million_usd = 99.0  # type: ignore[misc]
 
     def test_default_table_has_expected_models(self):
-        expected = {
+        # Active V2 tier models
+        active = {
+            "anthropic:claude-sonnet-4-6",
+            "anthropic:claude-opus-4-6",
+            "google-gla:gemini-3.1-flash-lite-preview",
+            "google-gla:gemini-3.1-pro-preview",
+            "openai:gpt-5.4-mini",
+        }
+        # Legacy / fallback models
+        legacy = {
             "google-gla:gemini-2.5-flash",
             "google-gla:gemini-2.5-pro",
             "openai:gpt-4o-mini",
@@ -42,7 +51,7 @@ class TestModelPricing:
             "anthropic:claude-sonnet-4-20250514",
             "anthropic:claude-haiku-4-20250514",
         }
-        assert set(DEFAULT_MODEL_PRICING.keys()) == expected
+        assert set(DEFAULT_MODEL_PRICING.keys()) == active | legacy
 
 
 class TestLookupPricing:
@@ -443,3 +452,204 @@ class TestEdgeCases:
         # Budget only increased from the known model call
         assert budget.spent_usd == pytest.approx(known_cost)
         assert len(tracker.audit_trail) == 2
+
+
+# ---------------------------------------------------------------------------
+# Model-string resolution: every tier model resolves to non-zero pricing
+# ---------------------------------------------------------------------------
+
+
+class TestTierModelResolution:
+    """Every model string produced by TIER_DEFAULTS must resolve to a
+    non-``None`` pricing entry so that real runs never silently price at $0.
+    """
+
+    def _all_tier_model_strings(self) -> list[str]:
+        """Collect every model_string from all tiers (slots + overrides)."""
+        from research.config.defaults import TIER_DEFAULTS
+
+        strings: list[str] = []
+        for defaults in TIER_DEFAULTS.values():
+            for slot_config in defaults.slots.values():
+                strings.append(slot_config.model_string)
+            if defaults.second_reviewer is not None:
+                strings.append(defaults.second_reviewer.model_string)
+            if defaults.scope_override is not None:
+                strings.append(defaults.scope_override.model_string)
+        return strings
+
+    def test_all_tier_models_have_pricing(self):
+        for model_string in self._all_tier_model_strings():
+            pricing = lookup_pricing(model_string)
+            assert pricing is not None, (
+                f"Model {model_string!r} from TIER_DEFAULTS has no pricing entry"
+            )
+
+    def test_all_tier_models_have_nonzero_rates(self):
+        for model_string in self._all_tier_model_strings():
+            pricing = lookup_pricing(model_string)
+            assert pricing is not None
+            assert pricing.input_per_million_usd > 0 or pricing.output_per_million_usd > 0, (
+                f"Model {model_string!r} has zero rates"
+            )
+
+
+# ---------------------------------------------------------------------------
+# BudgetAwareAgent wiring
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetAwareAgent:
+    """Verify that the BudgetAwareAgent wrapper records usage correctly."""
+
+    def test_records_usage_when_tracker_active(self):
+        from research.agents._factory import BudgetAwareAgent
+        from research.flows.budget import set_active_tracker
+
+        budget = BudgetConfig(soft_budget_usd=10.0)
+        tracker = BudgetTracker(budget=budget)
+        set_active_tracker(tracker)
+
+        try:
+            # Fake result with usage attribute
+            class FakeUsage:
+                input_tokens = 1_000_000
+                output_tokens = 500_000
+
+            class FakeResult:
+                output = "test"
+                usage = FakeUsage()
+
+            class FakeWrapped:
+                def run_sync(self, *args, **kwargs):
+                    return FakeResult()
+
+            agent = BudgetAwareAgent(FakeWrapped(), model_name="anthropic:claude-sonnet-4-6")
+            result = agent.run_sync("test prompt")
+
+            assert result.output == "test"
+            assert len(tracker.audit_trail) == 1
+            assert tracker.audit_trail[0].model_name == "anthropic:claude-sonnet-4-6"
+            assert tracker.audit_trail[0].input_tokens == 1_000_000
+            assert tracker.audit_trail[0].output_tokens == 500_000
+            # 1M input @ $3.00/M + 500K output @ $15.00/M = $3.00 + $7.50 = $10.50
+            assert budget.spent_usd == pytest.approx(10.50)
+        finally:
+            set_active_tracker(None)
+
+    def test_no_tracker_no_error(self):
+        from research.agents._factory import BudgetAwareAgent
+        from research.flows.budget import set_active_tracker
+
+        set_active_tracker(None)
+
+        class FakeUsage:
+            input_tokens = 100
+            output_tokens = 50
+
+        class FakeResult:
+            output = "ok"
+            usage = FakeUsage()
+
+        class FakeWrapped:
+            def run_sync(self, *args, **kwargs):
+                return FakeResult()
+
+        agent = BudgetAwareAgent(FakeWrapped(), model_name="anthropic:claude-sonnet-4-6")
+        result = agent.run_sync("test prompt")
+        assert result.output == "ok"
+
+    def test_delegates_attribute_access(self):
+        from research.agents._factory import BudgetAwareAgent
+
+        class FakeWrapped:
+            some_attr = "hello"
+
+        agent = BudgetAwareAgent(FakeWrapped(), model_name="test:model")
+        assert agent.some_attr == "hello"
+
+    def test_callable_usage_method(self):
+        """Handles older PydanticAI where result.usage is a method."""
+        from research.agents._factory import BudgetAwareAgent
+        from research.flows.budget import set_active_tracker
+
+        budget = BudgetConfig(soft_budget_usd=10.0)
+        tracker = BudgetTracker(budget=budget)
+        set_active_tracker(tracker)
+
+        try:
+            class FakeUsage:
+                input_tokens = 500_000
+                output_tokens = 200_000
+
+            class FakeResult:
+                output = "test"
+                def usage(self):
+                    return FakeUsage()
+
+            class FakeWrapped:
+                def run_sync(self, *args, **kwargs):
+                    return FakeResult()
+
+            agent = BudgetAwareAgent(FakeWrapped(), model_name="openai:gpt-5.4-mini")
+            agent.run_sync("test")
+
+            assert len(tracker.audit_trail) == 1
+            assert tracker.audit_trail[0].input_tokens == 500_000
+        finally:
+            set_active_tracker(None)
+
+    def test_zero_tokens_skips_recording(self):
+        """No audit entry when both token counts are zero."""
+        from research.agents._factory import BudgetAwareAgent
+        from research.flows.budget import set_active_tracker
+
+        budget = BudgetConfig(soft_budget_usd=10.0)
+        tracker = BudgetTracker(budget=budget)
+        set_active_tracker(tracker)
+
+        try:
+            class FakeUsage:
+                input_tokens = 0
+                output_tokens = 0
+
+            class FakeResult:
+                output = "test"
+                usage = FakeUsage()
+
+            class FakeWrapped:
+                def run_sync(self, *args, **kwargs):
+                    return FakeResult()
+
+            agent = BudgetAwareAgent(FakeWrapped(), model_name="test:model")
+            agent.run_sync("test")
+
+            assert len(tracker.audit_trail) == 0
+            assert budget.spent_usd == 0.0
+        finally:
+            set_active_tracker(None)
+
+
+# ---------------------------------------------------------------------------
+# set/get active tracker
+# ---------------------------------------------------------------------------
+
+
+class TestActiveTracker:
+    def test_set_and_get(self):
+        from research.flows.budget import get_active_tracker, set_active_tracker
+
+        budget = BudgetConfig(soft_budget_usd=1.0)
+        tracker = BudgetTracker(budget=budget)
+
+        set_active_tracker(tracker)
+        assert get_active_tracker() is tracker
+
+        set_active_tracker(None)
+        assert get_active_tracker() is None
+
+    def test_defaults_to_none(self):
+        from research.flows.budget import set_active_tracker, get_active_tracker
+
+        set_active_tracker(None)  # reset
+        assert get_active_tracker() is None

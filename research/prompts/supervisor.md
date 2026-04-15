@@ -11,7 +11,9 @@ Each iteration, you receive a structured snapshot of the investigation state:
 - **Plan**: The decomposed investigation plan (goal, key questions, subtopics, success criteria)
 - **Ledger summary**: A windowed view of evidence collected so far — titles, synthesis snippets, source types, and coverage per subtopic
 - **Budget remaining**: How much cost budget (USD) is left for this run
-- **Iteration index**: Which iteration we're on (0-indexed) and the maximum allowed
+- **Iteration index**: Which iteration we're on (0-indexed)
+- **Max iterations**: The maximum number of iterations allowed for this run
+- **Ledger size**: Total number of evidence items collected so far across all iterations
 
 ## Your Task
 

@@ -571,6 +571,72 @@ class TestSupervisorCheckpoint:
         assert parsed["iteration_index"] == 2
         assert parsed["ledger_projection"] == "evidence here"
 
+    def test_run_supervisor_prompt_contains_max_iterations_and_ledger_size(
+        self, monkeypatch
+    ):
+        """max_iterations and ledger_size appear in the supervisor prompt JSON."""
+        import json
+
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.decisions import SupervisorDecision
+        from research.contracts.plan import ResearchPlan
+
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+
+        class MockResult:
+            output = SupervisorDecision(done=True, rationale="r")
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                self.last_prompt = prompt
+                return MockResult()
+
+        mock = MockAgent()
+        monkeypatch.setattr(mod, "build_supervisor_agent", lambda m: mock)
+        mod.run_supervisor(
+            brief, plan, "proj", 0.50, 3, "m",
+            max_iterations=12,
+            ledger_size=42,
+        )
+        parsed = json.loads(mock.last_prompt)
+        assert parsed["max_iterations"] == 12
+        assert parsed["ledger_size"] == 42
+
+    def test_run_supervisor_breadth_first_adds_mode(self, monkeypatch):
+        """breadth_first=True adds a 'mode' key to the prompt JSON."""
+        import json
+
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.decisions import SupervisorDecision
+        from research.contracts.plan import ResearchPlan
+
+        brief = ResearchBrief(topic="t", raw_request="t")
+        plan = ResearchPlan(goal="g", key_questions=["q"])
+
+        class MockResult:
+            output = SupervisorDecision(done=True, rationale="r")
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                self.last_prompt = prompt
+                return MockResult()
+
+        mock = MockAgent()
+        monkeypatch.setattr(mod, "build_supervisor_agent", lambda m: mock)
+
+        # Without breadth_first — no mode key
+        mod.run_supervisor(brief, plan, "", 0.1, 0, "m", breadth_first=False)
+        parsed = json.loads(mock.last_prompt)
+        assert "mode" not in parsed
+
+        # With breadth_first — mode key present
+        mod.run_supervisor(brief, plan, "", 0.1, 0, "m", breadth_first=True)
+        parsed = json.loads(mock.last_prompt)
+        assert parsed["mode"] == "breadth_first"
+
 
 # ---------------------------------------------------------------------------
 # Subagent checkpoint tests
@@ -643,6 +709,83 @@ class TestSubagentCheckpoint:
         fake_tools = ["tool1", "tool2"]
         mod.run_subagent(task, "m", tools=fake_tools)
         assert captured == [fake_tools]
+
+    def test_run_subagent_tools_reach_agent_constructor(self, monkeypatch):
+        """Tools flow from run_subagent through build_subagent_agent into the Agent() constructor."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.decisions import SubagentFindings
+        from research.contracts.plan import SubagentTask
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+
+        # Track what Agent() receives via kwargs
+        agent_constructor_kwargs: list[dict] = []
+
+        class MockResult:
+            output = SubagentFindings(findings=["f"])
+
+        class SpyAgent:
+            def __init__(self, model_name="test", **kwargs):
+                agent_constructor_kwargs.append(kwargs)
+
+            def run_sync(self, prompt):
+                return MockResult()
+
+        # Patch pydantic_ai.Agent to our spy
+        import pydantic_ai
+
+        monkeypatch.setattr(pydantic_ai, "Agent", SpyAgent)
+
+        # Re-import subagent module so _build_agent picks up the spy
+        _clear_modules(
+            "research.agents._factory",
+            "research.agents.subagent",
+        )
+        importlib.import_module("research.agents._factory")
+        mod2 = importlib.import_module("research.checkpoints.subagent")
+
+        fake_tools = [lambda: "search_tool", lambda: "fetch_tool"]
+        mod2.run_subagent(task, "test-model", tools=fake_tools)
+
+        assert len(agent_constructor_kwargs) >= 1
+        assert agent_constructor_kwargs[0].get("tools") is fake_tools
+
+    def test_run_subagent_no_tools_omits_from_constructor(self, monkeypatch):
+        """When tools=None, Agent() is called without a 'tools' kwarg."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.decisions import SubagentFindings
+        from research.contracts.plan import SubagentTask
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+
+        agent_constructor_kwargs: list[dict] = []
+
+        class MockResult:
+            output = SubagentFindings(findings=["f"])
+
+        class SpyAgent:
+            def __init__(self, model_name="test", **kwargs):
+                agent_constructor_kwargs.append(kwargs)
+
+            def run_sync(self, prompt):
+                return MockResult()
+
+        import pydantic_ai
+
+        monkeypatch.setattr(pydantic_ai, "Agent", SpyAgent)
+
+        _clear_modules(
+            "research.agents._factory",
+            "research.agents.subagent",
+        )
+        importlib.import_module("research.agents._factory")
+        mod2 = importlib.import_module("research.checkpoints.subagent")
+
+        mod2.run_subagent(task, "test-model", tools=None)
+
+        assert len(agent_constructor_kwargs) >= 1
+        # tools should NOT appear in kwargs when None
+        assert "tools" not in agent_constructor_kwargs[0]
 
     def test_run_subagent_graceful_degradation(self, monkeypatch):
         """On agent failure, returns degraded SubagentFindings instead of raising."""
@@ -943,6 +1086,8 @@ class TestCritiqueCheckpoint:
         """Standard tier: single reviewer, no second_model_name."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.plan import ResearchPlan
         from research.contracts.reports import (
             CritiqueDimensionScore,
             CritiqueReport,
@@ -950,6 +1095,8 @@ class TestCritiqueCheckpoint:
         )
 
         draft = DraftReport(content="# Report", sections=["Report"])
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
         expected = CritiqueReport(
             dimensions=[
                 CritiqueDimensionScore(
@@ -968,7 +1115,7 @@ class TestCritiqueCheckpoint:
                 return MockResult()
 
         monkeypatch.setattr(mod, "build_reviewer_agent", lambda model: MockAgent())
-        result = mod.run_critique(draft, "test-model")
+        result = mod.run_critique(draft, plan, ledger, "test-model")
         assert result is expected
         assert result.require_more_research is False
         assert result.issues == ["minor issue"]
@@ -977,6 +1124,8 @@ class TestCritiqueCheckpoint:
         """Deep tier: two reviewers, merged (averaged scores, union of issues)."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.plan import ResearchPlan
         from research.contracts.reports import (
             CritiqueDimensionScore,
             CritiqueReport,
@@ -984,6 +1133,8 @@ class TestCritiqueCheckpoint:
         )
 
         draft = DraftReport(content="# Report", sections=["Report"])
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
 
         critique_a = CritiqueReport(
             dimensions=[
@@ -1027,7 +1178,7 @@ class TestCritiqueCheckpoint:
             return MockAgent()
 
         monkeypatch.setattr(mod, "build_reviewer_agent", make_agent)
-        result = mod.run_critique(draft, "model-a", second_model_name="model-b")
+        result = mod.run_critique(draft, plan, ledger, "model-a", second_model_name="model-b")
 
         # Scores averaged for completeness
         dim_map = {d.dimension: d for d in result.dimensions}
@@ -1053,6 +1204,8 @@ class TestCritiqueCheckpoint:
         """Deep tier: one reviewer fails, other succeeds."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.plan import ResearchPlan
         from research.contracts.reports import (
             CritiqueDimensionScore,
             CritiqueReport,
@@ -1060,6 +1213,8 @@ class TestCritiqueCheckpoint:
         )
 
         draft = DraftReport(content="# Report", sections=[])
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
         good_critique = CritiqueReport(
             dimensions=[
                 CritiqueDimensionScore(
@@ -1088,7 +1243,7 @@ class TestCritiqueCheckpoint:
             return MockAgent()
 
         monkeypatch.setattr(mod, "build_reviewer_agent", make_agent)
-        result = mod.run_critique(draft, "model-a", second_model_name="model-b")
+        result = mod.run_critique(draft, plan, ledger, "model-a", second_model_name="model-b")
 
         # Should return the surviving critique
         assert result.require_more_research is False
@@ -1099,9 +1254,13 @@ class TestCritiqueCheckpoint:
         """Deep tier: both reviewers fail => RuntimeError."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
         draft = DraftReport(content="# Report", sections=[])
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
 
         def make_agent(model_name):
             class FailingAgent:
@@ -1113,7 +1272,7 @@ class TestCritiqueCheckpoint:
         monkeypatch.setattr(mod, "build_reviewer_agent", make_agent)
 
         with pytest.raises(RuntimeError, match="Both reviewers failed"):
-            mod.run_critique(draft, "model-a", second_model_name="model-b")
+            mod.run_critique(draft, plan, ledger, "model-a", second_model_name="model-b")
 
 
 # ---------------------------------------------------------------------------
@@ -1143,6 +1302,7 @@ class TestFinalizeCheckpoint:
         """run_finalize calls finalizer agent (str output) and wraps in FinalReport."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
         from research.contracts.reports import (
             CritiqueDimensionScore,
             CritiqueReport,
@@ -1160,6 +1320,7 @@ class TestFinalizeCheckpoint:
             require_more_research=False,
             issues=["fix typo"],
         )
+        ledger = EvidenceLedger()
 
         class MockResult:
             output = "## Final Report\nRevised body"
@@ -1170,7 +1331,7 @@ class TestFinalizeCheckpoint:
 
         monkeypatch.setattr(mod, "build_finalizer_agent", lambda model: MockAgent())
         result = mod.run_finalize(
-            draft, critique, "test-model", stop_reason="converged"
+            draft, critique, ledger, "test-model", stop_reason="converged"
         )
         assert isinstance(result, FinalReport)
         assert result.content == "## Final Report\nRevised body"
@@ -1181,6 +1342,7 @@ class TestFinalizeCheckpoint:
         """On agent failure, run_finalize returns None (not crash)."""
         mod, _ = self._load(monkeypatch)
 
+        from research.contracts.evidence import EvidenceLedger
         from research.contracts.reports import (
             CritiqueDimensionScore,
             CritiqueReport,
@@ -1196,6 +1358,7 @@ class TestFinalizeCheckpoint:
             ],
             require_more_research=True,
         )
+        ledger = EvidenceLedger()
 
         def make_failing(model_name):
             class FailingAgent:
@@ -1205,7 +1368,7 @@ class TestFinalizeCheckpoint:
             return FailingAgent()
 
         monkeypatch.setattr(mod, "build_finalizer_agent", make_failing)
-        result = mod.run_finalize(draft, critique, "test-model")
+        result = mod.run_finalize(draft, critique, ledger, "test-model")
         assert result is None
 
 
@@ -1516,3 +1679,59 @@ class TestAssembleCheckpoint:
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.ledger.items == []
         assert pkg.draft is draft
+
+    def test_underlength_warning_for_short_report_with_evidence(self, monkeypatch):
+        """Assembly logs warning when report is short but ledger has substantial evidence."""
+        import logging
+
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceItem, EvidenceLedger
+        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import DraftReport
+
+        # Build a ledger with 6 items (above the threshold of 5)
+        items = [
+            EvidenceItem(
+                evidence_id=f"ev_{i:03d}",
+                title=f"Paper {i}",
+                synthesis=f"Finding {i}",
+                iteration_added=0,
+            )
+            for i in range(6)
+        ]
+        ledger = EvidenceLedger(items=items)
+
+        # Short report: well under 300 words but all cited
+        draft = DraftReport(
+            content="Short summary [ev_000] [ev_001] [ev_002].",
+            sections=["Summary"],
+        )
+        meta = RunMetadata(
+            run_id="run-short", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+
+        with monkeypatch.context() as m:
+            warnings_logged: list[str] = []
+            original_warning = logging.getLogger("research.checkpoints.assemble").warning
+
+            def capture_warning(msg, *args):
+                warnings_logged.append(msg % args)
+
+            m.setattr(
+                logging.getLogger("research.checkpoints.assemble"),
+                "warning",
+                capture_warning,
+            )
+
+            pkg = mod.assemble_package(
+                meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.0
+            )
+
+        # Package should still be produced (non-fatal)
+        assert isinstance(pkg, InvestigationPackage)
+        # Warning should mention short report
+        assert any("short" in w.lower() or "words" in w.lower() for w in warnings_logged)
