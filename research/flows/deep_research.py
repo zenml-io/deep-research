@@ -66,13 +66,18 @@ class FinalizerError(Exception):
 
 
 def _fan_out_subagents(tasks, model_name: str, max_parallel: int):
-    """Fan-out subagent tasks in batches of max_parallel, never spilling across iterations."""
+    """Fan-out subagent tasks in batches of max_parallel, never spilling across iterations.
+
+    Returns (results, submit_handles) — callers need the handles for DAG edge tracking.
+    """
     results = []
+    all_handles = []
     for batch_start in range(0, len(tasks), max_parallel):
         batch = tasks[batch_start : batch_start + max_parallel]
         handles = [run_subagent.submit(t, model_name) for t in batch]
+        all_handles.extend(handles)
         results.extend(h.load() for h in handles)
-    return results
+    return results, all_handles
 
 
 def _run_supervisor_with_retry(
@@ -92,9 +97,12 @@ def _run_supervisor_with_retry(
 
     Each attempt uses a distinct checkpoint ``id`` so Kitaru does not
     serve a cached failure for the retry.
+
+    Returns (decision, submit_handles) — callers need the handles for DAG edge tracking.
     """
+    handles: list = []
     try:
-        return run_supervisor.submit(
+        h = run_supervisor.submit(
             brief,
             plan,
             projection,
@@ -103,7 +111,9 @@ def _run_supervisor_with_retry(
             gen_model,
             breadth_first=breadth_first,
             id=f"supervisor_{iteration_index}_a1",
-        ).load()
+        )
+        handles.append(h)
+        return h.load(), handles
     except Exception as first_err:
         logger.warning(
             "Supervisor failed (attempt 1/2) at iteration %d: %s",
@@ -111,7 +121,7 @@ def _run_supervisor_with_retry(
             first_err,
         )
         try:
-            return run_supervisor.submit(
+            h = run_supervisor.submit(
                 brief,
                 plan,
                 projection,
@@ -120,7 +130,9 @@ def _run_supervisor_with_retry(
                 gen_model,
                 breadth_first=breadth_first,
                 id=f"supervisor_{iteration_index}_a2",
-            ).load()
+            )
+            handles.append(h)
+            return h.load(), handles
         except Exception as second_err:
             raise SupervisorError(
                 f"Supervisor failed twice at iteration {iteration_index}: "
@@ -137,8 +149,15 @@ def _run_iteration(
     iteration_index: int,
     started_at: str,
 ):
-    """Execute one research iteration: supervisor -> subagents -> record."""
-    clock = snapshot_wall_clock.submit(started_at).load()
+    """Execute one research iteration: supervisor -> subagents -> record.
+
+    Returns (record, convergence, submit_handles) — callers need the handles for DAG edge tracking.
+    """
+    iter_handles: list = []
+
+    clock_h = snapshot_wall_clock.submit(started_at)
+    iter_handles.append(clock_h)
+    clock = clock_h.load()
 
     gen_model = cfg.slots["generator"].model_string
     sub_model = cfg.slots["subagent"].model_string
@@ -152,7 +171,7 @@ def _run_iteration(
     )
     remaining = cfg.budget.soft_budget_usd - cfg.budget.spent_usd
 
-    decision = _run_supervisor_with_retry(
+    decision, sup_handles = _run_supervisor_with_retry(
         brief,
         plan,
         projection,
@@ -162,11 +181,13 @@ def _run_iteration(
         ledger,
         breadth_first=cfg.breadth_first,
     )
+    iter_handles.extend(sup_handles)
 
     # Fan-out subagents (batched by max_parallel_subagents)
-    subagent_results = _fan_out_subagents(
+    subagent_results, sub_handles = _fan_out_subagents(
         decision.subagent_tasks, sub_model, cfg.max_parallel_subagents
     )
+    iter_handles.extend(sub_handles)
 
     record = IterationRecord(
         iteration_index=iteration_index,
@@ -186,7 +207,7 @@ def _run_iteration(
         respect_supervisor_done=cfg.respect_supervisor_done,
     )
 
-    return record, convergence
+    return record, convergence, iter_handles
 
 
 @flow
@@ -198,17 +219,30 @@ def deep_research(
     """Orchestrate a full deep-research investigation.
 
     Thin flow — all logic lives in checkpoints and pure helpers.
+
+    All submit handles are collected into ``all_handles`` and passed as
+    ``after=`` to the final ``assemble_package.submit()`` call.  This
+    creates explicit DAG edges so that Kitaru's ``.wait()`` finds exactly
+    one terminal step and extracts the ``InvestigationPackage`` correctly.
     """
     cfg = config or ResearchConfig.for_tier(tier)
-    stamp = stamp_run_metadata.submit().load()
+    all_handles: list = []
+
+    stamp_h = stamp_run_metadata.submit()
+    all_handles.append(stamp_h)
+    stamp = stamp_h.load()
 
     # Phase 1: Scope
     gen_model = cfg.slots["generator"].model_string
     scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
-    brief = run_scope.submit(question, scope_model).load()
+    scope_h = run_scope.submit(question, scope_model)
+    all_handles.append(scope_h)
+    brief = scope_h.load()
 
     # Phase 2: Plan
-    plan = run_plan.submit(brief, gen_model).load()
+    plan_h = run_plan.submit(brief, gen_model)
+    all_handles.append(plan_h)
+    plan = plan_h.load()
 
     # Phase 3: Iteration loop
     ledger = EvidenceLedger(items=[])
@@ -216,9 +250,10 @@ def deep_research(
     stop_reason: str | None = None
 
     for i in range(cfg.max_iterations):
-        record, convergence = _run_iteration(
+        record, convergence, iter_handles = _run_iteration(
             cfg, brief, plan, ledger, i, stamp.started_at
         )
+        all_handles.extend(iter_handles)
         iterations.append(record)
 
         if convergence.should_stop:
@@ -226,12 +261,16 @@ def deep_research(
             break
 
     # Phase 4: Draft
-    draft = run_draft.submit(brief, plan, ledger, gen_model).load()
+    draft_h = run_draft.submit(brief, plan, ledger, gen_model)
+    all_handles.append(draft_h)
+    draft = draft_h.load()
 
     # Phase 5: Critique
     reviewer_model = cfg.slots["reviewer"].model_string
     second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-    critique = run_critique.submit(draft, reviewer_model, second).load()
+    critique_h = run_critique.submit(draft, reviewer_model, second)
+    all_handles.append(critique_h)
+    critique = critique_h.load()
 
     # Phase 6: Supplemental loop (capped at max_supplemental_loops)
     supplemental_loops = 0
@@ -241,16 +280,27 @@ def deep_research(
     ):
         supplemental_loops += 1
         idx = len(iterations)
-        record, _conv = _run_iteration(cfg, brief, plan, ledger, idx, stamp.started_at)
+        record, _conv, iter_handles = _run_iteration(
+            cfg, brief, plan, ledger, idx, stamp.started_at
+        )
+        all_handles.extend(iter_handles)
         iterations.append(record)
-        draft = run_draft.submit(brief, plan, ledger, gen_model).load()
-        critique = run_critique.submit(draft, reviewer_model, second).load()
+
+        draft_h = run_draft.submit(brief, plan, ledger, gen_model)
+        all_handles.append(draft_h)
+        draft = draft_h.load()
+
+        critique_h = run_critique.submit(draft, reviewer_model, second)
+        all_handles.append(critique_h)
+        critique = critique_h.load()
         # Second require_more_research is recorded but the while guard
         # stops because supplemental_loops == max_supplemental_loops.
 
     # Phase 7: Finalize
     try:
-        final_report = run_finalize.submit(draft, critique, gen_model).load()
+        finalize_h = run_finalize.submit(draft, critique, gen_model)
+        all_handles.append(finalize_h)
+        final_report = finalize_h.load()
     except Exception as finalize_err:
         logger.warning("Finalizer failed: %s", finalize_err)
         final_report = None
@@ -268,7 +318,10 @@ def deep_research(
             )
 
     # Phase 8: Assemble
-    fin = finalize_run_metadata.submit(stamp.started_at).load()
+    fin_h = finalize_run_metadata.submit(stamp.started_at)
+    all_handles.append(fin_h)
+    fin = fin_h.load()
+
     run_metadata = RunMetadata(
         run_id=stamp.run_id,
         tier=cfg.tier,
@@ -280,10 +333,10 @@ def deep_research(
     )
 
     # Return the submit handle (without .load()) so Kitaru's DAG registers
-    # this checkpoint as the terminal step.  All intermediate checkpoints
-    # use .submit().load() which materialises immediately but severs the
-    # DAG edge.  Keeping the final step un-loaded lets .wait() find exactly
-    # one terminal step and extract the InvestigationPackage correctly.
+    # this checkpoint as the sole terminal step.  The ``after=all_handles``
+    # creates explicit dependency edges from every prior checkpoint to this
+    # one, ensuring all other steps appear in upstream_steps and only
+    # assemble_package is terminal.  This lets .wait() extract the result.
     return assemble_package.submit(
         metadata=run_metadata,
         brief=brief,
@@ -294,4 +347,5 @@ def deep_research(
         critique=critique,
         final_report=final_report,
         grounding_min_ratio=cfg.grounding_min_ratio,
+        after=all_handles,
     )

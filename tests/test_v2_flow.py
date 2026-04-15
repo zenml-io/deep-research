@@ -101,6 +101,8 @@ def _install_stubs(monkeypatch):
 
         def _add_submit(f):
             def submit(*args, **kw):
+                kw.pop("after", None)  # strip DAG-edge param before forwarding
+                kw.pop("id", None)
                 result = f(*args, **kw)
                 return types.SimpleNamespace(load=lambda: result)
 
@@ -185,8 +187,15 @@ def with_submit(fn):
 
     Unlike ``make_checkpoint_stub``, this routes .submit().load() through
     the original function so side-effects (call tracking, counters) fire.
+    Strips ``after=`` and ``id=`` kwargs before forwarding to the function.
     """
-    fn.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: fn(*a, **kw))
+
+    def _submit(*a, **kw):
+        kw.pop("after", None)
+        kw.pop("id", None)
+        return types.SimpleNamespace(load=lambda: fn(*a, **kw))
+
+    fn.submit = _submit
     return fn
 
 
@@ -293,9 +302,12 @@ def _make_passthrough_assemble():
             final_report=final_report,
         )
 
-    assemble_stub.submit = lambda *a, **kw: types.SimpleNamespace(
-        load=lambda: assemble_stub(*a, **kw)
-    )
+    def _submit_assemble(*a, **kw):
+        kw.pop("after", None)
+        kw.pop("id", None)
+        return types.SimpleNamespace(load=lambda: assemble_stub(*a, **kw))
+
+    assemble_stub.submit = _submit_assemble
     return assemble_stub
 
 
