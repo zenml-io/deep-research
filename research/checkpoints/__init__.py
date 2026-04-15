@@ -21,6 +21,7 @@ __all__ = [
     "run_scope",
     "run_subagent",
     "run_supervisor",
+    "run_judge",
 ]
 
 _METADATA_NAMES = {
@@ -39,6 +40,7 @@ _SUBAGENT_NAMES = {"run_subagent"}
 _DRAFT_NAMES = {"run_draft"}
 _CRITIQUE_NAMES = {"run_critique"}
 _FINALIZE_NAMES = {"run_finalize"}
+_JUDGE_NAMES = {"run_judge"}
 _ASSEMBLE_NAMES = {"assemble_package", "GroundingError", "CitationResolutionError"}
 
 
@@ -81,6 +83,10 @@ def __getattr__(name: str):
         from research.checkpoints import finalize
 
         return getattr(finalize, name)
+    if name in _JUDGE_NAMES:
+        from research.checkpoints import judge
+
+        return getattr(judge, name)
     if name in _ASSEMBLE_NAMES:
         from research.checkpoints import assemble
 

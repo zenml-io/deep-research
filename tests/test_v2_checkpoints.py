@@ -419,6 +419,7 @@ class TestCheckpointsInit:
             "run_scope",
             "run_supervisor",
             "run_subagent",
+            "run_judge",
         }
         assert set(mod.__all__) == expected
 
