@@ -82,11 +82,18 @@ def _build_exa() -> SearchProvider:
     return ExaSearchProvider()
 
 
+def _build_tavily() -> SearchProvider:
+    from research.providers.tavily import TavilySearchProvider
+
+    return TavilySearchProvider()
+
+
 _KNOWN_PROVIDERS: dict[str, Callable[[], SearchProvider]] = {
     "brave": _build_brave,
     "arxiv": _build_arxiv,
     "semantic_scholar": _build_semantic_scholar,
     "exa": _build_exa,
+    "tavily": _build_tavily,
 }
 
 

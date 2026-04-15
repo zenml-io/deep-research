@@ -108,16 +108,17 @@ arXiv and Semantic Scholar work without API keys. For broader web search, add:
 ```bash
 export BRAVE_API_KEY="..."
 export EXA_API_KEY="..."
+export TAVILY_API_KEY="tvly-..."
 export SEMANTIC_SCHOLAR_API_KEY="..."   # optional, increases rate limits
 ```
 
 Control which providers are active:
 
 ```bash
-export RESEARCH_ENABLED_PROVIDERS="arxiv,semantic_scholar,exa,brave"
+export RESEARCH_ENABLED_PROVIDERS="brave,exa,tavily,arxiv,semantic_scholar"
 ```
 
-Default: `brave,exa,arxiv,semantic_scholar` (Brave/Exa no-op gracefully when API keys are absent).
+Default: `brave,exa,tavily,arxiv,semantic_scholar` (Brave/Exa/Tavily no-op gracefully when API keys are absent).
 
 ### 4. Connect Logfire (optional)
 
@@ -261,7 +262,7 @@ All settings use the `RESEARCH_` prefix, loaded via `pydantic-settings`.
 | `RESEARCH_DEFAULT_TIER` | `standard` | Default tier when not specified |
 | `RESEARCH_DEFAULT_COST_BUDGET_USD` | `0.10` | Soft cost ceiling per run |
 | `RESEARCH_DAILY_COST_LIMIT_USD` | `10.00` | Global daily ceiling |
-| `RESEARCH_ENABLED_PROVIDERS` | `brave,exa,arxiv,semantic_scholar` | Comma-separated search providers |
+| `RESEARCH_ENABLED_PROVIDERS` | `brave,exa,tavily,arxiv,semantic_scholar` | Comma-separated search providers |
 | `RESEARCH_MAX_PARALLEL_SUBAGENTS` | `3` | Concurrent subagents per iteration |
 | `RESEARCH_LEDGER_WINDOW_ITERATIONS` | `3` | How many recent iterations shown in full to agents |
 | `RESEARCH_GROUNDING_MIN_RATIO` | `0.7` | Minimum citation density for assembly |
@@ -279,6 +280,7 @@ All settings use the `RESEARCH_` prefix, loaded via `pydantic-settings`.
 | OpenAI (GPT) | `OPENAI_API_KEY` | Reviewer |
 | Brave Search | `BRAVE_API_KEY` | Web search provider |
 | Exa | `EXA_API_KEY` | Web search provider |
+| Tavily | `TAVILY_API_KEY` | Web search provider |
 | Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | Academic search provider (optional, increases rate limits) |
 
 ### Model string format

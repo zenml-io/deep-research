@@ -316,13 +316,14 @@ class TestProviderRegistry:
         reg = ProviderRegistry(self._make_config(["arxiv"]))
         assert reg.get_provider("brave") is None
 
-    def test_all_four_providers_can_be_registered(self, monkeypatch):
+    def test_all_five_providers_can_be_registered(self, monkeypatch):
         monkeypatch.setenv("BRAVE_API_KEY", "k")
         monkeypatch.setenv("EXA_API_KEY", "k")
+        monkeypatch.setenv("TAVILY_API_KEY", "k")
         reg = ProviderRegistry(
-            self._make_config(["brave", "exa", "arxiv", "semantic_scholar"])
+            self._make_config(["brave", "exa", "tavily", "arxiv", "semantic_scholar"])
         )
-        assert len(reg.all_providers) == 4
+        assert len(reg.all_providers) == 5
 
     def test_empty_enabled_providers(self):
         settings = ResearchSettings(enabled_providers="")
@@ -358,6 +359,11 @@ class TestSearchProviderProtocol:
         from research.providers.exa_provider import ExaSearchProvider
 
         assert isinstance(ExaSearchProvider(), SearchProvider)
+
+    def test_tavily_is_search_provider(self):
+        from research.providers.tavily import TavilySearchProvider
+
+        assert isinstance(TavilySearchProvider(), SearchProvider)
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +701,161 @@ class TestExaProvider:
         async def _run():
             with patch(
                 "research.providers.exa_provider.request_with_retry",
+                side_effect=mock_retry,
+            ):
+                return await p.search(["test"])
+
+        results = asyncio.run(_run())
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# TavilySearchProvider
+# ---------------------------------------------------------------------------
+
+
+class TestTavilyProvider:
+    def test_unavailable_without_key(self, monkeypatch):
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        from research.providers.tavily import TavilySearchProvider
+
+        assert TavilySearchProvider().is_available() is False
+
+    def test_available_with_key(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+        from research.providers.tavily import TavilySearchProvider
+
+        assert TavilySearchProvider().is_available() is True
+
+    def test_returns_empty_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        from research.providers.tavily import TavilySearchProvider
+
+        p = TavilySearchProvider()
+        results = asyncio.run(p.search(["test query"]))
+        assert results == []
+
+    def test_parses_tavily_response(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+        from research.providers.tavily import TavilySearchProvider
+
+        tavily_payload = {
+            "results": [
+                {
+                    "title": "Tavily Result",
+                    "url": "https://example.com/tavily",
+                    "content": "Tavily snippet text",
+                    "score": 0.95,
+                },
+            ]
+        }
+        mock_response = httpx.Response(
+            200,
+            json=tavily_payload,
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+        )
+
+        async def mock_retry(*args, **kwargs):
+            return mock_response
+
+        p = TavilySearchProvider()
+
+        async def _run():
+            with patch(
+                "research.providers.tavily.request_with_retry",
+                side_effect=mock_retry,
+            ):
+                return await p.search(["test"])
+
+        results = asyncio.run(_run())
+
+        assert len(results) == 1
+        assert results[0].title == "Tavily Result"
+        assert results[0].snippet == "Tavily snippet text"
+        assert results[0].provider == "tavily"
+        assert results[0].raw_metadata["score"] == 0.95
+
+    def test_passes_time_range_for_recency(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+        from research.providers.tavily import TavilySearchProvider
+
+        captured_kwargs: list[dict] = []
+
+        async def mock_retry(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", "https://api.tavily.com/search"),
+            )
+
+        p = TavilySearchProvider()
+
+        async def _run():
+            with patch(
+                "research.providers.tavily.request_with_retry",
+                side_effect=mock_retry,
+            ):
+                return await p.search(["test"], recency_days=7)
+
+        asyncio.run(_run())
+
+        assert len(captured_kwargs) == 1
+        body = captured_kwargs[0]["json"]
+        assert body["time_range"] == "week"
+
+    def test_recency_mapping(self):
+        from research.providers.tavily import _recency_to_time_range
+
+        assert _recency_to_time_range(1) == "day"
+        assert _recency_to_time_range(3) == "week"
+        assert _recency_to_time_range(7) == "week"
+        assert _recency_to_time_range(14) == "month"
+        assert _recency_to_time_range(30) == "month"
+        assert _recency_to_time_range(90) == "year"
+        assert _recency_to_time_range(365) == "year"
+        assert _recency_to_time_range(999) == "year"
+
+    def test_caps_max_results_at_20(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+        from research.providers.tavily import TavilySearchProvider
+
+        captured_kwargs: list[dict] = []
+
+        async def mock_retry(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", "https://api.tavily.com/search"),
+            )
+
+        p = TavilySearchProvider()
+
+        async def _run():
+            with patch(
+                "research.providers.tavily.request_with_retry",
+                side_effect=mock_retry,
+            ):
+                return await p.search(["test"], max_results_per_query=50)
+
+        asyncio.run(_run())
+
+        body = captured_kwargs[0]["json"]
+        assert body["max_results"] == 20
+
+    def test_handles_exception_gracefully(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+        from research.providers.tavily import TavilySearchProvider
+
+        async def mock_retry(*args, **kwargs):
+            raise httpx.ConnectError("connection refused")
+
+        p = TavilySearchProvider()
+
+        async def _run():
+            with patch(
+                "research.providers.tavily.request_with_retry",
                 side_effect=mock_retry,
             ):
                 return await p.search(["test"])

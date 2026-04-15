@@ -48,6 +48,7 @@ arXiv and Semantic Scholar work without keys. For broader web search:
 
 ```bash
 export EXA_API_KEY="..."
+export TAVILY_API_KEY="tvly-..."
 export BRAVE_API_KEY="..."
 export SEMANTIC_SCHOLAR_API_KEY="..."  # optional, increases rate limits
 ```
@@ -55,7 +56,7 @@ export SEMANTIC_SCHOLAR_API_KEY="..."  # optional, increases rate limits
 Enable additional providers via:
 
 ```bash
-export RESEARCH_ENABLED_PROVIDERS="arxiv,semantic_scholar,exa,brave"
+export RESEARCH_ENABLED_PROVIDERS="brave,exa,tavily,arxiv,semantic_scholar"
 ```
 
 ### 4. Connect Logfire (optional)
@@ -116,7 +117,7 @@ The system has three layers:
 - **`research/contracts/`** — All Pydantic data models. `StrictBase` (`extra="forbid"`) for data contracts, regular `BaseModel` for configs.
 - **`research/config/`** — `ResearchSettings` (env vars with `RESEARCH_` prefix), `ResearchConfig` (frozen runtime config), tier defaults. `ResearchConfig.for_tier(tier)` is the canonical factory.
 - **`research/ledger/`** — Pure functions, no LLM calls. `ManagedLedger` with append-only dedup. Dedup precedence: DOI > arXiv ID > canonical URL. Windowed projection for context management.
-- **`research/providers/`** — `SearchProvider` Protocol + `ProviderRegistry`. Four built-in providers: brave, arxiv, semantic_scholar, exa. Plus `AgentToolSurface` (search/fetch/code_exec as PydanticAI tools).
+- **`research/providers/`** — `SearchProvider` Protocol + `ProviderRegistry`. Five built-in providers: brave, exa, tavily, arxiv, semantic_scholar. Plus `AgentToolSurface` (search/fetch/code_exec as PydanticAI tools).
 - **`research/flows/convergence.py`** — Four stop rules in priority order: budget > time > supervisor done > max iterations.
 - **`research/prompts/`** — System prompts as `.md` files with SHA-256 hash tracking via `PROMPTS` registry.
 
@@ -159,7 +160,7 @@ All `RESEARCH_*` settings are loaded via pydantic-settings (`ResearchSettings`):
 - `RESEARCH_DEFAULT_TIER` — Default tier when not specified (default: `standard`)
 - `RESEARCH_DEFAULT_COST_BUDGET_USD` — Soft cost ceiling per run (default: `0.10`)
 - `RESEARCH_DAILY_COST_LIMIT_USD` — Global daily ceiling (default: `10.00`)
-- `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `brave,exa,arxiv,semantic_scholar`)
+- `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `brave,exa,tavily,arxiv,semantic_scholar`)
 - `RESEARCH_MAX_PARALLEL_SUBAGENTS` — Concurrent subagents per iteration (default: `3`)
 - `RESEARCH_LEDGER_WINDOW_ITERATIONS` — Recent iterations shown in full to agents (default: `3`)
 - `RESEARCH_GROUNDING_MIN_RATIO` — Minimum citation density for assembly (default: `0.7`)

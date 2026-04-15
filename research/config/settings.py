@@ -31,7 +31,7 @@ class ResearchSettings(BaseSettings):
     sandbox_enabled: bool = False
     sandbox_backend: str | None = None
     max_parallel_subagents: int = 3
-    enabled_providers: str = "brave,exa,arxiv,semantic_scholar"
+    enabled_providers: str = "brave,exa,tavily,arxiv,semantic_scholar"
 
 
 class ResearchConfig(BaseModel):
