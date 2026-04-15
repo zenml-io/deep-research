@@ -364,5 +364,6 @@ def deep_research(
         critique=critique,
         final_report=final_report,
         grounding_min_ratio=cfg.grounding_min_ratio,
+        strict_grounding=cfg.strict_grounding,
         after=all_handles,
     )

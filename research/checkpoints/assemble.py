@@ -116,6 +116,7 @@ def assemble_package(
     critique: CritiqueReport | None,
     final_report: FinalReport | None,
     grounding_min_ratio: float = 0.7,
+    strict_grounding: bool = False,
 ) -> InvestigationPackage:
     """Checkpoint: assemble the final InvestigationPackage.
 
@@ -123,6 +124,11 @@ def assemble_package(
     1. Citation resolution: all [evidence_id] refs must exist in ledger
     2. Grounding density: ratio of grounded sentences >= grounding_min_ratio
     3. Schema validation: InvestigationPackage must be valid
+
+    When ``strict_grounding`` is False (the default), a grounding density
+    below threshold logs a warning but does NOT crash.  The density is
+    always recorded in ``metadata.grounding_density`` for downstream
+    consumers to inspect.
 
     Args:
         metadata: Run-level metadata.
@@ -134,13 +140,16 @@ def assemble_package(
         critique: Critique report (may be None).
         final_report: Final report (may be None).
         grounding_min_ratio: Minimum grounding density (0.0-1.0).
+        strict_grounding: If True, raise GroundingError when density is
+            below threshold.  If False (default), log a warning instead.
 
     Returns:
         A valid InvestigationPackage.
 
     Raises:
         CitationResolutionError: If any citation IDs don't resolve.
-        GroundingError: If grounding density is below threshold.
+        GroundingError: Only when strict_grounding=True and density is
+            below threshold.
     """
     # Determine which report to check (prefer final, fall back to draft)
     report_content = None
@@ -148,6 +157,8 @@ def assemble_package(
         report_content = final_report.content
     elif draft is not None:
         report_content = draft.content
+
+    grounding_density: float | None = None
 
     # Run grounding checks on report content
     if report_content is not None:
@@ -167,25 +178,38 @@ def assemble_package(
                     f"Unresolved citation IDs: {sorted(unresolved_ids)}"
                 )
 
-            density = _compute_grounding_density(report_content, valid_ids)
-            if density < grounding_min_ratio:
-                raise GroundingError(
-                    f"Grounding density {density:.2f} below threshold "
-                    f"{grounding_min_ratio:.2f}"
-                )
+            grounding_density = _compute_grounding_density(report_content, valid_ids)
 
-            logger.info(
-                "Grounding density: %.2f (threshold: %.2f)",
-                density,
-                grounding_min_ratio,
-            )
+            if grounding_density < grounding_min_ratio:
+                if strict_grounding:
+                    raise GroundingError(
+                        f"Grounding density {grounding_density:.2f} below threshold "
+                        f"{grounding_min_ratio:.2f}"
+                    )
+                logger.warning(
+                    "Grounding density %.2f below threshold %.2f "
+                    "(strict_grounding=False, proceeding anyway)",
+                    grounding_density,
+                    grounding_min_ratio,
+                )
+            else:
+                logger.info(
+                    "Grounding density: %.2f (threshold: %.2f)",
+                    grounding_density,
+                    grounding_min_ratio,
+                )
 
     # Record prompt hashes
     prompt_hashes = get_prompt_hashes()
 
+    # Stamp grounding density into metadata (copy with updated field)
+    stamped_metadata = metadata.model_copy(
+        update={"grounding_density": grounding_density}
+    )
+
     return InvestigationPackage(
         schema_version="1.0",
-        metadata=metadata,
+        metadata=stamped_metadata,
         brief=brief,
         plan=plan,
         ledger=ledger,

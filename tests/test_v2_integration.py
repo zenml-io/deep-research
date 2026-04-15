@@ -239,6 +239,7 @@ def _make_passthrough_assemble():
         critique,
         final_report,
         grounding_min_ratio=0.7,
+        strict_grounding=False,
     ):
         return InvestigationPackage(
             metadata=metadata,

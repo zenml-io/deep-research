@@ -257,6 +257,7 @@ class TestGroundingDensity:
                 critique=None,
                 final_report=bad_report,
                 grounding_min_ratio=0.7,
+                strict_grounding=True,
             )
 
     def test_well_grounded_report_passes_assembly(self) -> None:
@@ -312,6 +313,59 @@ class TestGroundingDensity:
             grounding_min_ratio=0.7,
         )
         assert package.final_report is not None
+        assert package.metadata.grounding_density is not None
+        assert package.metadata.grounding_density >= 0.7
+
+    def test_ungrounded_report_warns_in_soft_mode(self) -> None:
+        """In soft mode (default), low density produces a package with density recorded."""
+        assemble_mod = _stub_kitaru_and_load_assemble()
+
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceItem, EvidenceLedger
+        from research.contracts.package import RunMetadata
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import FinalReport
+
+        metadata = RunMetadata(
+            run_id="soft-mode",
+            tier="standard",
+            started_at="2024-01-01T00:00:00Z",
+        )
+        brief = ResearchBrief(topic="test", raw_request="test question")
+        plan = ResearchPlan(goal="test", key_questions=["what?"])
+        item1 = EvidenceItem(
+            evidence_id="ev-001",
+            title="Source 1",
+            url="https://example.com/1",
+            synthesis="snippet 1",
+            iteration_added=0,
+        )
+        ledger = EvidenceLedger(items=[item1])
+
+        # Report with NO citations — grounding density = 0.0
+        bad_report = FinalReport(
+            content=(
+                "This is a long enough sentence without any citations whatsoever. "
+                "Another sentence that makes claims without evidence. "
+                "Yet another ungrounded statement that says nothing useful."
+            ),
+        )
+
+        # strict_grounding=False (default) — should NOT raise
+        package = assemble_mod.assemble_package(
+            metadata=metadata,
+            brief=brief,
+            plan=plan,
+            ledger=ledger,
+            iterations=[],
+            draft=None,
+            critique=None,
+            final_report=bad_report,
+            grounding_min_ratio=0.7,
+        )
+        assert package.final_report is not None
+        assert package.metadata.grounding_density is not None
+        assert package.metadata.grounding_density < 0.7
 
     def test_unresolved_citation_fails_assembly(self) -> None:
         """Citations referencing non-existent evidence IDs must fail."""

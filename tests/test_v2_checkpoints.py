@@ -1268,6 +1268,8 @@ class TestAssembleCheckpoint:
         assert pkg.metadata.run_id == "run-123"
         assert pkg.draft is draft
         assert pkg.prompt_hashes  # should have prompt hashes
+        assert pkg.metadata.grounding_density is not None
+        assert pkg.metadata.grounding_density >= 0.5  # passes threshold
 
     def test_unresolved_citations_raise(self, monkeypatch):
         """Assembly fails if report cites evidence IDs not in the ledger."""
@@ -1304,7 +1306,7 @@ class TestAssembleCheckpoint:
             mod.assemble_package(meta, brief, plan, ledger, [], draft, None, None)
 
     def test_grounding_density_below_threshold_raises(self, monkeypatch):
-        """Assembly fails if grounding density is below the threshold."""
+        """Assembly fails if grounding density is below the threshold AND strict_grounding is True."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
@@ -1348,7 +1350,60 @@ class TestAssembleCheckpoint:
                 None,
                 None,
                 grounding_min_ratio=0.7,
+                strict_grounding=True,
             )
+
+    def test_grounding_density_below_threshold_warns_by_default(self, monkeypatch):
+        """Assembly succeeds with warning when density is below threshold
+        and strict_grounding is False (the default)."""
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceItem, EvidenceLedger
+        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import DraftReport
+
+        ledger = EvidenceLedger(
+            items=[
+                EvidenceItem(
+                    evidence_id="ev_001",
+                    title="A",
+                    synthesis="s",
+                    iteration_added=0,
+                ),
+            ]
+        )
+        # Only 1 of 3 sentences has a citation -> density 0.33
+        draft = DraftReport(
+            content=(
+                "This first sentence has no evidence at all and is quite long. "
+                "This second sentence also lacks any references whatsoever. "
+                "This third sentence cites [ev_001] properly."
+            ),
+            sections=[],
+        )
+        meta = RunMetadata(
+            run_id="run-123", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+
+        # strict_grounding defaults to False — should NOT raise
+        pkg = mod.assemble_package(
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            None,
+            grounding_min_ratio=0.7,
+        )
+        assert isinstance(pkg, InvestigationPackage)
+        # Grounding density should be recorded in metadata
+        assert pkg.metadata.grounding_density is not None
+        assert 0.0 < pkg.metadata.grounding_density < 0.7
 
     def test_no_report_skips_grounding_check(self, monkeypatch):
         """Assembly succeeds when no report exists (draft=None, final=None)."""

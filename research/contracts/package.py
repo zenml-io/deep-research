@@ -41,6 +41,13 @@ class RunMetadata(StrictBase):
     stop_reason: str | None = None
     """Why the run terminated (e.g. 'converged', 'budget_exhausted')."""
 
+    grounding_density: float | None = None
+    """Fraction of substantive sentences with valid citations (0.0–1.0).
+
+    Computed during assembly. None when no report was produced or the
+    ledger was empty (grounding check skipped).
+    """
+
 
 class InvestigationPackage(StrictBase):
     """Complete output of a single research investigation.
