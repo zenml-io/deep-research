@@ -4,6 +4,7 @@ ZERO LLM calls. This is a @checkpoint(type="tool_call") that computes
 derived metadata, validates grounding density, resolves citation IDs
 against the evidence ledger, and produces the final InvestigationPackage.
 """
+
 import logging
 import re
 
@@ -150,25 +151,34 @@ def assemble_package(
 
     # Run grounding checks on report content
     if report_content is not None:
-        valid_ids, unresolved_ids = _validate_citations(report_content, ledger)
-
-        if unresolved_ids:
-            raise CitationResolutionError(
-                f"Unresolved citation IDs: {sorted(unresolved_ids)}"
+        if not ledger.items:
+            # Grounding density is meaningless when the ledger is empty —
+            # there's no evidence to cite (e.g. all subagents failed).
+            # Produce the package anyway with a warning instead of crashing.
+            logger.warning(
+                "Ledger is empty — skipping grounding check. "
+                "Report quality is degraded (no evidence to cite)."
             )
+        else:
+            valid_ids, unresolved_ids = _validate_citations(report_content, ledger)
 
-        density = _compute_grounding_density(report_content, valid_ids)
-        if density < grounding_min_ratio:
-            raise GroundingError(
-                f"Grounding density {density:.2f} below threshold "
-                f"{grounding_min_ratio:.2f}"
+            if unresolved_ids:
+                raise CitationResolutionError(
+                    f"Unresolved citation IDs: {sorted(unresolved_ids)}"
+                )
+
+            density = _compute_grounding_density(report_content, valid_ids)
+            if density < grounding_min_ratio:
+                raise GroundingError(
+                    f"Grounding density {density:.2f} below threshold "
+                    f"{grounding_min_ratio:.2f}"
+                )
+
+            logger.info(
+                "Grounding density: %.2f (threshold: %.2f)",
+                density,
+                grounding_min_ratio,
             )
-
-        logger.info(
-            "Grounding density: %.2f (threshold: %.2f)",
-            density,
-            grounding_min_ratio,
-        )
 
     # Record prompt hashes
     prompt_hashes = get_prompt_hashes()

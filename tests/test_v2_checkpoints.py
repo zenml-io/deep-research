@@ -1149,12 +1149,23 @@ class TestAssembleCheckpoint:
         """Assembly fails if report cites evidence IDs not in the ledger."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
-        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.evidence import EvidenceItem, EvidenceLedger
         from research.contracts.package import RunMetadata
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
-        ledger = EvidenceLedger(items=[])  # empty ledger
+        # Non-empty ledger so grounding checks are not skipped,
+        # but the draft cites ev_999 which doesn't exist in it.
+        ledger = EvidenceLedger(
+            items=[
+                EvidenceItem(
+                    evidence_id="ev_001",
+                    title="Real paper",
+                    synthesis="Real finding",
+                    iteration_added=0,
+                ),
+            ]
+        )
         draft = DraftReport(
             content="This claims X [ev_999] which is not in the ledger. More text here for length.",
             sections=[],
@@ -1294,3 +1305,35 @@ class TestAssembleCheckpoint:
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.final_report is final
+
+    def test_empty_ledger_with_report_skips_grounding(self, monkeypatch):
+        """When ledger is empty (e.g. all subagents failed), assembly succeeds
+        with a warning instead of raising GroundingError."""
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import DraftReport
+
+        ledger = EvidenceLedger(items=[])  # empty — no evidence collected
+        draft = DraftReport(
+            content=(
+                "This report has no citations because all subagents failed. "
+                "The system should still produce a package instead of crashing."
+            ),
+            sections=["Summary"],
+        )
+        meta = RunMetadata(
+            run_id="run-empty", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+
+        # Should NOT raise — empty ledger means grounding check is skipped
+        pkg = mod.assemble_package(
+            meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.7
+        )
+        assert isinstance(pkg, InvestigationPackage)
+        assert pkg.ledger.items == []
+        assert pkg.draft is draft
