@@ -73,11 +73,32 @@ def _install_stubs(monkeypatch):
     """
 
     def flow_decorator(fn=None, **kwargs):
+        """Stub @flow that auto-materialises returned submit handles.
+
+        In the real Kitaru runtime, `.wait()` extracts the value from the
+        terminal step's OutputArtifact.  Our stub mirrors this by calling
+        `.load()` when the flow returns an object with that attribute.
+        """
+
+        def _wrap(f):
+            def wrapper(*args, **kw):
+                result = f(*args, **kw)
+                # Simulate Kitaru .wait() extraction: if the flow returned
+                # a submit handle (SimpleNamespace with .load), materialise it.
+                if hasattr(result, "load") and callable(result.load):
+                    return result.load()
+                return result
+
+            wrapper.__name__ = getattr(f, "__name__", "flow")
+            wrapper.__qualname__ = getattr(f, "__qualname__", "flow")
+            wrapper.__module__ = getattr(f, "__module__", __name__)
+            return wrapper
+
         if fn is not None:
-            return fn
+            return _wrap(fn)
 
         def decorator(f):
-            return f
+            return _wrap(f)
 
         return decorator
 

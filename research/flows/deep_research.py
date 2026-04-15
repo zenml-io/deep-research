@@ -279,7 +279,12 @@ def deep_research(
         stop_reason=stop_reason,
     )
 
-    package = assemble_package.submit(
+    # Return the submit handle (without .load()) so Kitaru's DAG registers
+    # this checkpoint as the terminal step.  All intermediate checkpoints
+    # use .submit().load() which materialises immediately but severs the
+    # DAG edge.  Keeping the final step un-loaded lets .wait() find exactly
+    # one terminal step and extract the InvestigationPackage correctly.
+    return assemble_package.submit(
         metadata=run_metadata,
         brief=brief,
         plan=plan,
@@ -289,5 +294,4 @@ def deep_research(
         critique=critique,
         final_report=final_report,
         grounding_min_ratio=cfg.grounding_min_ratio,
-    ).load()
-    return package
+    )
