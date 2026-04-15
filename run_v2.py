@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument(
         "--tier",
         default="standard",
-        choices=["quick", "standard", "deep"],
+        choices=["quick", "standard", "deep", "exhaustive"],
         help="Research tier (default: standard)",
     )
     parser.add_argument(

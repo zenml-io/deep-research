@@ -24,6 +24,9 @@ class TierDefaults(BaseModel):
     max_parallel_subagents: int = 3
     second_reviewer: ModelSlotConfig | None = None
     scope_override: ModelSlotConfig | None = None
+    breadth_first: bool = False
+    respect_supervisor_done: bool = True
+    default_budget_usd: float | None = None
 
 
 TIER_DEFAULTS: dict[str, TierDefaults] = {
@@ -83,5 +86,32 @@ TIER_DEFAULTS: dict[str, TierDefaults] = {
             provider="google-gla", model="gemini-3.1-pro-preview"
         ),
         scope_override=ModelSlotConfig(provider="anthropic", model="claude-opus-4-6"),
+    ),
+    "exhaustive": TierDefaults(
+        slots={
+            ModelSlot.generator: ModelSlotConfig(
+                provider="anthropic", model="claude-sonnet-4-6"
+            ),
+            ModelSlot.subagent: ModelSlotConfig(
+                provider="google-gla", model="gemini-3.1-flash-lite-preview"
+            ),
+            ModelSlot.reviewer: ModelSlotConfig(
+                provider="openai", model="gpt-5.4-mini"
+            ),
+            ModelSlot.judge: ModelSlotConfig(
+                provider="google-gla",
+                model="gemini-3.1-pro-preview",
+                model_settings={"google_thinking_config": {"thinking_level": "high"}},
+            ),
+        },
+        max_iterations=20,
+        max_parallel_subagents=10,
+        second_reviewer=ModelSlotConfig(
+            provider="google-gla", model="gemini-3.1-pro-preview"
+        ),
+        scope_override=ModelSlotConfig(provider="anthropic", model="claude-opus-4-6"),
+        breadth_first=True,
+        respect_supervisor_done=False,
+        default_budget_usd=3.00,
     ),
 }

@@ -51,6 +51,7 @@ def check_convergence(
     supervisor_decision: SupervisorDecision | None,
     iteration_index: int,
     max_iterations: int,
+    respect_supervisor_done: bool = True,
 ) -> StopDecision:
     """Check stop rules in priority order and return the first that fires.
 
@@ -71,6 +72,11 @@ def check_convergence(
         be ``iteration_index + 1``.
     max_iterations:
         Maximum number of iterations allowed.
+    respect_supervisor_done:
+        When ``True`` (default), the supervisor's ``done=True`` signal
+        fires rule 3 and stops the loop.  When ``False``, rule 3 is
+        skipped entirely — the loop continues until budget, time, or
+        max iterations stop it.
 
     Returns
     -------
@@ -88,6 +94,7 @@ def check_convergence(
         "supervisor_done": (
             supervisor_decision.done if supervisor_decision is not None else False
         ),
+        "respect_supervisor_done": respect_supervisor_done,
     }
 
     # 1. Budget exhausted (highest priority)
@@ -107,7 +114,11 @@ def check_convergence(
         )
 
     # 3. Supervisor done
-    if supervisor_decision is not None and supervisor_decision.done:
+    if (
+        respect_supervisor_done
+        and supervisor_decision is not None
+        and supervisor_decision.done
+    ):
         return StopDecision(
             should_stop=True,
             reason=StopReason.SUPERVISOR_DONE,

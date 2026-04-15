@@ -178,8 +178,65 @@ class TestTierDefaults:
         assert gen.model_settings is None
 
     def test_default_parallel_subagents(self):
-        for tier in TIER_DEFAULTS.values():
-            assert tier.max_parallel_subagents == 3
+        assert TIER_DEFAULTS["quick"].max_parallel_subagents == 3
+        assert TIER_DEFAULTS["standard"].max_parallel_subagents == 3
+        assert TIER_DEFAULTS["deep"].max_parallel_subagents == 3
+        assert TIER_DEFAULTS["exhaustive"].max_parallel_subagents == 10
+
+    # --- Exhaustive tier ---
+
+    def test_exhaustive_tier_exists(self):
+        assert "exhaustive" in TIER_DEFAULTS
+
+    def test_exhaustive_max_iterations(self):
+        assert TIER_DEFAULTS["exhaustive"].max_iterations == 20
+
+    def test_exhaustive_breadth_first(self):
+        assert TIER_DEFAULTS["exhaustive"].breadth_first is True
+
+    def test_exhaustive_ignores_supervisor_done(self):
+        assert TIER_DEFAULTS["exhaustive"].respect_supervisor_done is False
+
+    def test_exhaustive_default_budget(self):
+        assert TIER_DEFAULTS["exhaustive"].default_budget_usd == 3.0
+
+    def test_exhaustive_has_second_reviewer(self):
+        assert TIER_DEFAULTS["exhaustive"].second_reviewer is not None
+        second = TIER_DEFAULTS["exhaustive"].second_reviewer
+        assert second.provider == "google-gla"
+        assert second.model == "gemini-3.1-pro-preview"
+
+    def test_exhaustive_has_scope_override(self):
+        override = TIER_DEFAULTS["exhaustive"].scope_override
+        assert override is not None
+        assert override.provider == "anthropic"
+        assert override.model == "claude-opus-4-6"
+
+    def test_exhaustive_has_all_four_slots(self):
+        slots = TIER_DEFAULTS["exhaustive"].slots
+        assert ModelSlot.generator in slots
+        assert ModelSlot.subagent in slots
+        assert ModelSlot.reviewer in slots
+        assert ModelSlot.judge in slots
+
+    def test_exhaustive_judge_has_thinking(self):
+        judge = TIER_DEFAULTS["exhaustive"].slots[ModelSlot.judge]
+        assert judge.model_settings is not None
+        assert "google_thinking_config" in judge.model_settings
+
+    # --- Existing tiers don't have new flags ---
+
+    def test_existing_tiers_not_breadth_first(self):
+        for tier_name in ("quick", "standard", "deep"):
+            assert TIER_DEFAULTS[tier_name].breadth_first is False
+
+    def test_existing_tiers_respect_supervisor_done(self):
+        for tier_name in ("quick", "standard", "deep"):
+            assert TIER_DEFAULTS[tier_name].respect_supervisor_done is True
+
+    def test_existing_tiers_no_default_budget(self):
+        for tier_name in ("quick", "standard", "deep"):
+            assert TIER_DEFAULTS[tier_name].default_budget_usd is None
 
 
 # ---------------------------------------------------------------------------

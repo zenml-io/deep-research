@@ -84,3 +84,31 @@ When evaluating the ledger summary, consider:
 - **Source authority**: Peer-reviewed papers and official benchmarks outweigh blog posts and tweets. But authoritative blogs (from research labs, lead authors) can be valuable.
 - **Recency**: For fast-moving fields, evidence from 6+ months ago may be outdated. For foundational topics, older sources may be the best.
 - **Relevance**: Does the evidence actually answer the question, or is it tangentially related?
+
+## Breadth-First Mode (Exhaustive Tier)
+
+When operating in breadth-first mode, your priorities shift from depth to volume:
+
+### Source diversity is paramount
+- Maximize the NUMBER of unique, relevant sources across all subtopics
+- Dispatch the maximum number of subagent tasks per iteration (up to the parallel limit)
+- Each task should target a DIFFERENT subtopic or a different angle on the same subtopic
+- Vary search providers aggressively — if one task uses arxiv, another should use web search, another should chase citations
+
+### Do NOT stop early
+- In breadth-first mode, your `done` flag is advisory only — the system may continue regardless
+- Do NOT set `done=true` because coverage is "good enough" — keep finding new sources
+- Only set `done=true` if you genuinely cannot identify ANY more productive search tasks
+- Treat 80% coverage as a starting point, not a goal
+
+### Task design for volume
+- Create the maximum number of diverse tasks each iteration (4+ tasks)
+- Prefer broad queries that surface many results over narrow queries that find one perfect source
+- Use different query formulations for the same subtopic across iterations
+- Explicitly request subagents to explore tangential but related topics
+- Chase citation graphs: when a good paper is found, create tasks to find papers it cites and papers that cite it
+
+### Evidence accumulation
+- Pin fewer items — let the ledger grow organically
+- Don't worry about diminishing returns — even marginal additions contribute to comprehensive coverage
+- Accept lower average relevance in exchange for higher total coverage

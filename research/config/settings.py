@@ -30,7 +30,7 @@ class ResearchSettings(BaseSettings):
     strict_unknown_model_cost: bool = False
     sandbox_enabled: bool = False
     sandbox_backend: str | None = None
-    max_parallel_subagents: int = 3
+    max_parallel_subagents: int | None = None
     enabled_providers: str = "brave,exa,tavily,arxiv,semantic_scholar"
 
 
@@ -59,6 +59,8 @@ class ResearchConfig(BaseModel):
     sandbox_enabled: bool
     sandbox_backend: str | None
     enabled_providers: list[str]
+    breadth_first: bool = False
+    respect_supervisor_done: bool = True
 
     @classmethod
     def for_tier(
@@ -90,7 +92,11 @@ class ResearchConfig(BaseModel):
         ]
 
         budget = BudgetConfig(
-            soft_budget_usd=settings.default_cost_budget_usd,
+            soft_budget_usd=(
+                defaults.default_budget_usd
+                if defaults.default_budget_usd is not None
+                else settings.default_cost_budget_usd
+            ),
         )
 
         return cls(
@@ -100,7 +106,11 @@ class ResearchConfig(BaseModel):
             second_reviewer=defaults.second_reviewer,
             scope_override=defaults.scope_override,
             max_iterations=defaults.max_iterations,
-            max_parallel_subagents=settings.max_parallel_subagents,
+            max_parallel_subagents=(
+                settings.max_parallel_subagents
+                if settings.max_parallel_subagents is not None
+                else defaults.max_parallel_subagents
+            ),
             ledger_window_iterations=settings.ledger_window_iterations,
             grounding_min_ratio=settings.grounding_min_ratio,
             max_supplemental_loops=settings.max_supplemental_loops,
@@ -110,4 +120,6 @@ class ResearchConfig(BaseModel):
             sandbox_enabled=settings.sandbox_enabled,
             sandbox_backend=settings.sandbox_backend,
             enabled_providers=enabled_providers,
+            breadth_first=defaults.breadth_first,
+            respect_supervisor_done=defaults.respect_supervisor_done,
         )

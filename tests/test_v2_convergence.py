@@ -513,3 +513,111 @@ class TestEdgeCases:
         )
         assert result.should_stop is True
         assert result.reason is StopReason.SUPERVISOR_DONE
+
+
+# ---------------------------------------------------------------------------
+# 5. respect_supervisor_done flag
+# ---------------------------------------------------------------------------
+
+
+class TestRespectSupervisorDone:
+    """Tests for the ``respect_supervisor_done`` parameter.
+
+    When False (exhaustive tier), supervisor done=True is ignored and the
+    loop continues until budget, time, or max iterations stop it.
+    """
+
+    def test_supervisor_done_ignored_when_disabled(self) -> None:
+        """Supervisor says done=True but respect_supervisor_done=False
+        means the loop keeps going."""
+        result = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=True),
+            iteration_index=0,
+            max_iterations=20,
+            respect_supervisor_done=False,
+        )
+        assert result.should_stop is False
+        assert result.reason is None
+
+    def test_budget_still_stops_when_supervisor_ignored(self) -> None:
+        """Budget exhaustion beats everything, even with
+        respect_supervisor_done=False."""
+        result = check_convergence(
+            budget=_budget(spent=0.50, soft=0.10),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=True),
+            iteration_index=0,
+            max_iterations=20,
+            respect_supervisor_done=False,
+        )
+        assert result.should_stop is True
+        assert result.reason is StopReason.BUDGET_EXHAUSTED
+
+    def test_time_still_stops_when_supervisor_ignored(self) -> None:
+        """Time exhaustion still fires with respect_supervisor_done=False."""
+        result = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=4000.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=True),
+            iteration_index=0,
+            max_iterations=20,
+            respect_supervisor_done=False,
+        )
+        assert result.should_stop is True
+        assert result.reason is StopReason.TIME_EXHAUSTED
+
+    def test_max_iterations_still_stops_when_supervisor_ignored(self) -> None:
+        """Max iterations fires even with respect_supervisor_done=False."""
+        result = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=True),
+            iteration_index=19,
+            max_iterations=20,
+            respect_supervisor_done=False,
+        )
+        assert result.should_stop is True
+        assert result.reason is StopReason.MAX_ITERATIONS
+
+    def test_default_respects_supervisor_done(self) -> None:
+        """Default behavior (respect_supervisor_done=True) unchanged."""
+        result = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=True),
+            iteration_index=0,
+            max_iterations=20,
+        )
+        assert result.should_stop is True
+        assert result.reason is StopReason.SUPERVISOR_DONE
+
+    def test_diagnostics_include_respect_flag(self) -> None:
+        """Diagnostics dict includes the respect_supervisor_done value."""
+        result_true = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=False),
+            iteration_index=0,
+            max_iterations=20,
+            respect_supervisor_done=True,
+        )
+        assert result_true.diagnostics["respect_supervisor_done"] is True
+
+        result_false = check_convergence(
+            budget=_budget(spent=0.01),
+            elapsed_seconds=10.0,
+            time_limit_seconds=3600.0,
+            supervisor_decision=_supervisor(done=False),
+            iteration_index=0,
+            max_iterations=20,
+            respect_supervisor_done=False,
+        )
+        assert result_false.diagnostics["respect_supervisor_done"] is False

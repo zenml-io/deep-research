@@ -77,16 +77,17 @@ export DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT=true
 ### 5. Run a research investigation
 
 ```bash
-uv run python run_v2.py "What are the latest advances in RLHF alternatives?"
+uv run python run_v2.py --output ./results "What are the latest advances in RLHF alternatives?"
 uv run python run_v2.py --tier deep "My research question"
 uv run python run_v2.py --tier quick --output ./results "Brief overview of X"
+uv run python run_v2.py --tier exhaustive "Comprehensive survey of transformer architectures"
 ```
 
 ## Commands
 
 ```bash
 # Tests (V2)
-uv run pytest tests/test_v2_*.py -v       # all V2 tests (554 tests)
+uv run pytest tests/test_v2_*.py -v       # all V2 tests (586 tests)
 uv run pytest tests/test_v2_agents.py -v   # single file
 uv run pytest tests/test_v2_agents.py::TestScopeAgent -v  # single class
 
@@ -118,7 +119,7 @@ The system has three layers:
 - **`research/config/`** — `ResearchSettings` (env vars with `RESEARCH_` prefix), `ResearchConfig` (frozen runtime config), tier defaults. `ResearchConfig.for_tier(tier)` is the canonical factory.
 - **`research/ledger/`** — Pure functions, no LLM calls. `ManagedLedger` with append-only dedup. Dedup precedence: DOI > arXiv ID > canonical URL. Windowed projection for context management.
 - **`research/providers/`** — `SearchProvider` Protocol + `ProviderRegistry`. Five built-in providers: brave, exa, tavily, arxiv, semantic_scholar. Plus `AgentToolSurface` (search/fetch/code_exec as PydanticAI tools).
-- **`research/flows/convergence.py`** — Four stop rules in priority order: budget > time > supervisor done > max iterations.
+- **`research/flows/convergence.py`** — Four stop rules in priority order: budget > time > supervisor done > max iterations. The `respect_supervisor_done` flag (False for exhaustive tier) skips rule 3, forcing the loop to run until budget, time, or max iterations stop it.
 - **`research/prompts/`** — System prompts as `.md` files with SHA-256 hash tracking via `PROMPTS` registry.
 
 ### Pipeline data flow
@@ -153,6 +154,24 @@ PydanticAI uses provider-prefixed format:
 - `anthropic:claude-sonnet-4-6`
 - `openai:gpt-5.4-mini`
 
+## Tiers
+
+Four tiers control iteration depth, parallelism, and budget:
+
+| Tier | Max Iterations | Parallel Subagents | Budget | Breadth-First | Supervisor Done |
+|------|---------------:|-------------------:|-------:|--------------:|----------------:|
+| `quick` | 2 | 3 | $0.10 | No | Respected |
+| `standard` | 5 | 3 | $0.10 | No | Respected |
+| `deep` | 10 | 3 | $0.10 | No | Respected |
+| `exhaustive` | 20 | 10 | $3.00 | Yes | Ignored |
+
+The **exhaustive** tier is a high-throughput mode designed for comprehensive surveys. Key differences:
+
+- **Breadth-first mode** — supervisor prompt instructs maximum source diversity, varied providers, and no early stopping.
+- **`respect_supervisor_done=False`** — supervisor's `done=True` signal is ignored; the loop runs until budget ($3.00), time, or 20 iterations.
+- **10 parallel subagents** — 3x the default, for higher source throughput per iteration.
+- **Same model slots as deep** — includes `scope_override` (opus) and `second_reviewer`.
+
 ## Environment Variables
 
 All `RESEARCH_*` settings are loaded via pydantic-settings (`ResearchSettings`):
@@ -161,7 +180,7 @@ All `RESEARCH_*` settings are loaded via pydantic-settings (`ResearchSettings`):
 - `RESEARCH_DEFAULT_COST_BUDGET_USD` — Soft cost ceiling per run (default: `0.10`)
 - `RESEARCH_DAILY_COST_LIMIT_USD` — Global daily ceiling (default: `10.00`)
 - `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `brave,exa,tavily,arxiv,semantic_scholar`)
-- `RESEARCH_MAX_PARALLEL_SUBAGENTS` — Concurrent subagents per iteration (default: `3`)
+- `RESEARCH_MAX_PARALLEL_SUBAGENTS` — Concurrent subagents per iteration (overrides tier default when set; tier defaults: quick/standard/deep=3, exhaustive=10)
 - `RESEARCH_LEDGER_WINDOW_ITERATIONS` — Recent iterations shown in full to agents (default: `3`)
 - `RESEARCH_GROUNDING_MIN_RATIO` — Minimum citation density for assembly (default: `0.7`)
 - `RESEARCH_MAX_SUPPLEMENTAL_LOOPS` — Extra iterations if reviewer requests more research (default: `1`)
