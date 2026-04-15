@@ -83,16 +83,27 @@ def _run_supervisor_with_retry(
     iteration_index: int,
     gen_model: str,
     ledger: EvidenceLedger,
+    breadth_first: bool = False,
 ):
     """Call run_supervisor with one retry on failure.
 
     On first failure: log warning, retry once.
     On second failure: raise SupervisorError with the last valid ledger.
+
+    Each attempt uses a distinct checkpoint ``id`` so Kitaru does not
+    serve a cached failure for the retry.
     """
     try:
-        return run_supervisor(
-            brief, plan, projection, remaining, iteration_index, gen_model
-        )
+        return run_supervisor.submit(
+            brief,
+            plan,
+            projection,
+            remaining,
+            iteration_index,
+            gen_model,
+            breadth_first=breadth_first,
+            id=f"supervisor_{iteration_index}_a1",
+        ).load()
     except Exception as first_err:
         logger.warning(
             "Supervisor failed (attempt 1/2) at iteration %d: %s",
@@ -100,9 +111,16 @@ def _run_supervisor_with_retry(
             first_err,
         )
         try:
-            return run_supervisor(
-                brief, plan, projection, remaining, iteration_index, gen_model
-            )
+            return run_supervisor.submit(
+                brief,
+                plan,
+                projection,
+                remaining,
+                iteration_index,
+                gen_model,
+                breadth_first=breadth_first,
+                id=f"supervisor_{iteration_index}_a2",
+            ).load()
         except Exception as second_err:
             raise SupervisorError(
                 f"Supervisor failed twice at iteration {iteration_index}: "
@@ -120,7 +138,7 @@ def _run_iteration(
     started_at: str,
 ):
     """Execute one research iteration: supervisor -> subagents -> record."""
-    clock = snapshot_wall_clock(started_at)
+    clock = snapshot_wall_clock.submit(started_at).load()
 
     gen_model = cfg.slots["generator"].model_string
     sub_model = cfg.slots["subagent"].model_string
@@ -135,7 +153,14 @@ def _run_iteration(
     remaining = cfg.budget.soft_budget_usd - cfg.budget.spent_usd
 
     decision = _run_supervisor_with_retry(
-        brief, plan, projection, remaining, iteration_index, gen_model, ledger
+        brief,
+        plan,
+        projection,
+        remaining,
+        iteration_index,
+        gen_model,
+        ledger,
+        breadth_first=cfg.breadth_first,
     )
 
     # Fan-out subagents (batched by max_parallel_subagents)
@@ -158,6 +183,7 @@ def _run_iteration(
         supervisor_decision=decision,
         iteration_index=iteration_index,
         max_iterations=cfg.max_iterations,
+        respect_supervisor_done=cfg.respect_supervisor_done,
     )
 
     return record, convergence
@@ -179,10 +205,10 @@ def deep_research(
     # Phase 1: Scope
     gen_model = cfg.slots["generator"].model_string
     scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
-    brief = run_scope(question, scope_model)
+    brief = run_scope.submit(question, scope_model).load()
 
     # Phase 2: Plan
-    plan = run_plan(brief, gen_model)
+    plan = run_plan.submit(brief, gen_model).load()
 
     # Phase 3: Iteration loop
     ledger = EvidenceLedger(items=[])
@@ -200,12 +226,12 @@ def deep_research(
             break
 
     # Phase 4: Draft
-    draft = run_draft(brief, plan, ledger, gen_model)
+    draft = run_draft.submit(brief, plan, ledger, gen_model).load()
 
     # Phase 5: Critique
     reviewer_model = cfg.slots["reviewer"].model_string
     second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-    critique = run_critique(draft, reviewer_model, second)
+    critique = run_critique.submit(draft, reviewer_model, second).load()
 
     # Phase 6: Supplemental loop (capped at max_supplemental_loops)
     supplemental_loops = 0
@@ -217,14 +243,14 @@ def deep_research(
         idx = len(iterations)
         record, _conv = _run_iteration(cfg, brief, plan, ledger, idx, stamp.started_at)
         iterations.append(record)
-        draft = run_draft(brief, plan, ledger, gen_model)
-        critique = run_critique(draft, reviewer_model, second)
+        draft = run_draft.submit(brief, plan, ledger, gen_model).load()
+        critique = run_critique.submit(draft, reviewer_model, second).load()
         # Second require_more_research is recorded but the while guard
         # stops because supplemental_loops == max_supplemental_loops.
 
     # Phase 7: Finalize
     try:
-        final_report = run_finalize(draft, critique, gen_model)
+        final_report = run_finalize.submit(draft, critique, gen_model).load()
     except Exception as finalize_err:
         logger.warning("Finalizer failed: %s", finalize_err)
         final_report = None
@@ -242,7 +268,7 @@ def deep_research(
             )
 
     # Phase 8: Assemble
-    fin = finalize_run_metadata(stamp.started_at)
+    fin = finalize_run_metadata.submit(stamp.started_at).load()
     run_metadata = RunMetadata(
         run_id=stamp.run_id,
         tier=cfg.tier,
@@ -253,7 +279,7 @@ def deep_research(
         stop_reason=stop_reason,
     )
 
-    package = assemble_package(
+    package = assemble_package.submit(
         metadata=run_metadata,
         brief=brief,
         plan=plan,
@@ -263,5 +289,5 @@ def deep_research(
         critique=critique,
         final_report=final_report,
         grounding_min_ratio=cfg.grounding_min_ratio,
-    )
+    ).load()
     return package

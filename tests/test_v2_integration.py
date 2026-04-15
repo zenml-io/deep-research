@@ -172,6 +172,16 @@ def make_checkpoint_stub(return_value):
     return stub
 
 
+def with_submit(fn):
+    """Add .submit() support to a tracking function.
+
+    Unlike ``make_checkpoint_stub``, this routes .submit().load() through
+    the original function so side-effects (call tracking, counters) fire.
+    """
+    fn.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: fn(*a, **kw))
+    return fn
+
+
 def make_stateful_stub(values):
     """Return a different value on each call, clamping to last."""
     call_count = [0]
@@ -529,9 +539,7 @@ class TestReviewerTriggeredSupplementalLoop:
             supervisor_calls[0] += 1
             return _DECISION_DONE
 
-        counting_supervisor.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _DECISION_DONE
-        )
+        with_submit(counting_supervisor)
 
         # First critique: needs more. Second critique: also needs more (should be capped)
         critique = make_stateful_stub([_CRITIQUE_NEEDS_MORE, _CRITIQUE_NEEDS_MORE])
@@ -560,9 +568,7 @@ class TestReviewerTriggeredSupplementalLoop:
             critique_calls[0] += 1
             return _CRITIQUE_NEEDS_MORE
 
-        always_more.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _CRITIQUE_NEEDS_MORE
-        )
+        with_submit(always_more)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, critique_stub=always_more)
 
@@ -896,23 +902,19 @@ class TestBudgetExhaustionPath:
             draft_calls[0] += 1
             return _DRAFT
 
-        track_draft.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: _DRAFT)
+        with_submit(track_draft)
 
         def track_critique(*args, **kwargs):
             critique_calls[0] += 1
             return _CRITIQUE_OK
 
-        track_critique.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _CRITIQUE_OK
-        )
+        with_submit(track_critique)
 
         def track_finalize(*args, **kwargs):
             finalize_calls[0] += 1
             return _FINAL
 
-        track_finalize.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _FINAL
-        )
+        with_submit(track_finalize)
 
         def track_assemble(**kwargs):
             assemble_calls[0] += 1
@@ -927,9 +929,7 @@ class TestBudgetExhaustionPath:
                 final_report=kwargs["final_report"],
             )
 
-        track_assemble.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: track_assemble(*a, **kw)
-        )
+        with_submit(track_assemble)
 
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_draft", track_draft)
@@ -964,9 +964,7 @@ class TestSupervisorMaxIterationsStop:
             call_count[0] += 1
             return _DECISION_CONTINUE
 
-        never_done.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _DECISION_CONTINUE
-        )
+        with_submit(never_done)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=never_done)
 
@@ -982,9 +980,7 @@ class TestSupervisorMaxIterationsStop:
         def never_done(*args, **kwargs):
             return _DECISION_CONTINUE
 
-        never_done.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _DECISION_CONTINUE
-        )
+        with_submit(never_done)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=never_done)
 
@@ -1000,9 +996,7 @@ class TestSupervisorMaxIterationsStop:
         def never_done(*args, **kwargs):
             return _DECISION_CONTINUE
 
-        never_done.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _DECISION_CONTINUE
-        )
+        with_submit(never_done)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=never_done)
 
