@@ -414,6 +414,23 @@ class TestDraftReport:
         with pytest.raises(ValidationError, match="extra_forbidden"):
             DraftReport(content="text", extra="bad")
 
+    def test_from_markdown_extracts_sections(self):
+        md = "## Executive Summary\nOverview.\n\n### Findings\nDetails.\n\n## Limitations\nGaps."
+        dr = DraftReport.from_markdown(md)
+        assert dr.content == md
+        assert dr.sections == ["Executive Summary", "Findings", "Limitations"]
+
+    def test_from_markdown_empty_text(self):
+        dr = DraftReport.from_markdown("")
+        assert dr.content == ""
+        assert dr.sections == []
+
+    def test_from_markdown_no_headings(self):
+        md = "Just a plain paragraph with no headings."
+        dr = DraftReport.from_markdown(md)
+        assert dr.content == md
+        assert dr.sections == []
+
 
 # ---------------------------------------------------------------------------
 # CritiqueDimensionScore
@@ -529,6 +546,26 @@ class TestFinalReport:
     def test_rejects_extra_fields(self):
         with pytest.raises(ValidationError, match="extra_forbidden"):
             FinalReport(content="text", extra="bad")
+
+    def test_from_markdown_extracts_sections(self):
+        md = "## Summary\nContent.\n\n### Details\nMore.\n\n## Conclusions\nEnd."
+        fr = FinalReport.from_markdown(md, stop_reason="converged")
+        assert fr.content == md
+        assert fr.sections == ["Summary", "Details", "Conclusions"]
+        assert fr.stop_reason == "converged"
+
+    def test_from_markdown_no_stop_reason(self):
+        md = "## Report\nBody."
+        fr = FinalReport.from_markdown(md)
+        assert fr.content == md
+        assert fr.sections == ["Report"]
+        assert fr.stop_reason is None
+
+    def test_from_markdown_empty_text(self):
+        fr = FinalReport.from_markdown("", stop_reason="budget_exhausted")
+        assert fr.content == ""
+        assert fr.sections == []
+        assert fr.stop_reason == "budget_exhausted"
 
 
 # ---------------------------------------------------------------------------

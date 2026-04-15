@@ -144,11 +144,16 @@ class TestRegistry:
             assert PROMPTS[name].sha256 == sha
 
     def test_all_records_have_version(self):
-        """All placeholder prompts should have version from front-matter."""
+        """All prompts should have a valid version from front-matter."""
+        import re
+
+        semver_re = re.compile(r"^\d+\.\d+\.\d+$")
         for name in EXPECTED_PROMPTS:
             record = PROMPTS[name]
             assert record.version is not None, f"Prompt {name!r} has no version"
-            assert record.version == "0.1.0"
+            assert semver_re.match(record.version), (
+                f"Prompt {name!r} version {record.version!r} is not semver"
+            )
 
     def test_all_records_text_is_nonempty(self):
         """Every prompt has non-empty text content."""

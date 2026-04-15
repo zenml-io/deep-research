@@ -451,15 +451,13 @@ class TestGeneratorAgent:
         assert isinstance(agent, FakeAgent)
         assert agent.model_name == "google-gla:gemini-2.5-flash"
 
-    def test_output_type_is_draft_report(self, monkeypatch):
-        """Factory sets output_type=DraftReport on the agent."""
-        from research.contracts.reports import DraftReport
-
+    def test_output_type_is_str(self, monkeypatch):
+        """Factory sets output_type=str (plain text) — checkpoint wraps in DraftReport."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_generator_agent("test-model")
 
         agent = wrap_calls[0]["agent"]
-        assert agent.kwargs["output_type"] is DraftReport
+        assert agent.kwargs["output_type"] is str
 
     def test_system_prompt_loaded(self, monkeypatch):
         """Factory loads the generator prompt and passes it as system_prompt."""
@@ -612,15 +610,13 @@ class TestFinalizerAgent:
         assert isinstance(agent, FakeAgent)
         assert agent.model_name == "google-gla:gemini-2.5-flash"
 
-    def test_output_type_is_final_report(self, monkeypatch):
-        """Factory sets output_type=FinalReport on the agent."""
-        from research.contracts.reports import FinalReport
-
+    def test_output_type_is_str(self, monkeypatch):
+        """Factory sets output_type=str (plain text) — checkpoint wraps in FinalReport."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_finalizer_agent("test-model")
 
         agent = wrap_calls[0]["agent"]
-        assert agent.kwargs["output_type"] is FinalReport
+        assert agent.kwargs["output_type"] is str
 
     def test_system_prompt_loaded(self, monkeypatch):
         """Factory loads the finalizer prompt and passes it as system_prompt."""

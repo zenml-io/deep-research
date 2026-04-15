@@ -852,7 +852,7 @@ class TestDraftCheckpoint:
         assert mod.run_draft._checkpoint_type == "llm_call"
 
     def test_run_draft_returns_draft_report(self, monkeypatch):
-        """run_draft calls generator agent and returns DraftReport."""
+        """run_draft calls generator agent (str output) and wraps in DraftReport."""
         mod, _ = self._load(monkeypatch)
 
         from research.contracts.brief import ResearchBrief
@@ -864,10 +864,8 @@ class TestDraftCheckpoint:
         plan = ResearchPlan(goal="study RLHF", key_questions=["how?"])
         ledger = EvidenceLedger(items=[])
 
-        expected = DraftReport(content="# Report\nBody", sections=["Report"])
-
         class MockResult:
-            output = expected
+            output = "## Report\nBody paragraph here."
 
         class MockAgent:
             def run_sync(self, prompt):
@@ -875,8 +873,8 @@ class TestDraftCheckpoint:
 
         monkeypatch.setattr(mod, "build_generator_agent", lambda model: MockAgent())
         result = mod.run_draft(brief, plan, ledger, "test-model")
-        assert result is expected
-        assert result.content == "# Report\nBody"
+        assert isinstance(result, DraftReport)
+        assert result.content == "## Report\nBody paragraph here."
         assert result.sections == ["Report"]
 
     def test_run_draft_prompt_contains_brief_plan_ledger(self, monkeypatch):
@@ -888,7 +886,6 @@ class TestDraftCheckpoint:
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
         from research.contracts.plan import ResearchPlan
-        from research.contracts.reports import DraftReport
 
         brief = ResearchBrief(topic="AI Safety", raw_request="test")
         plan = ResearchPlan(goal="investigate", key_questions=["what?"])
@@ -901,7 +898,7 @@ class TestDraftCheckpoint:
         ledger = EvidenceLedger(items=[item])
 
         class MockResult:
-            output = DraftReport(content="report", sections=[])
+            output = "## Summary\nReport content."
 
         class MockAgent:
             def run_sync(self, prompt):
@@ -1143,7 +1140,7 @@ class TestFinalizeCheckpoint:
         assert mod.run_finalize._checkpoint_type == "llm_call"
 
     def test_run_finalize_returns_final_report(self, monkeypatch):
-        """run_finalize calls finalizer agent and returns FinalReport."""
+        """run_finalize calls finalizer agent (str output) and wraps in FinalReport."""
         mod, _ = self._load(monkeypatch)
 
         from research.contracts.reports import (
@@ -1163,23 +1160,21 @@ class TestFinalizeCheckpoint:
             require_more_research=False,
             issues=["fix typo"],
         )
-        expected = FinalReport(
-            content="# Final Report\nRevised body",
-            sections=["Final Report"],
-            stop_reason="converged",
-        )
 
         class MockResult:
-            output = expected
+            output = "## Final Report\nRevised body"
 
         class MockAgent:
             def run_sync(self, prompt):
                 return MockResult()
 
         monkeypatch.setattr(mod, "build_finalizer_agent", lambda model: MockAgent())
-        result = mod.run_finalize(draft, critique, "test-model")
-        assert result is expected
-        assert result.content == "# Final Report\nRevised body"
+        result = mod.run_finalize(
+            draft, critique, "test-model", stop_reason="converged"
+        )
+        assert isinstance(result, FinalReport)
+        assert result.content == "## Final Report\nRevised body"
+        assert result.sections == ["Final Report"]
         assert result.stop_reason == "converged"
 
     def test_run_finalize_returns_none_on_failure(self, monkeypatch):
