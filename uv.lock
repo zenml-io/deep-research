@@ -675,6 +675,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "pytest" },
     { name = "pytest-timeout" },
 ]
 evals = [
@@ -685,12 +686,13 @@ evals = [
 requires-dist = [
     { name = "arxiv", specifier = ">=2.1.3" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "kitaru", editable = "../../../kitaru/kitaru" },
+    { name = "kitaru", git = "https://github.com/zenml-io/kitaru?branch=feature%2Fpydanticai-integration" },
     { name = "logfire" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-ai", specifier = ">=1.75" },
     { name = "pydantic-evals", extras = ["logfire"], marker = "extra == 'evals'" },
     { name = "pydantic-settings" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
 ]
 provides-extras = ["evals", "dev"]
@@ -1555,45 +1557,12 @@ wheels = [
 [[package]]
 name = "kitaru"
 version = "0.4.0"
-source = { editable = "../../../kitaru/kitaru" }
+source = { git = "https://github.com/zenml-io/kitaru?branch=feature%2Fpydanticai-integration#d5da07111b689b1bdb5368fea97c49cce8410e7d" }
 dependencies = [
     { name = "cyclopts" },
     { name = "pydantic" },
     { name = "rich" },
     { name = "zenml", extra = ["local"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40.0,<1" },
-    { name = "cyclopts", specifier = ">=3.0" },
-    { name = "kitaru", extras = ["anthropic"], marker = "extra == 'llm'" },
-    { name = "kitaru", extras = ["openai"], marker = "extra == 'llm'" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.19.0,<1.20.0" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0,<2" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic-ai-slim", marker = "extra == 'pydantic-ai'", specifier = ">=1.75.0" },
-    { name = "rich", specifier = ">=12.0.0" },
-    { name = "zenml", extras = ["local"], specifier = ">=0.94.2" },
-    { name = "zenml", extras = ["server"], marker = "extra == 'local'", specifier = ">=0.94.2" },
-]
-provides-extras = ["openai", "anthropic", "llm", "local", "pydantic-ai", "mcp"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "anthropic", specifier = ">=0.40.0,<1" },
-    { name = "griffe", specifier = ">=1.13.0,<2.0.0" },
-    { name = "griffe-typingdoc", specifier = ">=0.2.8,<1.0.0" },
-    { name = "openai", specifier = ">=1.0.0,<2" },
-    { name = "pydantic-ai-slim", specifier = ">=1.75.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-clarity" },
-    { name = "pytest-randomly" },
-    { name = "pytest-xdist", extras = ["psutil"] },
-    { name = "ruff", specifier = ">=0.11" },
-    { name = "ty", specifier = ">=0.0.1a7" },
-    { name = "yamlfix" },
-    { name = "zenml", extras = ["server"], specifier = ">=0.94.2" },
 ]
 
 [[package]]

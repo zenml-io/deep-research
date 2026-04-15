@@ -21,6 +21,7 @@ evals = [
   "pydantic-evals[logfire]",
 ]
 dev = [
+  "pytest>=8",
   "pytest-timeout",
 ]
 
@@ -41,7 +42,7 @@ members = [
 ]
 
 [tool.uv.sources]
-kitaru = { path = "../../../kitaru/kitaru", editable = true }
+kitaru = { git = "https://github.com/zenml-io/kitaru", branch = "feature/pydanticai-integration" }
 
 [tool.uv]
 override-dependencies = [
