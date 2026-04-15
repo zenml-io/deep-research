@@ -31,6 +31,7 @@ from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.package import InvestigationPackage, RunMetadata
 from research.flows.convergence import check_convergence
+from research.ledger.ledger import ManagedLedger
 from research.ledger.projection import format_projection, project_ledger
 
 logger = logging.getLogger(__name__)
@@ -145,11 +146,11 @@ def _run_iteration(
     cfg: ResearchConfig,
     brief,
     plan,
-    ledger: EvidenceLedger,
+    managed_ledger: ManagedLedger,
     iteration_index: int,
     started_at: str,
 ):
-    """Execute one research iteration: supervisor -> subagents -> record.
+    """Execute one research iteration: supervisor -> subagents -> merge -> record.
 
     Returns (record, convergence, submit_handles) — callers need the handles for DAG edge tracking.
     """
@@ -162,6 +163,7 @@ def _run_iteration(
     gen_model = cfg.slots["generator"].model_string
     sub_model = cfg.slots["subagent"].model_string
 
+    ledger = managed_ledger.ledger
     projection = format_projection(
         project_ledger(
             ledger,
@@ -189,11 +191,23 @@ def _run_iteration(
     )
     iter_handles.extend(sub_handles)
 
+    # Merge subagent findings into the evidence ledger
+    for findings in subagent_results:
+        if findings.findings:
+            added = managed_ledger.merge_findings(findings, iteration_index)
+            if added:
+                logger.info(
+                    "Iteration %d: merged %d evidence items (ledger total: %d)",
+                    iteration_index,
+                    len(added),
+                    managed_ledger.size,
+                )
+
     record = IterationRecord(
         iteration_index=iteration_index,
         supervisor_decision=decision,
         subagent_results=subagent_results,
-        ledger_size=len(ledger.items),
+        ledger_size=managed_ledger.size,
     )
 
     # Check convergence after iteration completes
@@ -245,13 +259,13 @@ def deep_research(
     plan = plan_h.load()
 
     # Phase 3: Iteration loop
-    ledger = EvidenceLedger(items=[])
+    managed_ledger = ManagedLedger()
     iterations: list[IterationRecord] = []
     stop_reason: str | None = None
 
     for i in range(cfg.max_iterations):
         record, convergence, iter_handles = _run_iteration(
-            cfg, brief, plan, ledger, i, stamp.started_at
+            cfg, brief, plan, managed_ledger, i, stamp.started_at
         )
         all_handles.extend(iter_handles)
         iterations.append(record)
@@ -259,6 +273,8 @@ def deep_research(
         if convergence.should_stop:
             stop_reason = convergence.reason.value
             break
+
+    ledger = managed_ledger.ledger
 
     # Phase 4: Draft
     draft_h = run_draft.submit(brief, plan, ledger, gen_model)
@@ -281,10 +297,11 @@ def deep_research(
         supplemental_loops += 1
         idx = len(iterations)
         record, _conv, iter_handles = _run_iteration(
-            cfg, brief, plan, ledger, idx, stamp.started_at
+            cfg, brief, plan, managed_ledger, idx, stamp.started_at
         )
         all_handles.extend(iter_handles)
         iterations.append(record)
+        ledger = managed_ledger.ledger
 
         draft_h = run_draft.submit(brief, plan, ledger, gen_model)
         all_handles.append(draft_h)

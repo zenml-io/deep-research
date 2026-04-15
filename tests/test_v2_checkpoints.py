@@ -698,6 +698,135 @@ class TestSubagentCheckpoint:
         assert parsed["target_subtopic"] == "RLHF"
         assert parsed["search_strategy_hints"] == ["arxiv", "semantic_scholar"]
 
+    def test_run_subagent_retries_on_503(self, monkeypatch):
+        """Transient 503 triggers retry — succeeds on second attempt."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.plan import SubagentTask
+        from research.contracts.decisions import SubagentFindings
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+        expected = SubagentFindings(findings=["found it"])
+        call_count = 0
+
+        class ModelHTTPError(Exception):
+            def __init__(self, status_code, model_name, body=None):
+                self.status_code = status_code
+                self.model_name = model_name
+                self.body = body
+                super().__init__(f"status_code: {status_code}")
+
+        class MockResult:
+            output = expected
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise ModelHTTPError(503, "test-model", {"error": "unavailable"})
+                return MockResult()
+
+        monkeypatch.setattr(
+            mod, "build_subagent_agent", lambda m, tools=None: MockAgent()
+        )
+        # Patch sleep to avoid real delay in tests
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+        result = mod.run_subagent(task, "m")
+        assert result is expected
+        assert call_count == 2
+
+    def test_run_subagent_retries_on_429(self, monkeypatch):
+        """Rate limit 429 triggers retry."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.plan import SubagentTask
+        from research.contracts.decisions import SubagentFindings
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+        expected = SubagentFindings(findings=["found it"])
+        call_count = 0
+
+        class ModelHTTPError(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+                super().__init__(f"status_code: {status_code}")
+
+        class MockResult:
+            output = expected
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                nonlocal call_count
+                call_count += 1
+                if call_count <= 2:
+                    raise ModelHTTPError(429)
+                return MockResult()
+
+        monkeypatch.setattr(
+            mod, "build_subagent_agent", lambda m, tools=None: MockAgent()
+        )
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+        result = mod.run_subagent(task, "m")
+        assert result is expected
+        assert call_count == 3
+
+    def test_run_subagent_degrades_after_max_retries(self, monkeypatch):
+        """All retries exhausted → degraded findings, no crash."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.plan import SubagentTask
+        from research.contracts.decisions import SubagentFindings
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+        call_count = 0
+
+        class ModelHTTPError(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+                super().__init__(f"status_code: {status_code}")
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                nonlocal call_count
+                call_count += 1
+                raise ModelHTTPError(503)
+
+        monkeypatch.setattr(
+            mod, "build_subagent_agent", lambda m, tools=None: MockAgent()
+        )
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+        result = mod.run_subagent(task, "m")
+        assert isinstance(result, SubagentFindings)
+        assert result.findings == []
+        assert "Subagent failed" in result.confidence_notes
+        assert call_count == 3  # _MAX_ATTEMPTS
+
+    def test_run_subagent_no_retry_on_non_retryable(self, monkeypatch):
+        """Non-retryable errors (e.g. 400) degrade immediately without retry."""
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.plan import SubagentTask
+        from research.contracts.decisions import SubagentFindings
+
+        task = SubagentTask(task_description="search", target_subtopic="t")
+        call_count = 0
+
+        class ModelHTTPError(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+                super().__init__(f"status_code: {status_code}")
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                nonlocal call_count
+                call_count += 1
+                raise ModelHTTPError(400)
+
+        monkeypatch.setattr(
+            mod, "build_subagent_agent", lambda m, tools=None: MockAgent()
+        )
+        result = mod.run_subagent(task, "m")
+        assert isinstance(result, SubagentFindings)
+        assert result.findings == []
+        assert call_count == 1  # No retry
+
 
 # ---------------------------------------------------------------------------
 # Draft checkpoint tests
