@@ -1,7 +1,5 @@
 """Judge checkpoint — compares generator outputs in council mode."""
 
-from __future__ import annotations
-
 import json
 import logging
 

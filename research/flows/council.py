@@ -4,8 +4,6 @@ Separate @flow that runs the default pipeline once per generator model,
 then runs a judge checkpoint to compare outputs.  Opt-in product mode.
 """
 
-from __future__ import annotations
-
 import logging
 
 from kitaru import flow

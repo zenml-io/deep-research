@@ -8,8 +8,6 @@ Pipeline phases:
   4. draft -> critique -> (optional supplemental loop) -> finalize -> assemble
 """
 
-from __future__ import annotations
-
 import logging
 
 from kitaru import flow

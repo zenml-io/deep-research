@@ -4,9 +4,6 @@ ZERO LLM calls. This is a @checkpoint(type="tool_call") that computes
 derived metadata, validates grounding density, resolves citation IDs
 against the evidence ledger, and produces the final InvestigationPackage.
 """
-
-from __future__ import annotations
-
 import logging
 import re
 

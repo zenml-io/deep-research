@@ -72,7 +72,7 @@ def main() -> None:
     print(f"Tier: {args.tier}")
     print()
 
-    package = deep_research(args.question, tier=args.tier, config=cfg)
+    package = deep_research.run(args.question, tier=args.tier, config=cfg).wait()
 
     out_path = write_package(package, args.output)
     print(f"\nPackage written to: {out_path}")
