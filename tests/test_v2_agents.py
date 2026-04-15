@@ -727,3 +727,87 @@ class TestFinalizerAgent:
         result = mod.build_finalizer_agent("test-model")
 
         assert result is wrap_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Judge agent factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeAgent:
+    """Unit tests for ``build_judge_agent``."""
+
+    def _load(self, monkeypatch):
+        """Install stubs, clear module cache, and import the judge module."""
+        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
+        _clear_modules(
+            "research.agents._wrap",
+            "research.agents",
+            "research.agents.judge",
+        )
+        mod = importlib.import_module("research.agents.judge")
+        return mod, wrap_calls, FakeAgent
+
+    def test_creates_agent_with_correct_model(self, monkeypatch):
+        """Factory passes the model_name to Agent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("openai:gpt-4o-mini")
+
+        agent = wrap_calls[0]["agent"]
+        assert isinstance(agent, FakeAgent)
+        assert agent.model_name == "openai:gpt-4o-mini"
+
+    def test_output_type_is_council_comparison(self, monkeypatch):
+        """Factory sets output_type=CouncilComparison on the agent."""
+        from research.contracts.package import CouncilComparison
+
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert agent.kwargs["output_type"] is CouncilComparison
+
+    def test_system_prompt_loaded(self, monkeypatch):
+        """Factory loads the council_judge prompt and passes it as system_prompt."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        prompt = agent.kwargs["system_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # substantive, not a stub
+
+    def test_prompt_covers_key_concepts(self, monkeypatch):
+        """Judge prompt covers grounding, coherence, comparison, and objectivity."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("test-model")
+
+        prompt = wrap_calls[0]["agent"].kwargs["system_prompt"].lower()
+        assert "grounding" in prompt
+        assert "coherence" in prompt
+        assert "comparison" in prompt or "comparing" in prompt
+        assert "completeness" in prompt
+        assert "objective" in prompt
+
+    def test_no_tools_passed(self, monkeypatch):
+        """Judge agent must NOT have any tools — structural guard."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("test-model")
+
+        agent = wrap_calls[0]["agent"]
+        assert "tools" not in agent.kwargs
+
+    def test_wrapped_with_correct_name(self, monkeypatch):
+        """Factory calls wrap_agent with name='council_judge'."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_judge_agent("test-model")
+
+        assert len(wrap_calls) == 1
+        assert wrap_calls[0]["name"] == "council_judge"
+
+    def test_returns_wrapped_result(self, monkeypatch):
+        """Factory returns the result of wrap_agent (not the raw agent)."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        result = mod.build_judge_agent("test-model")
+
+        assert result is wrap_calls[0]
