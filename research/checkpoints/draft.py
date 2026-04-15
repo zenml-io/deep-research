@@ -20,8 +20,9 @@ def run_draft(
 ) -> DraftReport:
     """Checkpoint: generate a draft report from the evidence ledger.
 
-    The generator receives the brief, plan, and full evidence ledger,
-    and produces a DraftReport with inline [evidence_id] citations.
+    The generator agent returns plain markdown text (``output_type=str``).
+    This checkpoint wraps the output in a :class:`DraftReport` by extracting
+    section headings from the markdown.
 
     Args:
         brief: The normalized research brief.
@@ -41,4 +42,5 @@ def run_draft(
         },
         indent=2,
     )
-    return agent.run_sync(prompt).output
+    markdown: str = agent.run_sync(prompt).output
+    return DraftReport.from_markdown(markdown)

@@ -16,8 +16,13 @@ def run_finalize(
     draft: DraftReport,
     critique: CritiqueReport,
     model_name: str,
+    stop_reason: str | None = None,
 ) -> FinalReport | None:
     """Checkpoint: apply critique to draft, producing a FinalReport.
+
+    The finalizer agent returns plain markdown text (``output_type=str``).
+    This checkpoint wraps the output in a :class:`FinalReport` by extracting
+    section headings from the markdown.
 
     On failure, returns None. The flow should check
     ``allow_unfinalized_package`` to decide whether to ship
@@ -27,6 +32,7 @@ def run_finalize(
         draft: The draft report.
         critique: The critique report to apply.
         model_name: PydanticAI model string for the finalizer agent.
+        stop_reason: Why the research loop terminated.
 
     Returns:
         A FinalReport, or None if the finalizer failed.
@@ -40,7 +46,8 @@ def run_finalize(
             },
             indent=2,
         )
-        return agent.run_sync(prompt).output
+        markdown: str = agent.run_sync(prompt).output
+        return FinalReport.from_markdown(markdown, stop_reason=stop_reason)
     except Exception as exc:
         logger.warning("Finalizer failed: %s — draft and critique preserved", exc)
         return None

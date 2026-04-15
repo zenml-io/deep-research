@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import re
+
 from research.contracts.base import StrictBase
+
+# Matches markdown headings: "## Heading" or "### Sub-heading" etc.
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+
+
+def _extract_sections(markdown: str) -> list[str]:
+    """Extract section headings from a markdown string.
+
+    Returns heading text in document order, stripped of leading ``#`` markers.
+    """
+    return [m.group(2).strip() for m in _HEADING_RE.finditer(markdown)]
 
 
 class DraftReport(StrictBase):
@@ -17,6 +30,14 @@ class DraftReport(StrictBase):
 
     sections: list[str] = []
     """Section headings present in the report."""
+
+    @classmethod
+    def from_markdown(cls, markdown: str) -> DraftReport:
+        """Construct a DraftReport from raw markdown text.
+
+        Extracts section headings automatically from ``#`` markers.
+        """
+        return cls(content=markdown, sections=_extract_sections(markdown))
 
 
 class CritiqueDimensionScore(StrictBase):
@@ -72,3 +93,17 @@ class FinalReport(StrictBase):
 
     stop_reason: str | None = None
     """Why the research loop terminated (e.g. 'converged', 'budget_exhausted')."""
+
+    @classmethod
+    def from_markdown(
+        cls, markdown: str, *, stop_reason: str | None = None
+    ) -> FinalReport:
+        """Construct a FinalReport from raw markdown text.
+
+        Extracts section headings automatically from ``#`` markers.
+        """
+        return cls(
+            content=markdown,
+            sections=_extract_sections(markdown),
+            stop_reason=stop_reason,
+        )

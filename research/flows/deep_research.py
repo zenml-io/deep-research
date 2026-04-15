@@ -315,7 +315,7 @@ def deep_research(
 
     # Phase 7: Finalize
     try:
-        finalize_h = run_finalize.submit(draft, critique, gen_model)
+        finalize_h = run_finalize.submit(draft, critique, gen_model, stop_reason)
         all_handles.append(finalize_h)
         final_report = finalize_h.load()
     except Exception as finalize_err:
