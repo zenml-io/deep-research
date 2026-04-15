@@ -1,7 +1,11 @@
-"""Tests for V2 agent wrapping infrastructure.
+"""Tests for V2 agent factory functions.
 
 Uses stub injection because kitaru and pydantic_ai may not be directly
 importable in the test environment (Python 3.14 / zenml compatibility).
+
+Each factory does:
+    agent = Agent(model_name, output_type=..., system_prompt=...)
+    return KitaruAgent(agent, name="...", capture=CapturePolicy(tool_capture="full"))
 """
 
 from __future__ import annotations
@@ -27,10 +31,10 @@ def _clear_modules(*names: str) -> None:
 def _install_stubs(monkeypatch):
     """Install lightweight pydantic_ai and kitaru stubs into sys.modules.
 
-    Returns the list that records every ``kp.wrap()`` call so tests can
+    Returns the list that records every ``KitaruAgent()`` call so tests can
     inspect what was passed.
     """
-    wrap_calls: list[dict] = []
+    wrap_calls: list = []
 
     class FakeAgent:
         """Minimal stand-in for ``pydantic_ai.Agent``."""
@@ -39,16 +43,28 @@ def _install_stubs(monkeypatch):
             self.model_name = model_name
             self.kwargs = kwargs
 
-    def wrap(agent, *, tool_capture_config=None, name=None):
-        record = {
-            "agent": agent,
-            "tool_capture_config": tool_capture_config,
-            "name": name,
-        }
-        wrap_calls.append(record)
-        return record  # return the dict so tests can verify passthrough
+    class FakeCapturePolicy:
+        """Minimal stand-in for ``CapturePolicy``."""
 
-    kp_ns = types.SimpleNamespace(wrap=wrap)
+        def __init__(self, *, tool_capture=None):
+            self.tool_capture = tool_capture
+
+    class FakeKitaruAgent:
+        """Stub for ``KitaruAgent`` that records construction and supports dict-like access."""
+
+        def __init__(self, agent, *, name=None, capture=None):
+            self._data = {"agent": agent, "name": name, "capture": capture}
+            wrap_calls.append(self)
+
+        def __getitem__(self, key):
+            return self._data[key]
+
+        def __contains__(self, key):
+            return key in self._data
+
+    kp_ns = types.SimpleNamespace(
+        KitaruAgent=FakeKitaruAgent, CapturePolicy=FakeCapturePolicy
+    )
 
     monkeypatch.setitem(
         sys.modules, "pydantic_ai", types.SimpleNamespace(Agent=FakeAgent)
@@ -66,91 +82,9 @@ def _install_stubs(monkeypatch):
     return wrap_calls, FakeAgent
 
 
-def _load_wrap_module():
-    """Re-import ``research.agents._wrap`` from scratch."""
-    _clear_modules("research.agents._wrap", "research.agents")
-    return importlib.import_module("research.agents._wrap")
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-
-class TestWrapAgent:
-    """Unit tests for ``wrap_agent``."""
-
-    def test_calls_kp_wrap_with_correct_args(self, monkeypatch):
-        """wrap_agent passes tool_capture_config={"mode": "full"} to kp.wrap."""
-        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
-        mod = _load_wrap_module()
-
-        agent = FakeAgent("google-gla:gemini-2.5-flash")
-        mod.wrap_agent(agent)
-
-        assert len(wrap_calls) == 1
-        assert wrap_calls[0]["agent"] is agent
-        assert wrap_calls[0]["tool_capture_config"] == {"mode": "full"}
-
-    def test_passes_name_through(self, monkeypatch):
-        """wrap_agent forwards the name keyword to kp.wrap."""
-        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
-        mod = _load_wrap_module()
-
-        agent = FakeAgent("test-model")
-        mod.wrap_agent(agent, name="supervisor")
-
-        assert wrap_calls[0]["name"] == "supervisor"
-
-    def test_name_defaults_to_none(self, monkeypatch):
-        """When name is omitted, kp.wrap receives None."""
-        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
-        mod = _load_wrap_module()
-
-        agent = FakeAgent("test-model")
-        mod.wrap_agent(agent)
-
-        assert wrap_calls[0]["name"] is None
-
-    def test_returns_kp_wrap_result(self, monkeypatch):
-        """wrap_agent returns exactly what kp.wrap returns (no alteration)."""
-        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
-        mod = _load_wrap_module()
-
-        agent = FakeAgent("test-model")
-        result = mod.wrap_agent(agent, name="writer")
-
-        # Our stub's wrap() returns the record dict
-        assert result is wrap_calls[0]
-        assert result["agent"] is agent
-        assert result["name"] == "writer"
-
-    def test_multiple_wraps_are_independent(self, monkeypatch):
-        """Each wrap_agent call creates an independent wrapped agent."""
-        wrap_calls, FakeAgent = _install_stubs(monkeypatch)
-        mod = _load_wrap_module()
-
-        agent_a = FakeAgent("model-a")
-        agent_b = FakeAgent("model-b")
-
-        result_a = mod.wrap_agent(agent_a, name="alpha")
-        result_b = mod.wrap_agent(agent_b, name="beta")
-
-        assert len(wrap_calls) == 2
-        assert result_a["agent"] is agent_a
-        assert result_b["agent"] is agent_b
-        assert result_a["name"] == "alpha"
-        assert result_b["name"] == "beta"
-        assert result_a is not result_b
-
-    def test_reexport_from_agents_package(self, monkeypatch):
-        """``from research.agents import wrap_agent`` works."""
-        _install_stubs(monkeypatch)
-        _clear_modules("research.agents._wrap", "research.agents")
-
-        agents_mod = importlib.import_module("research.agents")
-        assert hasattr(agents_mod, "wrap_agent")
-        assert callable(agents_mod.wrap_agent)
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +99,6 @@ class TestScopeAgent:
         """Install stubs, clear module cache, and import the scope module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.scope",
         )
@@ -203,7 +136,7 @@ class TestScopeAgent:
         assert "research scoping agent" in prompt.lower()
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='scope'."""
+        """Factory passes name='scope' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_scope_agent("test-model")
 
@@ -211,12 +144,21 @@ class TestScopeAgent:
         assert wrap_calls[0]["name"] == "scope"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_scope_agent("test-model")
 
-        # Our stub wrap() returns a dict, so result should be that dict
+        # Our stub KitaruAgent() stores the instance in wrap_calls
         assert result is wrap_calls[0]
+
+    def test_capture_policy_is_full(self, monkeypatch):
+        """Factory passes CapturePolicy(tool_capture='full') to KitaruAgent."""
+        mod, wrap_calls, FakeAgent = self._load(monkeypatch)
+        mod.build_scope_agent("test-model")
+
+        capture = wrap_calls[0]["capture"]
+        assert capture is not None
+        assert capture.tool_capture == "full"
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +173,6 @@ class TestPlannerAgent:
         """Install stubs, clear module cache, and import the planner module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.planner",
         )
@@ -269,7 +210,7 @@ class TestPlannerAgent:
         assert "research planner" in prompt.lower()
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='planner'."""
+        """Factory passes name='planner' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_planner_agent("test-model")
 
@@ -277,11 +218,11 @@ class TestPlannerAgent:
         assert wrap_calls[0]["name"] == "planner"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_planner_agent("test-model")
 
-        # Our stub wrap() returns a dict, so result should be that dict
+        # Our stub KitaruAgent() stores the instance in wrap_calls
         assert result is wrap_calls[0]
 
 
@@ -297,7 +238,6 @@ class TestSupervisorAgent:
         """Install stubs, clear module cache, and import the supervisor module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.supervisor",
         )
@@ -357,7 +297,7 @@ class TestSupervisorAgent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='supervisor'."""
+        """Factory passes name='supervisor' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_supervisor_agent("test-model")
 
@@ -365,11 +305,11 @@ class TestSupervisorAgent:
         assert wrap_calls[0]["name"] == "supervisor"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_supervisor_agent("test-model")
 
-        # Our stub wrap() returns a dict, so result should be that dict
+        # Our stub KitaruAgent() stores the instance in wrap_calls
         assert result is wrap_calls[0]
 
 
@@ -385,7 +325,6 @@ class TestSubagent:
         """Install stubs, clear module cache, and import the subagent module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.subagent",
         )
@@ -469,7 +408,7 @@ class TestSubagent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='subagent'."""
+        """Factory passes name='subagent' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_subagent_agent("test-model")
 
@@ -477,11 +416,11 @@ class TestSubagent:
         assert wrap_calls[0]["name"] == "subagent"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_subagent_agent("test-model")
 
-        # Our stub wrap() returns a dict, so result should be that dict
+        # Our stub KitaruAgent() stores the instance in wrap_calls
         assert result is wrap_calls[0]
 
 
@@ -497,7 +436,6 @@ class TestGeneratorAgent:
         """Install stubs, clear module cache, and import the generator module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.generator",
         )
@@ -551,7 +489,7 @@ class TestGeneratorAgent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='generator'."""
+        """Factory passes name='generator' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_generator_agent("test-model")
 
@@ -559,7 +497,7 @@ class TestGeneratorAgent:
         assert wrap_calls[0]["name"] == "generator"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_generator_agent("test-model")
 
@@ -578,7 +516,6 @@ class TestReviewerAgent:
         """Install stubs, clear module cache, and import the reviewer module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.reviewer",
         )
@@ -633,7 +570,7 @@ class TestReviewerAgent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='reviewer'."""
+        """Factory passes name='reviewer' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_reviewer_agent("test-model")
 
@@ -641,7 +578,7 @@ class TestReviewerAgent:
         assert wrap_calls[0]["name"] == "reviewer"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_reviewer_agent("test-model")
 
@@ -660,7 +597,6 @@ class TestFinalizerAgent:
         """Install stubs, clear module cache, and import the finalizer module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.finalizer",
         )
@@ -714,7 +650,7 @@ class TestFinalizerAgent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='finalizer'."""
+        """Factory passes name='finalizer' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_finalizer_agent("test-model")
 
@@ -722,7 +658,7 @@ class TestFinalizerAgent:
         assert wrap_calls[0]["name"] == "finalizer"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_finalizer_agent("test-model")
 
@@ -741,7 +677,6 @@ class TestJudgeAgent:
         """Install stubs, clear module cache, and import the judge module."""
         wrap_calls, FakeAgent = _install_stubs(monkeypatch)
         _clear_modules(
-            "research.agents._wrap",
             "research.agents",
             "research.agents.judge",
         )
@@ -798,7 +733,7 @@ class TestJudgeAgent:
         assert "tools" not in agent.kwargs
 
     def test_wrapped_with_correct_name(self, monkeypatch):
-        """Factory calls wrap_agent with name='council_judge'."""
+        """Factory passes name='council_judge' to KitaruAgent."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         mod.build_judge_agent("test-model")
 
@@ -806,7 +741,7 @@ class TestJudgeAgent:
         assert wrap_calls[0]["name"] == "council_judge"
 
     def test_returns_wrapped_result(self, monkeypatch):
-        """Factory returns the result of wrap_agent (not the raw agent)."""
+        """Factory returns the KitaruAgent instance (not the raw agent)."""
         mod, wrap_calls, FakeAgent = self._load(monkeypatch)
         result = mod.build_judge_agent("test-model")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 
-from research.agents._wrap import wrap_agent
+from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
 from research.contracts.decisions import SubagentFindings
 from research.prompts import get_prompt
 
@@ -23,7 +23,7 @@ def build_subagent_agent(model_name: str, tools=None):
             from :class:`~research.providers.agent_tools.AgentToolSurface`.
 
     Returns:
-        A Kitaru-wrapped PydanticAI agent with ``SubagentFindings`` output type.
+        A :class:`KitaruAgent` with ``SubagentFindings`` output type.
     """
     kwargs: dict = {
         "output_type": SubagentFindings,
@@ -33,4 +33,6 @@ def build_subagent_agent(model_name: str, tools=None):
         kwargs["tools"] = tools
 
     agent = Agent(model_name, **kwargs)
-    return wrap_agent(agent, name="subagent")
+    return KitaruAgent(
+        agent, name="subagent", capture=CapturePolicy(tool_capture="full")
+    )

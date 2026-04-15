@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 
-from research.agents._wrap import wrap_agent
+from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
 from research.contracts.decisions import SupervisorDecision
 from research.prompts import get_prompt
 
@@ -25,11 +25,13 @@ def build_supervisor_agent(model_name: str):
         model_name: PydanticAI model string (e.g. ``"google-gla:gemini-2.5-flash"``).
 
     Returns:
-        A Kitaru-wrapped PydanticAI agent with ``SupervisorDecision`` output type.
+        A :class:`KitaruAgent` with ``SupervisorDecision`` output type.
     """
     agent = Agent(
         model_name,
         output_type=SupervisorDecision,
         system_prompt=get_prompt("supervisor").text,
     )
-    return wrap_agent(agent, name="supervisor")
+    return KitaruAgent(
+        agent, name="supervisor", capture=CapturePolicy(tool_capture="full")
+    )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 
-from research.agents._wrap import wrap_agent
+from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
 from research.contracts.package import CouncilComparison
 from research.prompts import get_prompt
 
@@ -28,11 +28,13 @@ def build_judge_agent(model_name: str):
         model_name: PydanticAI model string (e.g. ``"openai:gpt-4o-mini"``).
 
     Returns:
-        A Kitaru-wrapped PydanticAI agent with ``CouncilComparison`` output type.
+        A :class:`KitaruAgent` with ``CouncilComparison`` output type.
     """
     agent = Agent(
         model_name,
         output_type=CouncilComparison,
         system_prompt=get_prompt("council_judge").text,
     )
-    return wrap_agent(agent, name="council_judge")
+    return KitaruAgent(
+        agent, name="council_judge", capture=CapturePolicy(tool_capture="full")
+    )

@@ -56,10 +56,26 @@ def _install_checkpoint_stubs(monkeypatch):
             self.model_name = model_name
             self.kwargs = kwargs
 
-    def wrap(agent, *, tool_capture_config=None, name=None):
-        return agent  # return agent unchanged for checkpoint tests
+    class FakeCapturePolicy:
+        def __init__(self, *, tool_capture=None):
+            self.tool_capture = tool_capture
 
-    kp_ns = types.SimpleNamespace(wrap=wrap)
+    class FakeKitaruAgent:
+        """Passthrough stub — returns the agent unchanged for checkpoint tests.
+
+        Delegates attribute access to the wrapped agent so that
+        agent.run_sync() works transparently.
+        """
+
+        def __init__(self, agent, *, name=None, capture=None):
+            self._wrapped = agent
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    kp_ns = types.SimpleNamespace(
+        KitaruAgent=FakeKitaruAgent, CapturePolicy=FakeCapturePolicy
+    )
     kitaru_mod = types.SimpleNamespace(
         checkpoint=checkpoint_decorator,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
@@ -92,7 +108,6 @@ class TestMetadataCheckpoints:
         _clear_modules(
             "research.checkpoints.metadata",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
         )
         return importlib.import_module("research.checkpoints.metadata")
@@ -160,7 +175,6 @@ class TestScopeCheckpoint:
         _clear_modules(
             "research.checkpoints.scope",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.scope",
         )
@@ -234,7 +248,6 @@ class TestPlanCheckpoint:
         _clear_modules(
             "research.checkpoints.plan",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.planner",
         )
@@ -356,7 +369,6 @@ class TestCheckpointsInit:
             "research.checkpoints.critique",
             "research.checkpoints.finalize",
             "research.checkpoints.assemble",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.scope",
             "research.agents.planner",
@@ -469,7 +481,6 @@ class TestSupervisorCheckpoint:
         _clear_modules(
             "research.checkpoints.supervisor",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.supervisor",
         )
@@ -574,7 +585,6 @@ class TestSubagentCheckpoint:
         _clear_modules(
             "research.checkpoints.subagent",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.subagent",
         )
@@ -702,7 +712,6 @@ class TestDraftCheckpoint:
         _clear_modules(
             "research.checkpoints.draft",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.generator",
         )
@@ -794,7 +803,6 @@ class TestCritiqueCheckpoint:
         _clear_modules(
             "research.checkpoints.critique",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.reviewer",
         )
@@ -995,7 +1003,6 @@ class TestFinalizeCheckpoint:
         _clear_modules(
             "research.checkpoints.finalize",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
             "research.agents.finalizer",
         )
@@ -1091,7 +1098,6 @@ class TestAssembleCheckpoint:
         _clear_modules(
             "research.checkpoints.assemble",
             "research.checkpoints",
-            "research.agents._wrap",
             "research.agents",
         )
         mod = importlib.import_module("research.checkpoints.assemble")

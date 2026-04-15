@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 
-from research.agents._wrap import wrap_agent
+from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
 from research.contracts.reports import FinalReport
 from research.prompts import get_prompt
 
@@ -24,11 +24,13 @@ def build_finalizer_agent(model_name: str):
         model_name: PydanticAI model string (e.g. ``"google-gla:gemini-2.5-flash"``).
 
     Returns:
-        A Kitaru-wrapped PydanticAI agent with ``FinalReport`` output type.
+        A :class:`KitaruAgent` with ``FinalReport`` output type.
     """
     agent = Agent(
         model_name,
         output_type=FinalReport,
         system_prompt=get_prompt("finalizer").text,
     )
-    return wrap_agent(agent, name="finalizer")
+    return KitaruAgent(
+        agent, name="finalizer", capture=CapturePolicy(tool_capture="full")
+    )

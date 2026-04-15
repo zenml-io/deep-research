@@ -52,7 +52,6 @@ _FLOW_MODULES = [
     "research.checkpoints.finalize",
     "research.checkpoints.assemble",
     "research.checkpoints",
-    "research.agents._wrap",
     "research.agents",
     "research.agents.scope",
     "research.agents.planner",
@@ -109,10 +108,22 @@ def _install_stubs(monkeypatch):
         def __init__(self, model_name="test", **kwargs):
             pass
 
-    def wrap(agent, **kwargs):
-        return agent
+    class FakeCapturePolicy:
+        def __init__(self, *, tool_capture=None):
+            self.tool_capture = tool_capture
 
-    kp_ns = types.SimpleNamespace(wrap=wrap)
+    class FakeKitaruAgent:
+        """Passthrough stub — delegates to the wrapped agent."""
+
+        def __init__(self, agent, *, name=None, capture=None):
+            self._wrapped = agent
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    kp_ns = types.SimpleNamespace(
+        KitaruAgent=FakeKitaruAgent, CapturePolicy=FakeCapturePolicy
+    )
     kitaru_mod = types.SimpleNamespace(
         flow=flow_decorator,
         checkpoint=checkpoint_decorator,
