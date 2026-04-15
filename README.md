@@ -64,11 +64,12 @@ The engine uses three LLM providers across its agent pipeline. The cross-provide
 
 | Role | Quick | Standard | Deep |
 |---|---|---|---|
-| Generator | `anthropic:claude-sonnet-4-20250514` | `anthropic:claude-sonnet-4-20250514` | `anthropic:claude-sonnet-4-20250514` |
-| Subagent | `google-gla:gemini-2.5-flash` | `google-gla:gemini-2.5-flash` | `google-gla:gemini-2.5-flash` |
-| Reviewer | `openai:gpt-4o-mini` | `openai:gpt-4o` | `openai:gpt-4o` |
-| Judge | — | `google-gla:gemini-2.5-pro` | `google-gla:gemini-2.5-pro` |
-| 2nd Reviewer | — | — | `google-gla:gemini-2.5-pro` |
+| Generator | `anthropic:claude-sonnet-4-6` | `anthropic:claude-sonnet-4-6` | `anthropic:claude-sonnet-4-6` |
+| Scope (override) | — | — | `anthropic:claude-opus-4-6` |
+| Subagent | `google-gla:gemini-3.1-flash-lite-preview` | `google-gla:gemini-3.1-flash-lite-preview` | `google-gla:gemini-3.1-flash-lite-preview` |
+| Reviewer | `openai:gpt-5.4-mini` | `openai:gpt-5.4-mini` | `openai:gpt-5.4-mini` |
+| Judge | — | `google-gla:gemini-3.1-pro-preview` | `google-gla:gemini-3.1-pro-preview` |
+| 2nd Reviewer | — | — | `google-gla:gemini-3.1-pro-preview` |
 
 **Option A — All three providers (recommended for deep tier)**
 
@@ -283,9 +284,9 @@ All settings use the `RESEARCH_` prefix, loaded via `pydantic-settings`.
 ### Model string format
 
 PydanticAI uses `provider:model` format:
-- `google-gla:gemini-2.5-flash`
-- `anthropic:claude-sonnet-4-20250514`
-- `openai:gpt-4o-mini`
+- `google-gla:gemini-3.1-flash-lite-preview`
+- `anthropic:claude-sonnet-4-6`
+- `openai:gpt-5.4-mini`
 
 ## Testing
 

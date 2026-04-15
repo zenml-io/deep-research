@@ -148,9 +148,9 @@ UUID generation and wall-clock snapshots are confined to `research/checkpoints/m
 ## LLM Provider Model Strings
 
 PydanticAI uses provider-prefixed format:
-- `google-gla:gemini-2.5-flash`
-- `anthropic:claude-sonnet-4-20250514`
-- `openai:gpt-4o-mini`
+- `google-gla:gemini-3.1-flash-lite-preview`
+- `anthropic:claude-sonnet-4-6`
+- `openai:gpt-5.4-mini`
 
 ## Environment Variables
 

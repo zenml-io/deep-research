@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 def run_judge(
     packages: dict[str, InvestigationPackage],
     model_name: str,
+    model_settings: dict | None = None,
 ) -> CouncilComparison:
     """Compare investigation packages from different generators.
 
@@ -27,11 +28,12 @@ def run_judge(
     Args:
         packages: Mapping of generator name to its InvestigationPackage.
         model_name: PydanticAI model string for the judge agent.
+        model_settings: Optional provider-specific model settings dict.
 
     Returns:
         A CouncilComparison with comparison text, scores, and recommendation.
     """
-    agent = build_judge_agent(model_name)
+    agent = build_judge_agent(model_name, model_settings=model_settings)
 
     # Build comparison prompt from package data
     summaries: dict[str, dict] = {}

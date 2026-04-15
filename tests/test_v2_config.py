@@ -78,11 +78,11 @@ class TestModelSlot:
 
 class TestModelSlotConfig:
     def test_model_string_property(self):
-        cfg = ModelSlotConfig(provider="anthropic", model="claude-sonnet-4-20250514")
-        assert cfg.model_string == "anthropic:claude-sonnet-4-20250514"
+        cfg = ModelSlotConfig(provider="anthropic", model="claude-sonnet-4-6")
+        assert cfg.model_string == "anthropic:claude-sonnet-4-6"
 
     def test_default_costs_are_zero(self):
-        cfg = ModelSlotConfig(provider="openai", model="gpt-4o")
+        cfg = ModelSlotConfig(provider="openai", model="gpt-5.4-mini")
         assert cfg.input_cost_per_token == 0.0
         assert cfg.output_cost_per_token == 0.0
 
@@ -114,17 +114,17 @@ class TestTierDefaults:
     def test_quick_generator_is_anthropic_sonnet(self):
         gen = TIER_DEFAULTS["quick"].slots[ModelSlot.generator]
         assert gen.provider == "anthropic"
-        assert gen.model == "claude-sonnet-4-20250514"
+        assert gen.model == "claude-sonnet-4-6"
 
     def test_quick_subagent_is_gemini_flash(self):
         sub = TIER_DEFAULTS["quick"].slots[ModelSlot.subagent]
         assert sub.provider == "google-gla"
-        assert sub.model == "gemini-2.5-flash"
+        assert sub.model == "gemini-3.1-flash-lite-preview"
 
-    def test_quick_reviewer_is_gpt4o_mini(self):
+    def test_quick_reviewer_is_gpt5_4_mini(self):
         rev = TIER_DEFAULTS["quick"].slots[ModelSlot.reviewer]
         assert rev.provider == "openai"
-        assert rev.model == "gpt-4o-mini"
+        assert rev.model == "gpt-5.4-mini"
 
     def test_quick_has_no_judge(self):
         assert ModelSlot.judge not in TIER_DEFAULTS["quick"].slots
@@ -132,24 +132,50 @@ class TestTierDefaults:
     def test_standard_judge_is_gemini_pro(self):
         judge = TIER_DEFAULTS["standard"].slots[ModelSlot.judge]
         assert judge.provider == "google-gla"
-        assert judge.model == "gemini-2.5-pro"
+        assert judge.model == "gemini-3.1-pro-preview"
 
-    def test_standard_reviewer_is_gpt4o(self):
+    def test_standard_reviewer_is_gpt5_4_mini(self):
         rev = TIER_DEFAULTS["standard"].slots[ModelSlot.reviewer]
         assert rev.provider == "openai"
-        assert rev.model == "gpt-4o"
+        assert rev.model == "gpt-5.4-mini"
 
     def test_deep_has_second_reviewer(self):
         assert TIER_DEFAULTS["deep"].second_reviewer is not None
         second = TIER_DEFAULTS["deep"].second_reviewer
         assert second.provider == "google-gla"
-        assert second.model == "gemini-2.5-pro"
+        assert second.model == "gemini-3.1-pro-preview"
 
     def test_quick_has_no_second_reviewer(self):
         assert TIER_DEFAULTS["quick"].second_reviewer is None
 
     def test_standard_has_no_second_reviewer(self):
         assert TIER_DEFAULTS["standard"].second_reviewer is None
+
+    def test_quick_has_no_scope_override(self):
+        assert TIER_DEFAULTS["quick"].scope_override is None
+
+    def test_standard_has_no_scope_override(self):
+        assert TIER_DEFAULTS["standard"].scope_override is None
+
+    def test_deep_has_scope_override(self):
+        override = TIER_DEFAULTS["deep"].scope_override
+        assert override is not None
+        assert override.provider == "anthropic"
+        assert override.model == "claude-opus-4-6"
+
+    def test_judge_has_thinking_config(self):
+        """Standard and deep judge slots should have thinking enabled."""
+        for tier_name in ("standard", "deep"):
+            judge = TIER_DEFAULTS[tier_name].slots[ModelSlot.judge]
+            assert judge.model_settings is not None
+            assert "google_thinking_config" in judge.model_settings
+            thinking_cfg = judge.model_settings["google_thinking_config"]
+            assert thinking_cfg == {"thinking_level": "high"}
+
+    def test_model_settings_default_is_none(self):
+        """Slots without explicit model_settings default to None."""
+        gen = TIER_DEFAULTS["quick"].slots[ModelSlot.generator]
+        assert gen.model_settings is None
 
     def test_default_parallel_subagents(self):
         for tier in TIER_DEFAULTS.values():
@@ -214,6 +240,7 @@ class TestResearchConfig:
         assert "reviewer" in cfg.slots
         assert "judge" not in cfg.slots
         assert cfg.second_reviewer is None
+        assert cfg.scope_override is None
 
     def test_for_tier_standard(self):
         cfg = ResearchConfig.for_tier("standard")
@@ -221,13 +248,16 @@ class TestResearchConfig:
         assert cfg.max_iterations == 5
         assert "judge" in cfg.slots
         assert cfg.second_reviewer is None
+        assert cfg.scope_override is None
 
     def test_for_tier_deep(self):
         cfg = ResearchConfig.for_tier("deep")
         assert cfg.tier == "deep"
         assert cfg.max_iterations == 10
         assert cfg.second_reviewer is not None
-        assert cfg.second_reviewer.model == "gemini-2.5-pro"
+        assert cfg.second_reviewer.model == "gemini-3.1-pro-preview"
+        assert cfg.scope_override is not None
+        assert cfg.scope_override.model_string == "anthropic:claude-opus-4-6"
 
     def test_for_tier_unknown_raises(self):
         with pytest.raises(ValueError, match="Unknown tier"):
@@ -278,12 +308,13 @@ class TestResearchConfig:
 
     def test_deep_tier_slot_models_match_spec(self):
         cfg = ResearchConfig.for_tier("deep")
+        assert cfg.slots["generator"].model_string == "anthropic:claude-sonnet-4-6"
         assert (
-            cfg.slots["generator"].model_string == "anthropic:claude-sonnet-4-20250514"
+            cfg.slots["subagent"].model_string
+            == "google-gla:gemini-3.1-flash-lite-preview"
         )
-        assert cfg.slots["subagent"].model_string == "google-gla:gemini-2.5-flash"
-        assert cfg.slots["reviewer"].model_string == "openai:gpt-4o"
-        assert cfg.slots["judge"].model_string == "google-gla:gemini-2.5-pro"
+        assert cfg.slots["reviewer"].model_string == "openai:gpt-5.4-mini"
+        assert cfg.slots["judge"].model_string == "google-gla:gemini-3.1-pro-preview"
 
     def test_budget_not_frozen_inside_frozen_config(self):
         """BudgetConfig inside ResearchConfig should still be mutable.

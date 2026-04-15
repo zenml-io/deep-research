@@ -47,6 +47,7 @@ class ResearchConfig(BaseModel):
     budget: BudgetConfig
     slots: dict[str, ModelSlotConfig]
     second_reviewer: ModelSlotConfig | None = None
+    scope_override: ModelSlotConfig | None = None
     max_iterations: int
     max_parallel_subagents: int
     ledger_window_iterations: int
@@ -97,6 +98,7 @@ class ResearchConfig(BaseModel):
             budget=budget,
             slots=slots,
             second_reviewer=defaults.second_reviewer,
+            scope_override=defaults.scope_override,
             max_iterations=defaults.max_iterations,
             max_parallel_subagents=settings.max_parallel_subagents,
             ledger_window_iterations=settings.ledger_window_iterations,

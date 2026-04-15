@@ -278,7 +278,7 @@ class TestJudgePromptConstruction:
 
         # Monkeypatch build_judge_agent to return our fake
         monkeypatch.setattr(
-            mod, "build_judge_agent", lambda model_name: FakeWrappedAgent()
+            mod, "build_judge_agent", lambda model_name, **kw: FakeWrappedAgent()
         )
 
         packages = {"gen_a": _PACKAGE_A, "gen_b": _PACKAGE_B}
@@ -309,7 +309,7 @@ class TestJudgePromptConstruction:
                 return FakeRunResult(_COMPARISON)
 
         monkeypatch.setattr(
-            mod, "build_judge_agent", lambda model_name: FakeWrappedAgent()
+            mod, "build_judge_agent", lambda model_name, **kw: FakeWrappedAgent()
         )
 
         pkg_no_final = InvestigationPackage(
@@ -341,7 +341,7 @@ class TestJudgePromptConstruction:
                 return FakeRunResult(_COMPARISON)
 
         monkeypatch.setattr(
-            mod, "build_judge_agent", lambda model_name: FakeWrappedAgent()
+            mod, "build_judge_agent", lambda model_name, **kw: FakeWrappedAgent()
         )
 
         pkg_empty = InvestigationPackage(

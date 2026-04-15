@@ -22,14 +22,19 @@ class ModelSlotConfig(BaseModel):
     """Configuration for a single model slot.
 
     provider + model together form the PydanticAI model string,
-    e.g. provider="anthropic", model="claude-sonnet-4-20250514"
-    → "anthropic:claude-sonnet-4-20250514".
+    e.g. provider="anthropic", model="claude-sonnet-4-6"
+    → "anthropic:claude-sonnet-4-6".
+
+    model_settings is an optional dict of provider-specific PydanticAI
+    model settings (e.g. ``{"google_thinking_config": {"thinking_level": "high"}}``
+    for Gemini models with thinking enabled).
     """
 
     provider: str
     model: str
     input_cost_per_token: float = 0.0
     output_cost_per_token: float = 0.0
+    model_settings: dict[str, object] | None = None
 
     @property
     def model_string(self) -> str:

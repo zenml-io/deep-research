@@ -180,7 +180,8 @@ def deep_research(
 
     # Phase 1: Scope
     gen_model = cfg.slots["generator"].model_string
-    brief = run_scope(question, gen_model)
+    scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
+    brief = run_scope(question, scope_model)
 
     # Phase 2: Plan
     plan = run_plan(brief, gen_model)

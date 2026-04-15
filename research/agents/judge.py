@@ -9,7 +9,7 @@ from research.contracts.package import CouncilComparison
 from research.prompts import get_prompt
 
 
-def build_judge_agent(model_name: str):
+def build_judge_agent(model_name: str, model_settings: dict | None = None):
     """Build the council judge agent that compares generator outputs.
 
     The judge evaluates two research reports (produced by different
@@ -25,7 +25,9 @@ def build_judge_agent(model_name: str):
     to eliminate model-bias in the comparison.
 
     Args:
-        model_name: PydanticAI model string (e.g. ``"openai:gpt-4o-mini"``).
+        model_name: PydanticAI model string (e.g. ``"google-gla:gemini-3.1-pro-preview"``).
+        model_settings: Optional provider-specific model settings dict
+            (e.g. ``{"google_thinking_config": {"thinking_level": "high"}}``).
 
     Returns:
         A :class:`KitaruAgent` with ``CouncilComparison`` output type.
@@ -34,6 +36,7 @@ def build_judge_agent(model_name: str):
         model_name,
         output_type=CouncilComparison,
         system_prompt=get_prompt("council_judge").text,
+        model_settings=model_settings,
     )
     return KitaruAgent(
         agent, name="council_judge", capture=CapturePolicy(tool_capture="full")
