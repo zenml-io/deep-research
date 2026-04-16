@@ -337,7 +337,18 @@ def _run_deep_research_pipeline(
     output_dir: str | None = None,
     require_plan_approval: bool = True,
 ):
-    """Run the deep-research pipeline and return the terminal checkpoint handle."""
+    
+
+
+@flow
+def deep_research(
+    question: str,
+    tier: str = "standard",
+    config: ResearchConfig | None = None,
+    output_dir: str | None = None,
+) -> InvestigationPackage:
+    """Orchestrate a full deep-research investigation."""
+    cfg = config or ResearchConfig.for_tier(tier)
     tracker = BudgetTracker(
         budget=cfg.budget,
         strict_unknown_model_cost=cfg.strict_unknown_model_cost,
@@ -508,21 +519,3 @@ def _run_deep_research_pipeline(
         return export_package.submit(package, output_dir, after=all_handles)
     finally:
         reset_active_tracker(tracker_token)
-
-
-@flow
-def deep_research(
-    question: str,
-    tier: str = "standard",
-    config: ResearchConfig | None = None,
-    output_dir: str | None = None,
-) -> InvestigationPackage:
-    """Orchestrate a full deep-research investigation."""
-    cfg = config or ResearchConfig.for_tier(tier)
-    return _run_deep_research_pipeline(
-        question,
-        tier=tier,
-        cfg=cfg,
-        output_dir=output_dir,
-        require_plan_approval=True,
-    )
