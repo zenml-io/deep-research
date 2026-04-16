@@ -7,7 +7,15 @@
 
 Turn any research question into a structured, evidence-backed investigation package — with full provenance, cross-provider critique, and convergence-driven iteration.
 
-Built on [Kitaru](https://kitaru.ai) (ZenML's durable execution framework) and [PydanticAI](https://ai.pydantic.dev) (structured LLM completions). Every phase boundary is a checkpoint. Every LLM call produces typed output. Every source is traceable.
+Built on [Kitaru](https://kitaru.ai) (ZenML's durable execution framework) and [PydanticAI](https://ai.pydantic.dev) (structured LLM completions). Core research phases are checkpointed, LLM calls return typed output, and every merged source stays traceable.
+
+## Current durability guarantees
+
+- Core phase work is checkpointed: scope, plan, supervisor, subagent, draft, critique, finalize, assemble, and export.
+- Flow-body waits are implemented for **plan approval** and **council generator selection**.
+- Packages record deterministic evidence IDs, durable provider/tool manifests, and exported output paths.
+- The repo now includes a thin real-runtime test slice that proves **completed-checkpoint replay** and **wait → input → resume** behavior on a local Kitaru stack.
+- Most other flow/integration tests still use lightweight stubs, so broader crash/recovery coverage should not be overclaimed yet.
 
 ## Quick Start
 
@@ -219,7 +227,8 @@ Question
   ├─ 5. Critique ───────── cross-provider review → CritiqueReport
   │     └─ Supplemental ── if reviewer says "need more research" → re-iterate
   ├─ 6. Finalize ───────── incorporate critique → FinalReport
-  └─ 7. Assemble ───────── validate & package → InvestigationPackage
+  ├─ 7. Assemble ───────── validate & package → InvestigationPackage
+  └─ 8. Export ─────────── durable filesystem materialization
 ```
 
 ### Stop rules
@@ -241,7 +250,7 @@ The engine enforces model diversity for quality checks. Generator (Anthropic) an
 
 ### Council mode (experimental)
 
-A separate `council_research()` flow runs the full pipeline once per generator model, then uses a judge to compare outputs. Available for the deep tier. Not yet wired into the CLI.
+A separate `council_research()` flow runs the full pipeline once per generator model, then uses a judge to compare outputs and waits for an explicit operator selection of the canonical generator. The CLI supports this via `--council`.
 
 ## Tiers
 
@@ -309,11 +318,12 @@ uv run pytest tests/test_v2_agents.py -v
 uv run pytest tests/test_v2_agents.py::TestScopeAgent::test_creates_agent_with_correct_model -v
 ```
 
-V2 tests covering agents, checkpoints, config, convergence, contracts, council, flow orchestration, integration, architectural invariants, evidence ledger, package export, prompts, and search providers. All tests run offline using stubs — no API keys or network access required.
+V2 tests covering agents, checkpoints, config, convergence, contracts, council, flow orchestration, integration, architectural invariants, evidence ledger, package export, prompts, and search providers. Most of this suite runs offline using stubs; `tests/test_v2_runtime_durability.py` is the small exception that uses a real local Kitaru runtime with isolated temp HOME/XDG dirs.
 
 ### Testing patterns
 
-- **Kitaru stub injection** — Tests inject lightweight stubs for `kitaru` and `pydantic_ai` into `sys.modules` before importing. This avoids needing a real Kitaru runtime.
+- **Kitaru stub injection** — Most tests inject lightweight stubs for `kitaru` and `pydantic_ai` into `sys.modules` before importing. This keeps the fast suite offline and deterministic.
+- **Thin real-runtime slice** — `tests/test_v2_runtime_durability.py` runs two small repo-local probes against actual Kitaru execution: one replay case and one wait/input/resume case.
 - **`FakeKitaruAgent`** — Stands in for `KitaruAgent`, delegating `.run_sync()` to the wrapped PydanticAI agent.
 - **`pydantic_ai.TestModel`** — Agent behavior tests use PydanticAI's `TestModel` for offline structured output.
 - **No shared conftest.py** — Each test file is self-contained.
@@ -350,7 +360,8 @@ research/                       # V2 package
 │   ├── critique.py             #   Review with dual-reviewer merge (llm_call)
 │   ├── finalize.py             #   Final report (llm_call)
 │   ├── judge.py                #   Council judge (llm_call)
-│   └── assemble.py             #   Package assembly + validation (tool_call)
+│   ├── assemble.py             #   Package assembly + validation (tool_call)
+│   └── export.py               #   Durable package export (tool_call)
 ├── config/                     # Configuration
 │   ├── settings.py             #   ResearchSettings (env vars)
 │   ├── defaults.py             #   Tier defaults (quick/standard/deep)
@@ -417,14 +428,14 @@ tests/
 ├── test_v2_prompts.py          # Prompt loading tests
 ├── test_v2_providers.py        # Search provider tests
 ├── test_v2_imports.py          # Import smoke tests
-└── test_v2_run.py              # CLI entry point tests
-```
+├── test_v2_run.py              # CLI entry point tests
+└── test_v2_runtime_durability.py # Thin real-runtime replay/wait slice
 
 ## Design Principles
 
 **Library-first.** The engine is a Python library. The `@flow` is the entry point. Wrap it in any API or CLI.
 
-**Durable everything.** Every phase boundary is a Kitaru checkpoint. Runs survive process crashes and support replay from any completed checkpoint.
+**Durable phase boundaries.** Core research work is checkpointed and the repo now has thin real-runtime proof for completed-checkpoint replay and wait/resume. Broader crash-recovery behavior is still mostly validated by stubbed tests.
 
 **Cross-provider critique.** Generator and reviewer always use different LLM providers. Self-evaluation is unreliable — the engine enforces model diversity for quality checks.
 

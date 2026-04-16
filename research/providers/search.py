@@ -110,10 +110,16 @@ class ProviderRegistry:
                 f"Unknown search providers: {', '.join(sorted(set(unknown)))}"
             )
 
-        # Eagerly build all enabled providers.
+        # Eagerly build all enabled providers, but preserve per-provider
+        # build failures so the caller can record an auditable manifest.
         self._providers: dict[str, SearchProvider] = {}
+        self._build_errors: dict[str, str] = {}
         for name in config.enabled_providers:
-            self._providers[name] = _KNOWN_PROVIDERS[name]()
+            try:
+                self._providers[name] = _KNOWN_PROVIDERS[name]()
+            except Exception as exc:
+                logger.warning("Failed to build provider %s: %s", name, exc)
+                self._build_errors[name] = str(exc)
 
     def active_providers(self) -> list[SearchProvider]:
         """Return enabled providers that report themselves as available."""
@@ -125,5 +131,10 @@ class ProviderRegistry:
 
     @property
     def all_providers(self) -> dict[str, SearchProvider]:
-        """Return all registered providers (available or not)."""
+        """Return all successfully-built providers (available or not)."""
         return dict(self._providers)
+
+    @property
+    def build_errors(self) -> dict[str, str]:
+        """Return provider-construction failures keyed by provider name."""
+        return dict(self._build_errors)

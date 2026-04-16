@@ -535,6 +535,41 @@ class TestManagedLedgerMergeFindings:
         for eid in ids:
             assert eid.startswith("ev_")
 
+    def test_merge_findings_replay_safe_ids_for_same_inputs(self):
+        findings = SubagentFindings(
+            findings=["Finding one", "Finding two"],
+            source_references=[
+                "Paper 1 | arxiv:2305.18290 | https://arxiv.org/abs/2305.18290",
+                "Paper 2 | doi:10.1234/example | https://doi.org/10.1234/example",
+            ],
+            excerpts=[
+                '[arxiv:2305.18290] "quote one"',
+                '[doi:10.1234/example] "quote two"',
+            ],
+            confidence_notes="High confidence",
+        )
+
+        first = ManagedLedger().merge_findings(findings, iteration=1)
+        replay = ManagedLedger().merge_findings(findings, iteration=1)
+
+        assert [item.evidence_id for item in first] == [
+            item.evidence_id for item in replay
+        ]
+
+    def test_merge_findings_identical_unsourced_findings_stay_unique_and_stable(self):
+        findings = SubagentFindings(
+            findings=["Repeated finding", "Repeated finding"],
+        )
+
+        first = ManagedLedger().merge_findings(findings, iteration=2)
+        replay = ManagedLedger().merge_findings(findings, iteration=2)
+
+        first_ids = [item.evidence_id for item in first]
+        replay_ids = [item.evidence_id for item in replay]
+
+        assert len(set(first_ids)) == 2
+        assert first_ids == replay_ids
+
     def test_merge_findings_sets_iteration(self):
         ml = ManagedLedger()
         findings = SubagentFindings(findings=["A"])

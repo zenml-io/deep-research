@@ -9,7 +9,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 
@@ -49,13 +48,11 @@ def main() -> None:
 
     # Lazy imports to keep module fast for testing
     from research.config.settings import ResearchConfig
+    from research.flows.council import council_research
     from research.flows.deep_research import deep_research
-    from research.package.export import write_package
 
-    # Build config from tier defaults
     cfg = ResearchConfig.for_tier(args.tier)
 
-    # Apply CLI overrides via model_copy (ResearchConfig is frozen)
     overrides: dict[str, object] = {}
     if args.enable_sandbox:
         overrides["sandbox_enabled"] = True
@@ -64,21 +61,38 @@ def main() -> None:
     if overrides:
         cfg = cfg.model_copy(update=overrides)
 
-    if args.council:
-        print("Council mode is not yet implemented.", file=sys.stderr)
-        sys.exit(1)
-
     print(f"Starting research: {args.question}")
     print(f"Tier: {args.tier}")
     print()
 
-    package = deep_research.run(args.question, tier=args.tier, config=cfg).wait()
+    if args.council:
+        package = council_research.run(
+            args.question,
+            tier=args.tier,
+            config=cfg,
+            output_dir=str(args.output),
+        ).wait()
+        print("--- Council Summary ---")
+        print(f"Canonical generator: {package.canonical_generator}")
+        if package.canonical_generator:
+            canonical_pkg = package.packages[package.canonical_generator]
+            print(f"Canonical package: {canonical_pkg.metadata.export_path}")
+        for generator_name, generator_package in package.packages.items():
+            print(
+                f"{generator_name}: {generator_package.metadata.export_path} "
+                f"(cost=${generator_package.metadata.total_cost_usd:.4f})"
+            )
+        return
 
-    out_path = write_package(package, args.output)
-    print(f"\nPackage written to: {out_path}")
+    package = deep_research.run(
+        args.question,
+        tier=args.tier,
+        config=cfg,
+        output_dir=str(args.output),
+    ).wait()
 
-    # Print summary
-    print(f"\n--- Run Summary ---")
+    print(f"\nPackage written to: {package.metadata.export_path}")
+    print("\n--- Run Summary ---")
     print(f"Run ID: {package.metadata.run_id}")
     print(f"Tier: {package.metadata.tier}")
     print(f"Iterations: {package.metadata.total_iterations}")
@@ -88,11 +102,11 @@ def main() -> None:
 
     if package.final_report:
         preview = package.final_report.content[:500]
-        print(f"\n--- Report Preview (first 500 chars) ---")
+        print("\n--- Report Preview (first 500 chars) ---")
         print(preview)
     elif package.draft:
         preview = package.draft.content[:500]
-        print(f"\n--- Draft Preview (first 500 chars) ---")
+        print("\n--- Draft Preview (first 500 chars) ---")
         print(preview)
 
 

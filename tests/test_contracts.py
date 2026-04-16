@@ -14,10 +14,13 @@ from research.contracts import (
     FinalReport,
     InvestigationPackage,
     IterationRecord,
+    ProviderResolution,
     ResearchBrief,
     ResearchPlan,
     RunMetadata,
     StrictBase,
+    ToolProviderManifest,
+    ToolResolution,
     SubagentFindings,
     SubagentTask,
     SupervisorDecision,
@@ -715,6 +718,8 @@ class TestInvestigationPackage:
         assert pkg.critique is None
         assert pkg.final_report is None
         assert pkg.prompt_hashes == {}
+        assert pkg.tool_provider_manifest.configured_providers == []
+        assert pkg.metadata.export_path is None
 
     def test_with_all_optional_fields(self):
         sd = SupervisorDecision(done=True, rationale="Complete")
@@ -736,12 +741,18 @@ class TestInvestigationPackage:
             critique=critique,
             final_report=final,
             prompt_hashes={"supervisor": "abc123"},
+            tool_provider_manifest=ToolProviderManifest(
+                configured_providers=["arxiv"],
+                provider_resolutions=[ProviderResolution(provider="arxiv", instantiated=True, available=True)],
+                tool_resolutions=[ToolResolution(tool="search", enabled=True)],
+            ),
         )
         assert len(pkg.iterations) == 1
         assert pkg.draft.content == "draft text"
         assert pkg.critique.require_more_research is False
         assert pkg.final_report.stop_reason == "converged"
         assert pkg.prompt_hashes == {"supervisor": "abc123"}
+        assert pkg.tool_provider_manifest.configured_providers == ["arxiv"]
 
     def test_rejects_extra_fields(self):
         with pytest.raises(ValidationError, match="extra_forbidden"):
@@ -863,6 +874,9 @@ class TestCouncilPackage:
             RunMetadata,
             {"run_id": "r", "tier": "standard", "started_at": "2024-01-01T00:00:00Z"},
         ),
+        (ProviderResolution, {"provider": "arxiv"}),
+        (ToolResolution, {"tool": "search"}),
+        (ToolProviderManifest, {}),
         (
             InvestigationPackage,
             {

@@ -46,6 +46,35 @@ class EvidenceStats(TypedDict):
     """Sorted list of iteration indices that contributed evidence."""
 
 
+class ProviderResolution(StrictBase):
+    """Resolved state for a configured provider during tool-surface setup."""
+
+    provider: str
+    instantiated: bool = False
+    available: bool = False
+    reason: str | None = None
+
+
+class ToolResolution(StrictBase):
+    """Resolved state for a tool exposed to the subagent surface."""
+
+    tool: str
+    enabled: bool = False
+    reason: str | None = None
+
+
+class ToolProviderManifest(StrictBase):
+    """Durable record of provider/tool setup for a run."""
+
+    configured_providers: list[str] = []
+    instantiated_providers: list[str] = []
+    active_providers: list[str] = []
+    available_tools: list[str] = []
+    provider_resolutions: list[ProviderResolution] = []
+    tool_resolutions: list[ToolResolution] = []
+    degradation_reasons: list[str] = []
+
+
 class RunMetadata(StrictBase):
     """Metadata for a single research run.
 
@@ -79,6 +108,9 @@ class RunMetadata(StrictBase):
     Computed during assembly. None when no report was produced or the
     ledger was empty (grounding check skipped).
     """
+
+    export_path: str | None = None
+    """Filesystem path where the durable package was exported, if any."""
 
 
 class InvestigationPackage(StrictBase):
@@ -118,6 +150,9 @@ class InvestigationPackage(StrictBase):
 
     prompt_hashes: dict[str, str] = {}
     """Mapping of role -> sha256 hash of the prompt used."""
+
+    tool_provider_manifest: ToolProviderManifest = ToolProviderManifest()
+    """Durable record of resolved providers, tools, and degradation reasons."""
 
 
 class CouncilComparison(StrictBase):

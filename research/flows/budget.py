@@ -20,27 +20,35 @@ from __future__ import annotations
 
 import logging
 import warnings
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 
 from research.config.budget import BudgetConfig
 
 logger = logging.getLogger(__name__)
 
-# Module-level active tracker.  Set by the flow before running
-# checkpoints so that budget-aware agents can record usage without
-# requiring callers to thread a tracker through every call site.
-_active_tracker: BudgetTracker | None = None
+# Run-scoped active tracker. Set by the flow before running checkpoints so
+# budget-aware agents can record usage without callers threading a tracker
+# through every call site.
+_active_tracker: ContextVar[BudgetTracker | None] = ContextVar(
+    "research_active_budget_tracker",
+    default=None,
+)
 
 
-def set_active_tracker(tracker: BudgetTracker | None) -> None:
-    """Set (or clear) the module-level budget tracker for the current run."""
-    global _active_tracker  # noqa: PLW0603
-    _active_tracker = tracker
+def set_active_tracker(tracker: BudgetTracker | None) -> Token[BudgetTracker | None]:
+    """Set (or clear) the active budget tracker for the current run context."""
+    return _active_tracker.set(tracker)
+
+
+def reset_active_tracker(token: Token[BudgetTracker | None]) -> None:
+    """Restore the previously-active tracker for the current run context."""
+    _active_tracker.reset(token)
 
 
 def get_active_tracker() -> BudgetTracker | None:
-    """Return the currently-active tracker, or ``None``."""
-    return _active_tracker
+    """Return the currently-active tracker for this run context, or ``None``."""
+    return _active_tracker.get()
 
 
 # ---------------------------------------------------------------------------

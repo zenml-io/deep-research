@@ -10,7 +10,10 @@ from research.contracts.package import (
     CouncilPackage,
     EvidenceStats,
     InvestigationPackage,
+    ProviderResolution,
     RunMetadata,
+    ToolProviderManifest,
+    ToolResolution,
 )
 from research.contracts.plan import ResearchPlan, SubagentTask
 from research.contracts.reports import (
@@ -35,6 +38,9 @@ __all__ = [
     "CritiqueReport",
     "FinalReport",
     "EvidenceStats",
+    "ProviderResolution",
+    "ToolResolution",
+    "ToolProviderManifest",
     "RunMetadata",
     "InvestigationPackage",
     "CouncilComparison",

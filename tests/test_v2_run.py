@@ -181,54 +181,56 @@ class TestRunV2Argparse:
         )
         assert result.returncode != 0, "--tier ultra should be rejected"
 
-    def test_run_v2_council_flag_exits_with_error(self):
-        """--council should print an error and exit with non-zero status."""
+    def test_run_v2_council_flag_dispatches_to_council_flow(self):
+        """--council dispatches to the council flow and prints a council summary."""
         result = subprocess.run(
             [
                 sys.executable,
                 "-c",
                 textwrap.dedent(
-                    """\
+                    f"""\
                     import sys, types
 
-                    # Stub out research.* modules so lazy imports don't fail
                     for mod_name in [
                         "research", "research.config", "research.config.settings",
-                        "research.config.budget", "research.config.defaults",
-                        "research.config.slots",
-                        "research.flows", "research.flows.deep_research",
-                        "research.package", "research.package.export",
+                        "research.flows", "research.flows.deep_research", "research.flows.council",
                     ]:
                         sys.modules[mod_name] = types.ModuleType(mod_name)
 
-                    # Provide a fake ResearchConfig with for_tier and model_copy
                     class FakeConfig:
-                        sandbox_enabled = False
-                        allow_unfinalized_package = False
                         @classmethod
                         def for_tier(cls, tier):
                             return cls()
                         def model_copy(self, update=None):
                             return self
 
+                    class FakeFlow:
+                        def run(self, *args, **kwargs):
+                            class Handle:
+                                def wait(self_inner):
+                                    meta = types.SimpleNamespace(export_path="artifacts/run-a", total_cost_usd=0.1)
+                                    pkg = types.SimpleNamespace(metadata=meta)
+                                    return types.SimpleNamespace(
+                                        canonical_generator="generator_a",
+                                        packages={{"generator_a": pkg}},
+                                    )
+                            return Handle()
+
                     sys.modules["research.config.settings"].ResearchConfig = FakeConfig
-                    sys.modules["research.flows.deep_research"].deep_research = None
-                    sys.modules["research.package.export"].write_package = None
+                    sys.modules["research.flows.deep_research"].deep_research = FakeFlow()
+                    sys.modules["research.flows.council"].council_research = FakeFlow()
 
                     sys.argv = ["run_v2.py", "--council", "test question"]
-
-                    # Now import and run main
-                    sys.path.insert(0, "{run_v2_dir}")
+                    sys.path.insert(0, "{RUN_V2_PATH.parent}")
                     from run_v2 import main
                     main()
-                """.format(run_v2_dir=str(RUN_V2_PATH.parent))
+                """
                 ),
             ],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert result.returncode != 0, "Council mode should exit with non-zero"
-        assert "not yet implemented" in result.stderr.lower(), (
-            f"Expected 'not yet implemented' in stderr, got: {result.stderr!r}"
-        )
+        assert result.returncode == 0, result.stderr
+        assert "Council Summary" in result.stdout
+        assert "Canonical generator: generator_a" in result.stdout

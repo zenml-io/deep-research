@@ -45,6 +45,7 @@ _COUNCIL_MODULES = [
     "research.checkpoints.critique",
     "research.checkpoints.finalize",
     "research.checkpoints.assemble",
+    "research.checkpoints.export",
     "research.checkpoints",
     "research.agents",
     "research.agents.scope",
@@ -95,8 +96,12 @@ def _install_stubs(monkeypatch):
 
         return decorator
 
-    def wait(timeout=None):
-        pass
+    def wait(*, schema=bool, name=None, question=None, timeout=None, metadata=None):
+        if schema is bool:
+            return True
+        if schema is str and metadata and metadata.get("choices"):
+            return metadata["choices"][0]
+        return None
 
     class FakeAgent:
         def __init__(self, model_name="test", **kwargs):
@@ -164,6 +169,11 @@ def make_checkpoint_stub(return_value):
 
     stub.submit = lambda *a, **kw: types.SimpleNamespace(load=lambda: return_value)
     return stub
+
+
+def make_pipeline_handle(return_value):
+    """Create a fake pipeline terminal handle that loads to *return_value*."""
+    return types.SimpleNamespace(load=lambda: return_value)
 
 
 # ---------------------------------------------------------------------------
@@ -402,19 +412,14 @@ class TestCouncilRunsBothGenerators:
 
         dr_calls = []
 
-        def mock_deep_research(question, tier="standard", config=None):
-            # Track which generator slot was used
-            gen_slot = config.slots["generator"] if config else None
+        def mock_pipeline(question, *, cfg, **kwargs):
+            gen_slot = cfg.slots["generator"] if cfg else None
             dr_calls.append(gen_slot)
             if gen_slot and gen_slot.model == "model_a":
-                return _PACKAGE_A
-            return _PACKAGE_B
+                return make_pipeline_handle(_PACKAGE_A)
+            return make_pipeline_handle(_PACKAGE_B)
 
-        mock_deep_research.submit = lambda *a, **kw: types.SimpleNamespace(
-            load=lambda: _PACKAGE_A
-        )
-
-        monkeypatch.setattr(mod, "deep_research", mock_deep_research)
+        monkeypatch.setattr(mod, "_run_deep_research_pipeline", mock_pipeline)
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()
@@ -439,11 +444,11 @@ class TestCouncilPreservesPackages:
 
         call_index = [0]
 
-        def mock_deep_research(question, tier="standard", config=None):
+        def mock_pipeline(question, **kwargs):
             call_index[0] += 1
-            return _PACKAGE_A if call_index[0] == 1 else _PACKAGE_B
+            return make_pipeline_handle(_PACKAGE_A if call_index[0] == 1 else _PACKAGE_B)
 
-        monkeypatch.setattr(mod, "deep_research", mock_deep_research)
+        monkeypatch.setattr(mod, "_run_deep_research_pipeline", mock_pipeline)
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()
@@ -460,13 +465,17 @@ class TestCouncilPreservesPackages:
         assert result.packages["gen_b"].metadata.run_id == "run-b"
 
 
-class TestCouncilSetsCanonicalFromJudge:
-    """canonical_generator matches the judge's recommendation."""
+class TestCouncilSelectionWait:
+    """Operator selection wait determines the canonical generator."""
 
-    def test_canonical_from_recommendation(self, monkeypatch):
+    def test_operator_selects_canonical_generator(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
 
         comparison = CouncilComparison(
             comparison="B is better",
@@ -474,6 +483,7 @@ class TestCouncilSetsCanonicalFromJudge:
             recommended_generator="gen_b",
         )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(comparison))
+        monkeypatch.setattr(mod, "wait", lambda **kwargs: "gen_b")
 
         cfg = _make_council_config()
         gen_slots = {
@@ -485,17 +495,22 @@ class TestCouncilSetsCanonicalFromJudge:
 
         assert result.canonical_generator == "gen_b"
 
-    def test_canonical_none_when_judge_has_no_recommendation(self, monkeypatch):
+    def test_operator_selection_can_override_judge_recommendation(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
 
         comparison = CouncilComparison(
-            comparison="Tied",
-            generator_scores={"gen_a": 0.8, "gen_b": 0.8},
-            recommended_generator=None,
+            comparison="Judge prefers gen_b",
+            generator_scores={"gen_a": 0.7, "gen_b": 0.9},
+            recommended_generator="gen_b",
         )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(comparison))
+        monkeypatch.setattr(mod, "wait", lambda **kwargs: "gen_a")
 
         cfg = _make_council_config()
         gen_slots = {
@@ -505,7 +520,47 @@ class TestCouncilSetsCanonicalFromJudge:
 
         result = mod.council_research("test", config=cfg, generator_slots=gen_slots)
 
-        assert result.canonical_generator is None
+        assert result.canonical_generator == "gen_a"
+
+    def test_selection_timeout_raises_flow_timeout_error(self, monkeypatch):
+        mod = _load_council_module(monkeypatch)
+
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
+        monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
+        monkeypatch.setattr(mod, "wait", lambda **kwargs: (_ for _ in ()).throw(TimeoutError()))
+
+        cfg = _make_council_config()
+        gen_slots = {
+            "gen_a": ModelSlotConfig(provider="anthropic", model="a"),
+            "gen_b": ModelSlotConfig(provider="openai", model="b"),
+        }
+
+        with pytest.raises(mod.FlowTimeoutError, match="council generator selection"):
+            mod.council_research("test", config=cfg, generator_slots=gen_slots)
+
+    def test_invalid_selection_raises(self, monkeypatch):
+        mod = _load_council_module(monkeypatch)
+
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
+        monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
+        monkeypatch.setattr(mod, "wait", lambda **kwargs: "not-a-generator")
+
+        cfg = _make_council_config()
+        gen_slots = {
+            "gen_a": ModelSlotConfig(provider="anthropic", model="a"),
+            "gen_b": ModelSlotConfig(provider="openai", model="b"),
+        }
+
+        with pytest.raises(mod.CouncilSelectionError, match="Invalid council generator selection"):
+            mod.council_research("test", config=cfg, generator_slots=gen_slots)
 
 
 class TestCouncilProviderCompromiseRecorded:
@@ -514,7 +569,11 @@ class TestCouncilProviderCompromiseRecorded:
     def test_compromise_detected_and_recorded(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         # Judge on anthropic, same as gen_a
@@ -539,7 +598,11 @@ class TestCouncilProviderCompromiseRecorded:
     def test_no_compromise_when_clean(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()  # judge is google-gla
@@ -559,7 +622,11 @@ class TestCouncilRequiresJudgeSlot:
     def test_raises_without_judge(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
 
         cfg = _make_council_config(include_judge=False)
         gen_slots = {
@@ -577,7 +644,11 @@ class TestCouncilSingleGeneratorWarning:
     def test_single_generator_proceeds(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()
@@ -592,25 +663,26 @@ class TestCouncilSingleGeneratorWarning:
         assert "gen_only" in result.packages
         assert len(result.packages) == 1
 
-    def test_no_generator_slots_defaults_to_config_generator(self, monkeypatch):
-        """When generator_slots=None, uses the config's generator slot."""
+    def test_no_generator_slots_defaults_to_generator_and_reviewer(self, monkeypatch):
+        """When generator_slots=None, council derives a generator pair."""
         mod = _load_council_module(monkeypatch)
 
         dr_calls = []
 
-        def mock_deep_research(question, tier="standard", config=None):
-            dr_calls.append(config)
-            return _PACKAGE_A
+        def mock_pipeline(question, *, cfg, **kwargs):
+            dr_calls.append(cfg)
+            return make_pipeline_handle(_PACKAGE_A)
 
-        monkeypatch.setattr(mod, "deep_research", mock_deep_research)
+        monkeypatch.setattr(mod, "_run_deep_research_pipeline", mock_pipeline)
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()
         result = mod.council_research("test", config=cfg, generator_slots=None)
 
         assert isinstance(result, CouncilPackage)
-        assert len(dr_calls) == 1
+        assert len(dr_calls) == 2
         assert "generator_a" in result.packages
+        assert "generator_b" in result.packages
 
 
 class TestCouncilPassesConfigToGenerators:
@@ -621,12 +693,12 @@ class TestCouncilPassesConfigToGenerators:
 
         received_configs = {}
 
-        def mock_deep_research(question, tier="standard", config=None):
-            gen_model = config.slots["generator"].model if config else "unknown"
-            received_configs[gen_model] = config
-            return _PACKAGE_A
+        def mock_pipeline(question, *, cfg, **kwargs):
+            gen_model = cfg.slots["generator"].model if cfg else "unknown"
+            received_configs[gen_model] = cfg
+            return make_pipeline_handle(_PACKAGE_A)
 
-        monkeypatch.setattr(mod, "deep_research", mock_deep_research)
+        monkeypatch.setattr(mod, "_run_deep_research_pipeline", mock_pipeline)
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()
@@ -656,7 +728,11 @@ class TestCouncilSchemaVersion:
     def test_schema_version_default(self, monkeypatch):
         mod = _load_council_module(monkeypatch)
 
-        monkeypatch.setattr(mod, "deep_research", lambda q, **kw: _PACKAGE_A)
+        monkeypatch.setattr(
+            mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(_PACKAGE_A),
+        )
         monkeypatch.setattr(mod, "run_judge", make_checkpoint_stub(_COMPARISON))
 
         cfg = _make_council_config()

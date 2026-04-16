@@ -1,21 +1,24 @@
 """Default flow orchestration for deep research.
 
-Thin @flow entry point (~130 lines) that delegates ALL logic to checkpoints.
+Thin @flow entry point that delegates orchestration to checkpoints and
+small pure helpers.
 Pipeline phases:
   1. scope -> ResearchBrief
-  2. plan  -> ResearchPlan
+  2. plan  -> ResearchPlan -> optional plan-approval wait
   3. Iteration loop: supervisor -> subagents -> merge -> convergence
   4. draft -> critique -> (optional supplemental loop) -> finalize -> assemble
+  5. optional durable export checkpoint
 """
 
 import logging
 
-from kitaru import flow
+from kitaru import flow, wait
 
 # Import all checkpoints at module top level (enables monkeypatching in tests)
 from research.checkpoints.assemble import assemble_package
 from research.checkpoints.critique import run_critique
 from research.checkpoints.draft import run_draft
+from research.checkpoints.export import export_package
 from research.checkpoints.finalize import run_finalize
 from research.checkpoints.metadata import (
     finalize_run_metadata,
@@ -30,11 +33,12 @@ from research.config.settings import ResearchConfig
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.package import InvestigationPackage, RunMetadata
-from research.flows.budget import BudgetTracker, set_active_tracker
+from research.flows.budget import BudgetTracker, reset_active_tracker, set_active_tracker
 from research.flows.convergence import check_convergence
 from research.ledger.ledger import ManagedLedger
 from research.ledger.projection import format_projection, project_ledger
-from research.providers.agent_tools import build_tool_surface
+from research.package.export import resolve_package_run_dir
+from research.providers.agent_tools import build_tool_provider_manifest, build_tool_surface
 from research.providers.search import ProviderRegistry
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 class FlowTimeoutError(Exception):
     """Raised when a flow-level wait() exceeds config.wait_timeout_seconds."""
+
+
+class PlanApprovalRejectedError(Exception):
+    """Raised when the operator rejects the generated research plan."""
 
 
 class SupervisorError(Exception):
@@ -67,6 +75,86 @@ class FinalizerError(Exception):
     Draft and critique are preserved in the flow's checkpoint history for
     replay after the underlying issue is fixed.
     """
+
+
+def _wait_for_input(
+    *,
+    schema,
+    name: str,
+    question: str,
+    timeout_seconds: int,
+    timeout_message: str,
+    metadata: dict | None = None,
+):
+    """Resolve a flow-level wait with typed timeout handling."""
+    try:
+        value = wait(
+            schema=schema,
+            name=name,
+            question=question,
+            timeout=timeout_seconds,
+            metadata=metadata,
+        )
+    except Exception as exc:  # pragma: no cover - exercised by wait stubs/tests
+        raise FlowTimeoutError(timeout_message) from exc
+
+    if value is None:
+        raise FlowTimeoutError(timeout_message)
+    return value
+
+
+def _await_plan_approval(question: str, plan, cfg: ResearchConfig) -> None:
+    """Pause for operator approval of the generated plan."""
+    approved = _wait_for_input(
+        schema=bool,
+        name="approve_research_plan",
+        question=(
+            "Approve the generated research plan before the investigation runs?"
+        ),
+        timeout_seconds=cfg.wait_timeout_seconds,
+        timeout_message=(
+            "Timed out waiting for plan approval after "
+            f"{cfg.wait_timeout_seconds} seconds"
+        ),
+        metadata={
+            "raw_question": question,
+            "plan": plan.model_dump(mode="json"),
+        },
+    )
+    if approved is not True:
+        raise PlanApprovalRejectedError("Research plan was not approved by the operator")
+
+
+def _build_tools_and_manifest(cfg: ResearchConfig) -> tuple[list | None, object]:
+    """Resolve the subagent tool surface and a durable audit manifest."""
+    registry: ProviderRegistry | None = None
+    surface = None
+    tools: list | None = None
+    degradation_reasons: list[str] = []
+
+    try:
+        registry = ProviderRegistry(cfg)
+    except Exception as exc:
+        logger.warning("Failed to build provider registry: %s", exc)
+        degradation_reasons.append(f"provider_registry_failed: {exc}")
+    else:
+        try:
+            surface = build_tool_surface(cfg, registry)
+            tools = surface.as_pydantic_tools()
+        except Exception as exc:
+            logger.warning(
+                "Failed to build tool surface; subagents will run without tools: %s",
+                exc,
+            )
+            degradation_reasons.append(f"tool_surface_build_failed: {exc}")
+
+    manifest = build_tool_provider_manifest(
+        cfg,
+        registry,
+        surface,
+        degradation_reasons=degradation_reasons,
+    )
+    return tools, manifest
 
 
 def _fan_out_subagents(
@@ -241,168 +329,200 @@ def _run_iteration(
     return record, convergence, decision, iter_handles
 
 
+def _run_deep_research_pipeline(
+    question: str,
+    *,
+    tier: str,
+    cfg: ResearchConfig,
+    output_dir: str | None = None,
+    require_plan_approval: bool = True,
+):
+    """Run the deep-research pipeline and return the terminal checkpoint handle."""
+    tracker = BudgetTracker(
+        budget=cfg.budget,
+        strict_unknown_model_cost=cfg.strict_unknown_model_cost,
+    )
+    tracker_token = set_active_tracker(tracker)
+    try:
+        all_handles: list = []
+
+        stamp_h = stamp_run_metadata.submit()
+        all_handles.append(stamp_h)
+        stamp = stamp_h.load()
+
+        # Phase 1: Scope
+        gen_model = cfg.slots["generator"].model_string
+        scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
+        scope_h = run_scope.submit(question, scope_model)
+        all_handles.append(scope_h)
+        brief = scope_h.load()
+
+        # Phase 2: Plan
+        plan_h = run_plan.submit(brief, gen_model)
+        all_handles.append(plan_h)
+        plan = plan_h.load()
+
+        if require_plan_approval:
+            _await_plan_approval(question, plan, cfg)
+
+        # Phase 3: Build run-scoped tool surface for subagents + durable manifest
+        tools, tool_provider_manifest = _build_tools_and_manifest(cfg)
+
+        # Phase 3: Iteration loop
+        managed_ledger = ManagedLedger()
+        iterations: list[IterationRecord] = []
+        stop_reason: str | None = None
+        pinned_ids: list[str] = []
+
+        for i in range(cfg.max_iterations):
+            record, convergence, decision, iter_handles = _run_iteration(
+                cfg,
+                brief,
+                plan,
+                managed_ledger,
+                i,
+                stamp.started_at,
+                tools=tools,
+                pinned_ids=pinned_ids,
+            )
+            all_handles.extend(iter_handles)
+            iterations.append(record)
+            pinned_ids = decision.pinned_evidence_ids
+
+            if convergence.should_stop:
+                stop_reason = convergence.reason.value
+                break
+
+        ledger = managed_ledger.ledger
+
+        # Phase 4: Draft
+        draft_h = run_draft.submit(brief, plan, ledger, gen_model)
+        all_handles.append(draft_h)
+        draft = draft_h.load()
+
+        # Phase 5: Critique
+        reviewer_model = cfg.slots["reviewer"].model_string
+        second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
+        critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
+        all_handles.append(critique_h)
+        critique = critique_h.load()
+
+        # Phase 6: Supplemental loop (capped at max_supplemental_loops)
+        supplemental_loops = 0
+        while (
+            critique.require_more_research
+            and supplemental_loops < cfg.max_supplemental_loops
+        ):
+            supplemental_loops += 1
+            idx = len(iterations)
+            record, _conv, _decision, iter_handles = _run_iteration(
+                cfg,
+                brief,
+                plan,
+                managed_ledger,
+                idx,
+                stamp.started_at,
+                tools=tools,
+                pinned_ids=pinned_ids,
+            )
+            all_handles.extend(iter_handles)
+            iterations.append(record)
+            ledger = managed_ledger.ledger
+
+            draft_h = run_draft.submit(brief, plan, ledger, gen_model)
+            all_handles.append(draft_h)
+            draft = draft_h.load()
+
+            critique_h = run_critique.submit(
+                draft, plan, ledger, reviewer_model, second
+            )
+            all_handles.append(critique_h)
+            critique = critique_h.load()
+            # Second require_more_research is recorded but the while guard
+            # stops because supplemental_loops == max_supplemental_loops.
+
+        # Phase 7: Finalize
+        try:
+            finalize_h = run_finalize.submit(
+                draft, critique, ledger, gen_model, stop_reason
+            )
+            all_handles.append(finalize_h)
+            final_report = finalize_h.load()
+        except Exception as finalize_err:
+            logger.warning("Finalizer failed: %s", finalize_err)
+            final_report = None
+
+        if final_report is None:
+            if cfg.allow_unfinalized_package:
+                logger.warning(
+                    "Finalizer produced no report; proceeding with unfinalized package."
+                )
+                stop_reason = stop_reason or "finalizer_failed"
+            else:
+                raise FinalizerError(
+                    "Finalizer failed and allow_unfinalized_package is False. "
+                    "Draft and critique are preserved in checkpoint history for replay."
+                )
+
+        # Phase 8: Assemble
+        fin_h = finalize_run_metadata.submit(stamp.started_at)
+        all_handles.append(fin_h)
+        fin = fin_h.load()
+
+        export_path = (
+            str(resolve_package_run_dir(output_dir, stamp.run_id))
+            if output_dir is not None
+            else None
+        )
+        run_metadata = RunMetadata(
+            run_id=stamp.run_id,
+            tier=cfg.tier,
+            started_at=stamp.started_at,
+            completed_at=fin.completed_at,
+            total_cost_usd=cfg.budget.spent_usd,
+            total_iterations=len(iterations),
+            stop_reason=stop_reason,
+            export_path=export_path,
+        )
+
+        assemble_h = assemble_package.submit(
+            metadata=run_metadata,
+            brief=brief,
+            plan=plan,
+            ledger=ledger,
+            iterations=iterations,
+            draft=draft,
+            critique=critique,
+            final_report=final_report,
+            tool_provider_manifest=tool_provider_manifest,
+            grounding_min_ratio=cfg.grounding_min_ratio,
+            strict_grounding=cfg.strict_grounding,
+            after=all_handles,
+        )
+        all_handles.append(assemble_h)
+
+        if output_dir is None:
+            return assemble_h
+
+        package = assemble_h.load()
+        return export_package.submit(package, output_dir, after=all_handles)
+    finally:
+        reset_active_tracker(tracker_token)
+
+
 @flow
 def deep_research(
     question: str,
     tier: str = "standard",
     config: ResearchConfig | None = None,
+    output_dir: str | None = None,
 ) -> InvestigationPackage:
-    """Orchestrate a full deep-research investigation.
-
-    Thin flow — all logic lives in checkpoints and pure helpers.
-
-    All submit handles are collected into ``all_handles`` and passed as
-    ``after=`` to the final ``assemble_package.submit()`` call.  This
-    creates explicit DAG edges so that Kitaru's ``.wait()`` finds exactly
-    one terminal step and extracts the ``InvestigationPackage`` correctly.
-    """
+    """Orchestrate a full deep-research investigation."""
     cfg = config or ResearchConfig.for_tier(tier)
-    tracker = BudgetTracker(
-        budget=cfg.budget,
-        strict_unknown_model_cost=cfg.strict_unknown_model_cost,
-    )
-    set_active_tracker(tracker)
-    all_handles: list = []
-
-    stamp_h = stamp_run_metadata.submit()
-    all_handles.append(stamp_h)
-    stamp = stamp_h.load()
-
-    # Phase 1: Scope
-    gen_model = cfg.slots["generator"].model_string
-    scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
-    scope_h = run_scope.submit(question, scope_model)
-    all_handles.append(scope_h)
-    brief = scope_h.load()
-
-    # Phase 2: Plan
-    plan_h = run_plan.submit(brief, gen_model)
-    all_handles.append(plan_h)
-    plan = plan_h.load()
-
-    # Phase 3: Build run-scoped tool surface for subagents
-    try:
-        registry = ProviderRegistry(cfg)
-        surface = build_tool_surface(cfg, registry)
-        tools = surface.as_pydantic_tools()
-    except Exception:
-        logger.warning("Failed to build tool surface; subagents will run without tools")
-        tools = None
-
-    # Phase 3: Iteration loop
-    managed_ledger = ManagedLedger()
-    iterations: list[IterationRecord] = []
-    stop_reason: str | None = None
-    pinned_ids: list[str] = []
-
-    for i in range(cfg.max_iterations):
-        record, convergence, decision, iter_handles = _run_iteration(
-            cfg, brief, plan, managed_ledger, i, stamp.started_at,
-            tools=tools,
-            pinned_ids=pinned_ids,
-        )
-        all_handles.extend(iter_handles)
-        iterations.append(record)
-        pinned_ids = decision.pinned_evidence_ids
-
-        if convergence.should_stop:
-            stop_reason = convergence.reason.value
-            break
-
-    ledger = managed_ledger.ledger
-
-    # Phase 4: Draft
-    draft_h = run_draft.submit(brief, plan, ledger, gen_model)
-    all_handles.append(draft_h)
-    draft = draft_h.load()
-
-    # Phase 5: Critique
-    reviewer_model = cfg.slots["reviewer"].model_string
-    second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-    critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
-    all_handles.append(critique_h)
-    critique = critique_h.load()
-
-    # Phase 6: Supplemental loop (capped at max_supplemental_loops)
-    supplemental_loops = 0
-    while (
-        critique.require_more_research
-        and supplemental_loops < cfg.max_supplemental_loops
-    ):
-        supplemental_loops += 1
-        idx = len(iterations)
-        record, _conv, _decision, iter_handles = _run_iteration(
-            cfg, brief, plan, managed_ledger, idx, stamp.started_at,
-            tools=tools,
-            pinned_ids=pinned_ids,
-        )
-        all_handles.extend(iter_handles)
-        iterations.append(record)
-        ledger = managed_ledger.ledger
-
-        draft_h = run_draft.submit(brief, plan, ledger, gen_model)
-        all_handles.append(draft_h)
-        draft = draft_h.load()
-
-        critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
-        all_handles.append(critique_h)
-        critique = critique_h.load()
-        # Second require_more_research is recorded but the while guard
-        # stops because supplemental_loops == max_supplemental_loops.
-
-    # Phase 7: Finalize
-    try:
-        finalize_h = run_finalize.submit(draft, critique, ledger, gen_model, stop_reason)
-        all_handles.append(finalize_h)
-        final_report = finalize_h.load()
-    except Exception as finalize_err:
-        logger.warning("Finalizer failed: %s", finalize_err)
-        final_report = None
-
-    if final_report is None:
-        if cfg.allow_unfinalized_package:
-            logger.warning(
-                "Finalizer produced no report; proceeding with unfinalized package."
-            )
-            stop_reason = stop_reason or "finalizer_failed"
-        else:
-            raise FinalizerError(
-                "Finalizer failed and allow_unfinalized_package is False. "
-                "Draft and critique are preserved in checkpoint history for replay."
-            )
-
-    # Phase 8: Assemble
-    fin_h = finalize_run_metadata.submit(stamp.started_at)
-    all_handles.append(fin_h)
-    fin = fin_h.load()
-
-    run_metadata = RunMetadata(
-        run_id=stamp.run_id,
-        tier=cfg.tier,
-        started_at=stamp.started_at,
-        completed_at=fin.completed_at,
-        total_cost_usd=cfg.budget.spent_usd,
-        total_iterations=len(iterations),
-        stop_reason=stop_reason,
-    )
-
-    set_active_tracker(None)
-
-    # Return the submit handle (without .load()) so Kitaru's DAG registers
-    # this checkpoint as the sole terminal step.  The ``after=all_handles``
-    # creates explicit dependency edges from every prior checkpoint to this
-    # one, ensuring all other steps appear in upstream_steps and only
-    # assemble_package is terminal.  This lets .wait() extract the result.
-    return assemble_package.submit(
-        metadata=run_metadata,
-        brief=brief,
-        plan=plan,
-        ledger=ledger,
-        iterations=iterations,
-        draft=draft,
-        critique=critique,
-        final_report=final_report,
-        grounding_min_ratio=cfg.grounding_min_ratio,
-        strict_grounding=cfg.strict_grounding,
-        after=all_handles,
+    return _run_deep_research_pipeline(
+        question,
+        tier=tier,
+        cfg=cfg,
+        output_dir=output_dir,
+        require_plan_approval=True,
     )

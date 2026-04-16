@@ -51,6 +51,7 @@ _FLOW_MODULES = [
     "research.checkpoints.critique",
     "research.checkpoints.finalize",
     "research.checkpoints.assemble",
+    "research.checkpoints.export",
     "research.checkpoints",
     "research.agents",
     "research.agents.scope",
@@ -124,8 +125,12 @@ def _install_stubs(monkeypatch):
 
         return decorator
 
-    def wait(timeout=None):
-        pass
+    def wait(*, schema=bool, name=None, question=None, timeout=None, metadata=None):
+        if schema is bool:
+            return True
+        if schema is str and metadata and metadata.get("choices"):
+            return metadata["choices"][0]
+        return None
 
     class FakeAgent:
         def __init__(self, model_name="test", **kwargs):
@@ -195,6 +200,11 @@ def make_checkpoint_stub(return_value):
     return stub
 
 
+def make_pipeline_handle(return_value):
+    """Create a fake pipeline terminal handle that loads to *return_value*."""
+    return types.SimpleNamespace(load=lambda: return_value)
+
+
 def with_submit(fn):
     """Add .submit() support to a tracking function.
 
@@ -238,6 +248,7 @@ def _make_passthrough_assemble():
         draft,
         critique,
         final_report,
+        tool_provider_manifest=None,
         grounding_min_ratio=0.7,
         strict_grounding=False,
     ):
@@ -251,6 +262,7 @@ def _make_passthrough_assemble():
             critique=critique,
             final_report=final_report,
             prompt_hashes={"scope": "abc123", "planner": "def456"},
+            tool_provider_manifest=tool_provider_manifest,
         )
 
     def _submit_assemble(*a, **kw):
@@ -768,9 +780,9 @@ class TestCouncilFlowIntegration:
 
         call_idx = [0]
 
-        def mock_deep_research(question, tier="standard", config=None):
+        def mock_pipeline(question, **kwargs):
             call_idx[0] += 1
-            return pkg_a if call_idx[0] == 1 else pkg_b
+            return make_pipeline_handle(pkg_a if call_idx[0] == 1 else pkg_b)
 
         comparison = CouncilComparison(
             comparison="B is better",
@@ -778,7 +790,7 @@ class TestCouncilFlowIntegration:
             recommended_generator="gen_b",
         )
 
-        monkeypatch.setattr(council_mod, "deep_research", mock_deep_research)
+        monkeypatch.setattr(council_mod, "_run_deep_research_pipeline", mock_pipeline)
         monkeypatch.setattr(council_mod, "run_judge", make_checkpoint_stub(comparison))
 
         cfg = _make_config()
@@ -807,7 +819,11 @@ class TestCouncilFlowIntegration:
             ledger=EvidenceLedger(items=[]),
         )
 
-        monkeypatch.setattr(council_mod, "deep_research", lambda q, **kw: pkg)
+        monkeypatch.setattr(
+            council_mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(pkg),
+        )
 
         comparison = CouncilComparison(
             comparison="B wins",
@@ -815,6 +831,7 @@ class TestCouncilFlowIntegration:
             recommended_generator="gen_b",
         )
         monkeypatch.setattr(council_mod, "run_judge", make_checkpoint_stub(comparison))
+        monkeypatch.setattr(council_mod, "wait", lambda **kwargs: "gen_b")
 
         cfg = _make_config()
         gen_slots = {
@@ -840,7 +857,11 @@ class TestCouncilFlowIntegration:
             ledger=EvidenceLedger(items=[]),
         )
 
-        monkeypatch.setattr(council_mod, "deep_research", lambda q, **kw: pkg)
+        monkeypatch.setattr(
+            council_mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(pkg),
+        )
 
         comparison = CouncilComparison(
             comparison="A wins",
@@ -882,7 +903,11 @@ class TestCouncilFlowIntegration:
             ledger=EvidenceLedger(items=[]),
         )
 
-        monkeypatch.setattr(council_mod, "deep_research", lambda q, **kw: pkg)
+        monkeypatch.setattr(
+            council_mod,
+            "_run_deep_research_pipeline",
+            lambda *a, **kw: make_pipeline_handle(pkg),
+        )
 
         comparison = CouncilComparison(
             comparison="A wins",
@@ -961,6 +986,7 @@ class TestBudgetExhaustionPath:
                 draft=kwargs["draft"],
                 critique=kwargs["critique"],
                 final_report=kwargs["final_report"],
+                tool_provider_manifest=kwargs.get("tool_provider_manifest"),
             )
 
         with_submit(track_assemble)

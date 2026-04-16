@@ -11,7 +11,13 @@ from research.contracts.brief import ResearchBrief
 from research.contracts.decisions import SubagentFindings, SupervisorDecision
 from research.contracts.evidence import EvidenceItem, EvidenceLedger
 from research.contracts.iteration import IterationRecord
-from research.contracts.package import InvestigationPackage, RunMetadata
+from research.contracts.package import (
+    InvestigationPackage,
+    ProviderResolution,
+    RunMetadata,
+    ToolProviderManifest,
+    ToolResolution,
+)
 from research.contracts.plan import ResearchPlan
 from research.contracts.reports import DraftReport, FinalReport
 from research.package.assembly import compute_evidence_stats, compute_run_summary
@@ -82,6 +88,7 @@ def _make_package(
             total_cost_usd=0.042,
             total_iterations=2,
             stop_reason="converged",
+            export_path=f"artifacts/{run_id}",
         ),
         brief=ResearchBrief(
             topic="What are RLHF alternatives?",
@@ -96,6 +103,17 @@ def _make_package(
         iterations=iterations or [],
         draft=draft,
         final_report=final,
+        tool_provider_manifest=ToolProviderManifest(
+            configured_providers=["arxiv"],
+            instantiated_providers=["arxiv"],
+            active_providers=["arxiv"],
+            available_tools=["search", "fetch"],
+            provider_resolutions=[ProviderResolution(provider="arxiv", instantiated=True, available=True)],
+            tool_resolutions=[
+                ToolResolution(tool="search", enabled=True),
+                ToolResolution(tool="fetch", enabled=True),
+            ],
+        ),
     )
 
 
@@ -140,6 +158,8 @@ def test_write_package_round_trip(tmp_path: Path) -> None:
     assert restored.metadata.run_id == "run-abc-123"
     assert restored.final_report is not None
     assert restored.final_report.content == "# Final Report\nPolished content."
+    assert restored.metadata.export_path == "artifacts/run-abc-123"
+    assert restored.tool_provider_manifest.available_tools == ["search", "fetch"]
 
 
 # ---------------------------------------------------------------------------

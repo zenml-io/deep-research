@@ -653,3 +653,45 @@ class TestActiveTracker:
 
         set_active_tracker(None)  # reset
         assert get_active_tracker() is None
+
+    def test_reset_restores_previous_tracker(self):
+        from research.flows.budget import (
+            get_active_tracker,
+            reset_active_tracker,
+            set_active_tracker,
+        )
+
+        outer = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
+        inner = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
+
+        outer_token = set_active_tracker(outer)
+        inner_token = set_active_tracker(inner)
+        try:
+            assert get_active_tracker() is inner
+        finally:
+            reset_active_tracker(inner_token)
+            assert get_active_tracker() is outer
+            reset_active_tracker(outer_token)
+
+        assert get_active_tracker() is None
+
+    def test_context_var_isolates_trackers_by_context(self):
+        from contextvars import copy_context
+
+        from research.flows.budget import get_active_tracker, set_active_tracker
+
+        tracker_a = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
+        tracker_b = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
+
+        def install_and_read(tracker):
+            set_active_tracker(tracker)
+            return get_active_tracker()
+
+        ctx_a = copy_context()
+        ctx_b = copy_context()
+
+        assert ctx_a.run(install_and_read, tracker_a) is tracker_a
+        assert ctx_b.run(install_and_read, tracker_b) is tracker_b
+        assert ctx_a.run(get_active_tracker) is tracker_a
+        assert ctx_b.run(get_active_tracker) is tracker_b
+        assert get_active_tracker() is None

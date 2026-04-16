@@ -14,6 +14,12 @@ from pathlib import Path
 from research.contracts.package import InvestigationPackage
 
 
+def resolve_package_run_dir(output_dir: Path | str, run_id: str) -> Path:
+    """Resolve the durable run directory for *run_id* under *output_dir*."""
+    safe_run_id = sanitize_path_component(run_id, field_name="run_id")
+    return Path(output_dir) / safe_run_id
+
+
 def sanitize_path_component(value: str, *, field_name: str) -> str:
     """Validate *value* for safe use as a single path component.
 
@@ -60,8 +66,7 @@ def write_package(
 
     Returns the path to the run directory.
     """
-    run_id = sanitize_path_component(package.metadata.run_id, field_name="run_id")
-    run_dir = Path(output_dir) / run_id
+    run_dir = resolve_package_run_dir(output_dir, package.metadata.run_id)
 
     # Full package
     _write_text(package.model_dump_json(indent=2), run_dir / "package.json")

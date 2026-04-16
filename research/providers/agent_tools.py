@@ -16,6 +16,11 @@ import logging
 from dataclasses import dataclass, field
 
 from research.config import ResearchConfig
+from research.contracts.package import (
+    ProviderResolution,
+    ToolProviderManifest,
+    ToolResolution,
+)
 from research.providers.code_exec import (
     CodeExecResult,
     SandboxExecutor,
@@ -233,3 +238,130 @@ def build_tool_surface(
     This is the canonical factory for creating the tool surface.
     """
     return AgentToolSurface(config=config, registry=registry)
+
+
+def _surface_tool_names(surface: AgentToolSurface | object | None) -> list[str]:
+    """Best-effort tool-name extraction for a resolved surface."""
+    if surface is None:
+        return []
+
+    if hasattr(surface, "available_tools") and callable(surface.available_tools):
+        return list(surface.available_tools())
+
+    if hasattr(surface, "as_pydantic_tools") and callable(surface.as_pydantic_tools):
+        return [
+            getattr(tool, "__name__", str(tool))
+            for tool in surface.as_pydantic_tools()
+        ]
+
+    return []
+
+
+def build_tool_provider_manifest(
+    config: ResearchConfig,
+    registry: ProviderRegistry | None = None,
+    surface: AgentToolSurface | object | None = None,
+    *,
+    degradation_reasons: list[str] | None = None,
+) -> ToolProviderManifest:
+    """Build a durable manifest of provider/tool setup for the current run."""
+    configured = list(config.enabled_providers)
+    instantiated = sorted(registry.all_providers.keys()) if registry else []
+
+    provider_resolutions: list[ProviderResolution] = []
+    active_providers: list[str] = []
+    if registry is not None:
+        for name, provider in registry.all_providers.items():
+            try:
+                available = provider.is_available()
+            except Exception as exc:
+                available = False
+                provider_resolutions.append(
+                    ProviderResolution(
+                        provider=name,
+                        instantiated=True,
+                        available=False,
+                        reason=f"availability_check_failed: {exc}",
+                    )
+                )
+                continue
+
+            if available:
+                active_providers.append(name)
+                reason = None
+            else:
+                reason = "provider_reported_unavailable"
+            provider_resolutions.append(
+                ProviderResolution(
+                    provider=name,
+                    instantiated=True,
+                    available=available,
+                    reason=reason,
+                )
+            )
+
+        for name, reason in registry.build_errors.items():
+            provider_resolutions.append(
+                ProviderResolution(
+                    provider=name,
+                    instantiated=False,
+                    available=False,
+                    reason=f"provider_build_failed: {reason}",
+                )
+            )
+    else:
+        provider_resolutions.extend(
+            ProviderResolution(
+                provider=name,
+                instantiated=False,
+                available=False,
+                reason="provider_registry_not_built",
+            )
+            for name in configured
+        )
+
+    available_tools = _surface_tool_names(surface)
+    tool_resolutions = [
+        ToolResolution(
+            tool="search",
+            enabled="search" in available_tools,
+            reason=None if "search" in available_tools else "tool_surface_unavailable",
+        ),
+        ToolResolution(
+            tool="fetch",
+            enabled="fetch" in available_tools,
+            reason=None if "fetch" in available_tools else "tool_surface_unavailable",
+        ),
+        ToolResolution(
+            tool="code_exec",
+            enabled="code_exec" in available_tools,
+            reason=(
+                None
+                if "code_exec" in available_tools
+                else (
+                    "sandbox_disabled"
+                    if not config.sandbox_enabled
+                    else "sandbox_backend_not_configured"
+                    if not config.sandbox_backend
+                    else "tool_surface_unavailable"
+                )
+            ),
+        ),
+    ]
+
+    reasons = list(degradation_reasons or [])
+    if registry is not None and not active_providers and configured:
+        reasons.append("no_active_search_providers")
+
+    return ToolProviderManifest(
+        configured_providers=configured,
+        instantiated_providers=instantiated,
+        active_providers=sorted(active_providers),
+        available_tools=available_tools,
+        provider_resolutions=sorted(
+            provider_resolutions,
+            key=lambda resolution: resolution.provider,
+        ),
+        tool_resolutions=tool_resolutions,
+        degradation_reasons=reasons,
+    )

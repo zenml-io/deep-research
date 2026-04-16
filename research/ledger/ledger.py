@@ -9,8 +9,9 @@ This is NOT a scoring engine and NOT a memory system.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-import uuid
 
 from research.contracts.decisions import SubagentFindings
 from research.contracts.evidence import EvidenceItem, EvidenceLedger
@@ -20,6 +21,45 @@ from research.ledger.url import canonicalize_url
 
 # Pattern for excerpt source prefix, e.g. [arxiv:2305.18290] or [doi:10.1234/foo]
 _EXCERPT_SOURCE_RE = re.compile(r"^\[([^\]]+)\]")
+
+
+def _normalize_text(value: str | None) -> str:
+    """Return a stable normalized representation for hashing."""
+    return " ".join((value or "").split())
+
+
+def _stable_evidence_id(
+    *,
+    iteration: int,
+    index_in_findings: int,
+    ordinal_in_run: int,
+    title: str,
+    synthesis: str,
+    doi: str | None,
+    arxiv_id: str | None,
+    canonical_url: str | None,
+    url: str | None,
+    excerpts: list[str],
+    confidence_notes: str | None,
+) -> str:
+    """Derive a replay-safe evidence ID from stable content and provenance."""
+    payload = {
+        "iteration": iteration,
+        "index_in_findings": index_in_findings,
+        "ordinal_in_run": ordinal_in_run,
+        "title": _normalize_text(title),
+        "synthesis": _normalize_text(synthesis),
+        "doi": _normalize_text(doi),
+        "arxiv_id": _normalize_text(arxiv_id),
+        "canonical_url": _normalize_text(canonical_url),
+        "url": _normalize_text(url),
+        "excerpts": [_normalize_text(excerpt) for excerpt in excerpts],
+        "confidence_notes": _normalize_text(confidence_notes),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"ev_{digest[:12]}"
 
 
 class ManagedLedger:
@@ -100,9 +140,8 @@ class ManagedLedger:
                 unmatched_excerpts.append(excerpt)
 
         items: list[EvidenceItem] = []
+        base_ordinal = self.size
         for idx, finding in enumerate(findings.findings):
-            evidence_id = f"ev_{uuid.uuid4().hex[:12]}"
-
             # Extract provenance from paired source reference
             doi: str | None = None
             arxiv_id: str | None = None
@@ -131,9 +170,24 @@ class ManagedLedger:
             if idx < len(parsed_refs):
                 ref_title = parsed_refs[idx].title
 
+            title = ref_title or finding[:120]
+            evidence_id = _stable_evidence_id(
+                iteration=iteration,
+                index_in_findings=idx,
+                ordinal_in_run=base_ordinal + len(items),
+                title=title,
+                synthesis=finding,
+                doi=doi,
+                arxiv_id=arxiv_id,
+                canonical_url=canonical_url_val,
+                url=url,
+                excerpts=item_excerpts,
+                confidence_notes=findings.confidence_notes,
+            )
+
             item = EvidenceItem(
                 evidence_id=evidence_id,
-                title=ref_title or finding[:120],
+                title=title,
                 url=url,
                 doi=doi,
                 arxiv_id=arxiv_id,

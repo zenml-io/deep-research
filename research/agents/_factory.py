@@ -8,7 +8,7 @@ Budget wiring
 ~~~~~~~~~~~~~
 The returned agent is wrapped in a ``BudgetAwareAgent`` that intercepts
 ``run_sync()``, extracts token usage from the PydanticAI result, and
-records it via the module-level ``BudgetTracker`` (if one is active).
+records it via the run-scoped active ``BudgetTracker`` (if one is active).
 """
 
 from __future__ import annotations

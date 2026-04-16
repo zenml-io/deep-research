@@ -1,24 +1,29 @@
 """Council flow — multi-generator comparison mode.
 
 Separate @flow that runs the default pipeline once per generator model,
-then runs a judge checkpoint to compare outputs.  Opt-in product mode.
+then runs a judge checkpoint to compare outputs and waits for explicit
+operator selection of the canonical generator.
 """
 
 import logging
 
-from kitaru import flow
+from kitaru import flow, wait
 
 from research.checkpoints.judge import run_judge
 from research.config.settings import ResearchConfig
 from research.config.slots import ModelSlotConfig
 from research.contracts.package import CouncilPackage, InvestigationPackage
-from research.flows.deep_research import deep_research
+from research.flows.deep_research import FlowTimeoutError, _run_deep_research_pipeline
 
 logger = logging.getLogger(__name__)
 
 
 class CouncilConfigError(Exception):
     """Raised when council configuration is invalid."""
+
+
+class CouncilSelectionError(Exception):
+    """Raised when the operator selects an invalid council winner."""
 
 
 def _detect_provider_compromise(
@@ -30,44 +35,79 @@ def _detect_provider_compromise(
     return judge_slot.provider in generator_providers
 
 
+def _default_generator_slots(cfg: ResearchConfig) -> dict[str, ModelSlotConfig]:
+    """Choose a production-friendly default generator pair for council mode."""
+    default_gen = cfg.slots.get("generator")
+    if default_gen is None:
+        raise CouncilConfigError("No generator slot in config")
+
+    reviewer_gen = cfg.slots.get("reviewer")
+    if reviewer_gen is None:
+        logger.warning(
+            "Council mode could not derive a second generator slot; running single-generator council"
+        )
+        return {"generator_a": default_gen}
+
+    return {
+        "generator_a": default_gen,
+        "generator_b": reviewer_gen,
+    }
+
+
+def _await_council_selection(
+    packages: dict[str, InvestigationPackage],
+    comparison,
+    cfg: ResearchConfig,
+) -> str:
+    """Pause for explicit operator selection of the canonical generator."""
+    choices = sorted(packages)
+    recommendation = comparison.recommended_generator or "none"
+    try:
+        selection = wait(
+            schema=str,
+            name="select_canonical_generator",
+            question=(
+                "Select the canonical generator for this council run. "
+                f"Choices: {', '.join(choices)}. "
+                f"Judge recommendation: {recommendation}."
+            ),
+            timeout=cfg.wait_timeout_seconds,
+            metadata={
+                "choices": choices,
+                "judge_recommendation": comparison.recommended_generator,
+                "comparison": comparison.model_dump(mode="json"),
+            },
+        )
+    except Exception as exc:  # pragma: no cover - exercised by wait stubs/tests
+        raise FlowTimeoutError(
+            "Timed out waiting for council generator selection after "
+            f"{cfg.wait_timeout_seconds} seconds"
+        ) from exc
+
+    if selection is None:
+        raise FlowTimeoutError(
+            "Timed out waiting for council generator selection after "
+            f"{cfg.wait_timeout_seconds} seconds"
+        )
+    if selection not in packages:
+        raise CouncilSelectionError(
+            f"Invalid council generator selection: {selection!r}. "
+            f"Expected one of {choices}."
+        )
+    return selection
+
+
 @flow
 def council_research(
     question: str,
     tier: str = "standard",
     config: ResearchConfig | None = None,
     generator_slots: dict[str, ModelSlotConfig] | None = None,
+    output_dir: str | None = None,
 ) -> CouncilPackage:
-    """Run council-mode research with multiple generators.
-
-    Runs the full default pipeline once per generator, then runs a judge
-    to compare outputs.  Uses the judge's recommendation as the default
-    canonical_generator (operator override via wait() deferred to a
-    future slice).
-
-    Args:
-        question: The research question.
-        tier: Research tier (quick/standard/deep).
-        config: Pre-built ResearchConfig, or None to build from tier.
-        generator_slots: Mapping of generator name -> ModelSlotConfig.
-            Must contain at least two entries for a meaningful comparison.
-
-    Returns:
-        A CouncilPackage with per-generator packages and comparison.
-
-    Raises:
-        CouncilConfigError: If the config lacks a judge slot.
-    """
+    """Run council-mode research with multiple generators."""
     cfg = config or ResearchConfig.for_tier(tier)
-
-    # Resolve generator slots — default to the single config generator
-    if generator_slots is None:
-        default_gen = cfg.slots.get("generator")
-        if default_gen is None:
-            raise CouncilConfigError("No generator slot in config")
-        generator_slots = {"generator_a": default_gen}
-        logger.warning(
-            "Council mode with single generator — comparison will be trivial"
-        )
+    generator_slots = generator_slots or _default_generator_slots(cfg)
 
     if len(generator_slots) < 2:
         logger.warning(
@@ -75,7 +115,6 @@ def council_research(
             len(generator_slots),
         )
 
-    # Resolve judge slot
     judge_slot = cfg.slots.get("judge")
     if judge_slot is None:
         raise CouncilConfigError(
@@ -83,16 +122,14 @@ def council_research(
             "Use a tier that includes a judge (standard or deep)."
         )
 
-    # Check for provider compromise
     compromise = _detect_provider_compromise(generator_slots, judge_slot)
     if compromise:
         logger.warning(
             "Council provider compromise: judge provider '%s' matches a "
-            "generator provider.  Recording council_provider_compromise=True.",
+            "generator provider. Recording council_provider_compromise=True.",
             judge_slot.provider,
         )
 
-    # Run default pipeline for each generator
     packages: dict[str, InvestigationPackage] = {}
     for gen_name, gen_slot in generator_slots.items():
         logger.info(
@@ -103,18 +140,22 @@ def council_research(
         gen_config = cfg.model_copy(
             update={"slots": {**cfg.slots, "generator": gen_slot}}
         )
-        pkg = deep_research(question, tier=tier, config=gen_config)
-        packages[gen_name] = pkg
+        handle = _run_deep_research_pipeline(
+            question,
+            tier=tier,
+            cfg=gen_config,
+            output_dir=output_dir,
+            require_plan_approval=False,
+        )
+        packages[gen_name] = handle.load()
 
-    # Run judge
-    judge_model = judge_slot.model_string
-    comparison = run_judge(packages, judge_model)
+    comparison = run_judge(packages, judge_slot.model_string, judge_slot.model_settings)
+    canonical_generator = _await_council_selection(packages, comparison, cfg)
 
-    # Build council package — canonical defaults to judge recommendation
     return CouncilPackage(
         schema_version="1.0",
         council_provider_compromise=compromise,
         comparison=comparison,
         packages=packages,
-        canonical_generator=comparison.recommended_generator,
+        canonical_generator=canonical_generator,
     )

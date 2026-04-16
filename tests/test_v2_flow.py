@@ -46,6 +46,7 @@ _FLOW_MODULES = [
     "research.checkpoints.critique",
     "research.checkpoints.finalize",
     "research.checkpoints.assemble",
+    "research.checkpoints.export",
     "research.checkpoints",
     "research.agents",
     "research.agents.scope",
@@ -118,8 +119,12 @@ def _install_stubs(monkeypatch):
 
         return decorator
 
-    def wait(timeout=None):
-        pass
+    def wait(*, schema=bool, name=None, question=None, timeout=None, metadata=None):
+        if schema is bool:
+            return True
+        if schema is str and metadata and metadata.get("choices"):
+            return metadata["choices"][0]
+        return None
 
     class FakeAgent:
         def __init__(self, model_name="test", **kwargs):
@@ -289,6 +294,7 @@ def _make_passthrough_assemble():
         draft,
         critique,
         final_report,
+        tool_provider_manifest=None,
         grounding_min_ratio=0.7,
         strict_grounding=False,
     ):
@@ -301,6 +307,7 @@ def _make_passthrough_assemble():
             draft=draft,
             critique=critique,
             final_report=final_report,
+            tool_provider_manifest=tool_provider_manifest,
         )
 
     def _submit_assemble(*a, **kw):
@@ -342,6 +349,50 @@ def _patch_all_checkpoints(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestPlanApprovalWait:
+    """The default flow pauses for explicit plan approval."""
+
+    def test_plan_wait_called_with_expected_shape(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        wait_calls: list[dict] = []
+
+        def tracking_wait(**kwargs):
+            wait_calls.append(kwargs)
+            return True
+
+        monkeypatch.setattr(flow_mod, "wait", tracking_wait)
+
+        result = flow_mod.deep_research("test question", config=_make_config())
+
+        assert isinstance(result, InvestigationPackage)
+        assert len(wait_calls) == 1
+        assert wait_calls[0]["name"] == "approve_research_plan"
+        assert wait_calls[0]["schema"] is bool
+        assert wait_calls[0]["timeout"] == 3600
+
+    def test_plan_wait_timeout_raises_flow_timeout_error(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        def timing_out_wait(**kwargs):
+            raise TimeoutError("no input")
+
+        monkeypatch.setattr(flow_mod, "wait", timing_out_wait)
+
+        with pytest.raises(flow_mod.FlowTimeoutError, match="plan approval"):
+            flow_mod.deep_research("test question", config=_make_config())
+
+    def test_plan_rejection_raises(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "wait", lambda **kwargs: False)
+
+        with pytest.raises(flow_mod.PlanApprovalRejectedError, match="not approved"):
+            flow_mod.deep_research("test question", config=_make_config())
 
 
 class TestHappyPathOneIteration:
@@ -938,6 +989,7 @@ class TestBudgetExhaustion:
                 draft=kwargs["draft"],
                 critique=kwargs["critique"],
                 final_report=kwargs["final_report"],
+                tool_provider_manifest=kwargs.get("tool_provider_manifest"),
             )
 
         with_submit(track_assemble)
@@ -980,6 +1032,111 @@ class TestBudgetExhaustion:
         assert critique_calls[0] == 1
         assert finalize_calls[0] == 1
         assert assemble_calls[0] == 1
+
+
+class TestDurableExportAndManifest:
+    """Export path stamping and provider/tool manifests are recorded durably."""
+
+    def test_export_path_stamped_and_export_checkpoint_runs(self, monkeypatch, tmp_path):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        exported_paths: list[str | None] = []
+
+        def export_stub(package, output_dir):
+            exported_paths.append(package.metadata.export_path)
+            return package
+
+        export_stub.submit = lambda *a, **kw: types.SimpleNamespace(
+            load=lambda: export_stub(*a, **{k: v for k, v in kw.items() if k not in {"after", "id"}})
+        )
+        monkeypatch.setattr(flow_mod, "export_package", export_stub)
+
+        result = flow_mod.deep_research(
+            "test question",
+            config=_make_config(),
+            output_dir=str(tmp_path),
+        )
+
+        expected = str(tmp_path / _STAMP.run_id)
+        assert result.metadata.export_path == expected
+        assert exported_paths == [expected]
+
+    def test_manifest_recorded_on_package(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        result = flow_mod.deep_research("test question", config=_make_config())
+
+        manifest = result.tool_provider_manifest
+        assert manifest.configured_providers == ["arxiv"]
+        assert manifest.instantiated_providers == ["arxiv"]
+        assert manifest.active_providers == ["arxiv"]
+        assert manifest.available_tools == ["search", "fetch"]
+        assert manifest.degradation_reasons == []
+
+    def test_manifest_records_tool_surface_failure(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "build_tool_surface", lambda cfg, registry: (_ for _ in ()).throw(RuntimeError("tool setup boom")))
+
+        result = flow_mod.deep_research("test question", config=_make_config())
+
+        manifest = result.tool_provider_manifest
+        assert manifest.available_tools == []
+        assert any("tool_surface_build_failed" in reason for reason in manifest.degradation_reasons)
+
+
+class TestTrackerCleanup:
+    """Budget tracker installation is cleaned up on success and failure."""
+
+    def test_tracker_restored_after_success(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        from research.flows.budget import (
+            BudgetTracker,
+            get_active_tracker,
+            set_active_tracker,
+        )
+
+        outer_tracker = BudgetTracker(budget=BudgetConfig(soft_budget_usd=5.0))
+        set_active_tracker(outer_tracker)
+
+        try:
+            result = flow_mod.deep_research("test question", config=_make_config())
+            assert isinstance(result, InvestigationPackage)
+            assert get_active_tracker() is outer_tracker
+        finally:
+            set_active_tracker(None)
+
+    def test_tracker_restored_after_early_failure(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        def failing_scope(*args, **kwargs):
+            raise RuntimeError("scope boom")
+
+        failing_scope.submit = lambda *a, **kw: types.SimpleNamespace(
+            load=lambda: failing_scope(*a, **kw)
+        )
+        monkeypatch.setattr(flow_mod, "run_scope", failing_scope)
+
+        from research.flows.budget import (
+            BudgetTracker,
+            get_active_tracker,
+            set_active_tracker,
+        )
+
+        outer_tracker = BudgetTracker(budget=BudgetConfig(soft_budget_usd=5.0))
+        set_active_tracker(outer_tracker)
+
+        try:
+            with pytest.raises(RuntimeError, match="scope boom"):
+                flow_mod.deep_research("test question", config=_make_config())
+            assert get_active_tracker() is outer_tracker
+        finally:
+            set_active_tracker(None)
 
 
 class TestSubagentDegradedResult:
@@ -1099,8 +1256,6 @@ class TestPinnedIdsPropagate:
         """Supervisor's pinned_evidence_ids affect the next iteration's projection."""
         flow_mod = _load_flow_module(monkeypatch)
 
-        projection_calls: list[str] = []
-        original_format = flow_mod.format_projection
         original_project = flow_mod.project_ledger
 
         call_count = [0]
@@ -1134,11 +1289,10 @@ class TestPinnedIdsPropagate:
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=supervisor_with_pins)
 
         # Patch out tool surface to avoid real providers
+        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
         monkeypatch.setattr(
-            flow_mod, "ProviderRegistry", lambda cfg: None
-        )
-        monkeypatch.setattr(
-            flow_mod, "build_tool_surface",
+            flow_mod,
+            "build_tool_surface",
             lambda cfg, registry: types.SimpleNamespace(as_pydantic_tools=lambda: []),
         )
 
@@ -1149,6 +1303,76 @@ class TestPinnedIdsPropagate:
         assert pinned_ids_received[0] == []
         # Second iteration should have the pins from the first decision
         assert pinned_ids_received[1] == ["ev_important_001", "ev_important_002"]
+
+    def test_stable_evidence_ids_keep_pinned_ids_stable_across_replay(self, monkeypatch):
+        """A replay with the same findings preserves both evidence IDs and pinned IDs."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        expected_pinned_id = flow_mod.ManagedLedger().merge_findings(_FINDINGS, iteration=0)[
+            0
+        ].evidence_id
+
+        def build_supervisor():
+            call_count = [0]
+
+            def supervisor(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return _DECISION_CONTINUE
+                if call_count[0] == 2:
+                    return SupervisorDecision(
+                        done=False,
+                        rationale="pin the first evidence item",
+                        gaps=["gap1"],
+                        subagent_tasks=[
+                            SubagentTask(
+                                task_description="search again",
+                                target_subtopic="t",
+                            ),
+                        ],
+                        pinned_evidence_ids=[expected_pinned_id],
+                    )
+                return _DECISION_DONE
+
+            with_submit(supervisor)
+            return supervisor
+
+        def run_once():
+            local_flow_mod = _load_flow_module(monkeypatch)
+            original_project = local_flow_mod.project_ledger
+            pinned_ids_received: list[list[str]] = []
+
+            def tracking_project(ledger, iteration_index, pinned_ids=None, **kwargs):
+                pinned_ids_received.append(list(pinned_ids or []))
+                return original_project(
+                    ledger, iteration_index, pinned_ids=pinned_ids, **kwargs
+                )
+
+            monkeypatch.setattr(local_flow_mod, "project_ledger", tracking_project)
+            _patch_all_checkpoints(
+                monkeypatch,
+                local_flow_mod,
+                supervisor_stub=build_supervisor(),
+            )
+            monkeypatch.setattr(local_flow_mod, "ProviderRegistry", lambda cfg: None)
+            monkeypatch.setattr(
+                local_flow_mod,
+                "build_tool_surface",
+                lambda cfg, registry: types.SimpleNamespace(
+                    as_pydantic_tools=lambda: []
+                ),
+            )
+
+            result = local_flow_mod.deep_research("test", config=_make_config(max_iterations=5))
+            return result, pinned_ids_received
+
+        first_result, first_pins = run_once()
+        second_result, second_pins = run_once()
+
+        assert first_result.ledger.items[0].evidence_id == expected_pinned_id
+        assert second_result.ledger.items[0].evidence_id == expected_pinned_id
+        assert first_pins[2] == [expected_pinned_id]
+        assert second_pins[2] == [expected_pinned_id]
 
 
 class TestStalePinnedIdsIgnored:

@@ -13,7 +13,7 @@ from kitaru import checkpoint
 from research.contracts.brief import ResearchBrief
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
-from research.contracts.package import InvestigationPackage, RunMetadata
+from research.contracts.package import InvestigationPackage, RunMetadata, ToolProviderManifest
 from research.contracts.plan import ResearchPlan
 from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
 from research.prompts import get_prompt_hashes
@@ -115,6 +115,7 @@ def assemble_package(
     draft: DraftReport | None,
     critique: CritiqueReport | None,
     final_report: FinalReport | None,
+    tool_provider_manifest: ToolProviderManifest,
     grounding_min_ratio: float = 0.7,
     strict_grounding: bool = False,
 ) -> InvestigationPackage:
@@ -139,6 +140,7 @@ def assemble_package(
         draft: Draft report (may be None).
         critique: Critique report (may be None).
         final_report: Final report (may be None).
+        tool_provider_manifest: Durable provider/tool manifest for this run.
         grounding_min_ratio: Minimum grounding density (0.0-1.0).
         strict_grounding: If True, raise GroundingError when density is
             below threshold.  If False (default), log a warning instead.
@@ -235,4 +237,5 @@ def assemble_package(
         critique=critique,
         final_report=final_report,
         prompt_hashes=prompt_hashes,
+        tool_provider_manifest=tool_provider_manifest,
     )
