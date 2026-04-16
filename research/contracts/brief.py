@@ -24,6 +24,9 @@ class ResearchBrief(StrictBase):
     freshness_constraint: str | None = None
     """Temporal freshness requirement (e.g. '2024 onwards')."""
 
+    recency_days: int | None = None
+    """Optional normalized freshness window in days for downstream retrieval."""
+
     source_preferences: list[str] = []
     """Preferred source types (e.g. ['peer-reviewed', 'arxiv'])."""
 

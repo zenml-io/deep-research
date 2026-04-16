@@ -25,6 +25,9 @@ class IterationRecord(StrictBase):
     ledger_size: int = 0
     """Number of evidence items in the ledger after this iteration."""
 
+    supervisor_done_ignored: bool = False
+    """Whether supervisor `done=True` was observed but ignored by config."""
+
     cost_usd: float = 0.0
     """Cost in USD incurred during this iteration."""
 

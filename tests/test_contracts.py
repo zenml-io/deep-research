@@ -24,6 +24,8 @@ from research.contracts import (
     SubagentFindings,
     SubagentTask,
     SupervisorDecision,
+    VerificationIssue,
+    VerificationReport,
 )
 
 
@@ -70,6 +72,7 @@ class TestResearchBrief:
         assert brief.audience is None
         assert brief.scope is None
         assert brief.freshness_constraint is None
+        assert brief.recency_days is None
         assert brief.source_preferences == []
 
     def test_optional_fields_accepted(self):
@@ -79,11 +82,13 @@ class TestResearchBrief:
             audience="researchers",
             scope="2024",
             freshness_constraint="last 6 months",
+            recency_days=180,
             source_preferences=["arxiv", "peer-reviewed"],
         )
         assert brief.audience == "researchers"
         assert brief.scope == "2024"
         assert brief.freshness_constraint == "last 6 months"
+        assert brief.recency_days == 180
         assert brief.source_preferences == ["arxiv", "peer-reviewed"]
 
     def test_rejects_extra_fields(self):
@@ -147,6 +152,15 @@ class TestSubagentTask:
     def test_search_strategy_hints_default_empty(self):
         task = SubagentTask(task_description="D", target_subtopic="S")
         assert task.search_strategy_hints == []
+        assert task.recency_days is None
+
+    def test_recency_days_accepted(self):
+        task = SubagentTask(
+            task_description="D",
+            target_subtopic="S",
+            recency_days=30,
+        )
+        assert task.recency_days == 30
 
     def test_rejects_extra_fields(self):
         with pytest.raises(ValidationError, match="extra_forbidden"):
@@ -366,6 +380,7 @@ class TestIterationRecord:
         rec = IterationRecord(iteration_index=1, supervisor_decision=sd)
         assert rec.subagent_results == []
         assert rec.ledger_size == 0
+        assert rec.supervisor_done_ignored is False
         assert rec.cost_usd == 0.0
         assert rec.duration_seconds == 0.0
 
@@ -572,6 +587,83 @@ class TestFinalReport:
 
 
 # ---------------------------------------------------------------------------
+# VerificationIssue
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationIssue:
+    def test_requires_claim_excerpt(self):
+        issue = VerificationIssue(claim_excerpt="Claim text")
+        assert issue.claim_excerpt == "Claim text"
+
+    def test_missing_claim_excerpt_raises(self):
+        with pytest.raises(ValidationError):
+            VerificationIssue()  # type: ignore[call-arg]
+
+    def test_optional_fields_default(self):
+        issue = VerificationIssue(claim_excerpt="Claim text")
+        assert issue.evidence_ids == []
+        assert issue.status == "unsupported"
+        assert issue.reason is None
+        assert issue.suggested_fix is None
+
+    def test_with_optional_fields(self):
+        issue = VerificationIssue(
+            claim_excerpt="Claim text",
+            evidence_ids=["ev-001"],
+            status="partial",
+            reason="Only narrower support exists",
+            suggested_fix="Narrow the wording",
+        )
+        assert issue.evidence_ids == ["ev-001"]
+        assert issue.status == "partial"
+        assert issue.reason == "Only narrower support exists"
+        assert issue.suggested_fix == "Narrow the wording"
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            VerificationIssue(claim_excerpt="Claim text", extra="bad")
+
+
+# ---------------------------------------------------------------------------
+# VerificationReport
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationReport:
+    def test_optional_fields_default(self):
+        report = VerificationReport()
+        assert report.issues == []
+        assert report.verified_claim_count == 0
+        assert report.unsupported_claim_count == 0
+        assert report.needs_revision is False
+
+    def test_with_issues(self):
+        report = VerificationReport(
+            issues=[
+                VerificationIssue(
+                    claim_excerpt="Claim text",
+                    evidence_ids=["ev-001"],
+                    status="contradicted",
+                    reason="Evidence says the opposite",
+                )
+            ],
+            verified_claim_count=5,
+            unsupported_claim_count=1,
+            needs_revision=True,
+        )
+        assert len(report.issues) == 1
+        assert report.issues[0].status == "contradicted"
+        assert report.verified_claim_count == 5
+        assert report.unsupported_claim_count == 1
+        assert report.needs_revision is True
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            VerificationReport(extra="bad")
+
+
+# ---------------------------------------------------------------------------
 # RunMetadata
 # ---------------------------------------------------------------------------
 
@@ -717,6 +809,8 @@ class TestInvestigationPackage:
         assert pkg.draft is None
         assert pkg.critique is None
         assert pkg.final_report is None
+        assert pkg.verification is None
+        assert pkg.revised_plan is None
         assert pkg.prompt_hashes == {}
         assert pkg.tool_provider_manifest.configured_providers == []
         assert pkg.metadata.export_path is None
@@ -730,16 +824,33 @@ class TestInvestigationPackage:
         ]
         critique = CritiqueReport(dimensions=dims, require_more_research=False)
         final = FinalReport(content="final text", stop_reason="converged")
+        verification = VerificationReport(
+            issues=[
+                VerificationIssue(
+                    claim_excerpt="final text",
+                    evidence_ids=["ev-001"],
+                    status="partial",
+                )
+            ],
+            verified_claim_count=3,
+            unsupported_claim_count=0,
+            needs_revision=False,
+        )
 
         pkg = InvestigationPackage(
             metadata=_make_metadata(),
             brief=_make_brief(),
             plan=_make_plan(),
+            revised_plan=ResearchPlan(
+                goal="Revised RLHF plan",
+                key_questions=["What changed after critique?"],
+            ),
             ledger=_make_ledger(),
             iterations=[iteration],
             draft=draft,
             critique=critique,
             final_report=final,
+            verification=verification,
             prompt_hashes={"supervisor": "abc123"},
             tool_provider_manifest=ToolProviderManifest(
                 configured_providers=["arxiv"],
@@ -751,6 +862,8 @@ class TestInvestigationPackage:
         assert pkg.draft.content == "draft text"
         assert pkg.critique.require_more_research is False
         assert pkg.final_report.stop_reason == "converged"
+        assert pkg.verification is verification
+        assert pkg.revised_plan is not None
         assert pkg.prompt_hashes == {"supervisor": "abc123"}
         assert pkg.tool_provider_manifest.configured_providers == ["arxiv"]
 

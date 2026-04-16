@@ -14,7 +14,12 @@ from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.package import InvestigationPackage, RunMetadata, ToolProviderManifest
 from research.contracts.plan import ResearchPlan
-from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
+from research.contracts.reports import (
+    CritiqueReport,
+    DraftReport,
+    FinalReport,
+    VerificationReport,
+)
 from research.package.grounding import (
     CitationResolutionError,
     GroundingError,
@@ -41,8 +46,10 @@ def assemble_package(
     critique: CritiqueReport | None,
     final_report: FinalReport | None,
     tool_provider_manifest: ToolProviderManifest,
+    revised_plan: ResearchPlan | None = None,
     grounding_min_ratio: float = 0.7,
     strict_grounding: bool = False,
+    verification: VerificationReport | None = None,
 ) -> InvestigationPackage:
     """Checkpoint: assemble the final InvestigationPackage.
 
@@ -59,7 +66,8 @@ def assemble_package(
     Args:
         metadata: Run-level metadata.
         brief: The research brief.
-        plan: The research plan.
+        plan: The originally approved research plan.
+        revised_plan: Supplemental-loop revised plan, if any.
         ledger: The evidence ledger.
         iterations: Per-iteration records.
         draft: Draft report (may be None).
@@ -152,11 +160,13 @@ def assemble_package(
         metadata=stamped_metadata,
         brief=brief,
         plan=plan,
+        revised_plan=revised_plan,
         ledger=ledger,
         iterations=iterations,
         draft=draft,
         critique=critique,
         final_report=final_report,
+        verification=verification,
         prompt_hashes=prompt_hashes,
         tool_provider_manifest=tool_provider_manifest,
     )

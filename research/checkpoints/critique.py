@@ -17,18 +17,25 @@ from research.contracts.reports import (
     CritiqueDimensionScore,
     CritiqueReport,
     DraftReport,
+    ReviewerDisagreement,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
+def _merge_critiques(
+    a: CritiqueReport,
+    b: CritiqueReport,
+    *,
+    disagreement_threshold: float = 0.3,
+) -> CritiqueReport:
     """Merge two independent critiques deterministically.
 
     - Issues: union (deduplicated, preserving order)
     - Dimension scores: averaged (matched by dimension name)
     - require_more_research: either True => True
     - Provenance: combined
+    - Reviewer disagreement: recorded for every shared dimension
     """
     seen: set[str] = set()
     merged_issues: list[str] = []
@@ -42,8 +49,30 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
     all_dims = sorted(set(a_dims) | set(b_dims))
 
     merged_dims: list[CritiqueDimensionScore] = []
+    reviewer_disagreements: list[ReviewerDisagreement] = []
     for dim_name in all_dims:
         if dim_name in a_dims and dim_name in b_dims:
+            reviewer_1_score = a_dims[dim_name].score
+            reviewer_2_score = b_dims[dim_name].score
+            delta = abs(reviewer_1_score - reviewer_2_score)
+            reviewer_disagreements.append(
+                ReviewerDisagreement(
+                    dimension=dim_name,
+                    reviewer_1_score=reviewer_1_score,
+                    reviewer_2_score=reviewer_2_score,
+                    delta=delta,
+                )
+            )
+            if delta > disagreement_threshold:
+                logger.warning(
+                    "Reviewer disagreement on %s exceeds threshold %.2f: "
+                    "reviewer_1=%.2f reviewer_2=%.2f delta=%.2f",
+                    dim_name,
+                    disagreement_threshold,
+                    reviewer_1_score,
+                    reviewer_2_score,
+                    delta,
+                )
             avg_score = (a_dims[dim_name].score + b_dims[dim_name].score) / 2.0
             explanation = (
                 f"[Reviewer 1] {a_dims[dim_name].explanation} "
@@ -68,6 +97,7 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
         require_more_research=a.require_more_research or b.require_more_research,
         issues=merged_issues,
         reviewer_provenance=merged_provenance,
+        reviewer_disagreements=reviewer_disagreements,
     )
 
 
@@ -78,6 +108,7 @@ def run_critique(
     ledger: EvidenceLedger,
     model_name: str,
     second_model_name: str | None = None,
+    disagreement_threshold: float = 0.3,
 ) -> CritiqueReport:
     """Checkpoint: critique a draft report.
 
@@ -96,7 +127,14 @@ def run_critique(
 
     if second_model_name is None:
         agent = build_reviewer_agent(model_name)
-        return agent.run_sync(prompt).output
+        result = agent.run_sync(prompt).output
+        return CritiqueReport(
+            dimensions=result.dimensions,
+            require_more_research=result.require_more_research,
+            issues=result.issues,
+            reviewer_provenance=result.reviewer_provenance,
+            reviewer_disagreements=[],
+        )
 
     results: list[CritiqueReport] = []
     errors: list[Exception] = []
@@ -110,6 +148,7 @@ def run_critique(
                 require_more_research=result.require_more_research,
                 issues=result.issues,
                 reviewer_provenance=[f"reviewer_{i + 1}:{mn}"],
+                reviewer_disagreements=[],
             )
             results.append(result)
         except Exception as exc:
@@ -123,4 +162,8 @@ def run_critique(
         logger.warning("Only one of two reviewers succeeded; using single critique")
         return results[0]
 
-    return _merge_critiques(results[0], results[1])
+    return _merge_critiques(
+        results[0],
+        results[1],
+        disagreement_threshold=disagreement_threshold,
+    )

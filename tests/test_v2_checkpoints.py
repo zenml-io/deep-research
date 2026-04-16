@@ -349,6 +349,128 @@ class TestPlanCheckpoint:
 
 
 # ---------------------------------------------------------------------------
+# Plan revision checkpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestPlanRevisionCheckpoint:
+    """Unit tests for ``research.checkpoints.replan``."""
+
+    def _load(self, monkeypatch):
+        FakeAgent = _install_checkpoint_stubs(monkeypatch)
+        _clear_modules(
+            "research.checkpoints.replan",
+            "research.checkpoints",
+            "research.agents",
+            "research.agents.replanner",
+        )
+        mod = importlib.import_module("research.checkpoints.replan")
+        return mod, FakeAgent
+
+    def test_checkpoint_type_is_llm_call(self, monkeypatch):
+        mod, _ = self._load(monkeypatch)
+        assert mod.run_plan_revision._checkpoint_type == "llm_call"
+
+    def test_run_plan_revision_calls_agent_with_expected_json(self, monkeypatch):
+        """run_plan_revision serializes brief/plan/critique/projection to JSON."""
+        import json
+
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+        )
+
+        mod, FakeAgent = self._load(monkeypatch)
+
+        brief = ResearchBrief(topic="RLHF", raw_request="RLHF alternatives?")
+        plan = ResearchPlan(goal="Investigate RLHF", key_questions=["What?"])
+        critique = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.5,
+                    explanation="Missing benchmark comparisons",
+                )
+            ],
+            require_more_research=True,
+            issues=["Add benchmark coverage"],
+        )
+        expected_plan = ResearchPlan(
+            goal="Investigate RLHF",
+            key_questions=["What?", "Which benchmarks matter?"],
+        )
+
+        class MockResult:
+            output = expected_plan
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                self.last_prompt = prompt
+                return MockResult()
+
+        mock_agent = MockAgent()
+        monkeypatch.setattr(mod, "build_replanner_agent", lambda model: mock_agent)
+
+        result = mod.run_plan_revision(
+            brief,
+            plan,
+            critique,
+            "ledger projection text",
+            "test-model",
+        )
+
+        assert result is expected_plan
+        parsed = json.loads(mock_agent.last_prompt)
+        assert parsed["brief"]["topic"] == "RLHF"
+        assert parsed["plan"]["goal"] == "Investigate RLHF"
+        assert parsed["critique"]["require_more_research"] is True
+        assert parsed["ledger_projection"] == "ledger projection text"
+
+    def test_run_plan_revision_passes_model_to_builder(self, monkeypatch):
+        """run_plan_revision passes the model_name argument to build_replanner_agent."""
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+        )
+
+        mod, FakeAgent = self._load(monkeypatch)
+
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        critique = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.5,
+                    explanation="gap",
+                )
+            ],
+            require_more_research=True,
+            issues=["gap"],
+        )
+        captured_model = []
+
+        class MockResult:
+            output = ResearchPlan(goal="test", key_questions=["q"])
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                return MockResult()
+
+        def fake_build(model_name):
+            captured_model.append(model_name)
+            return MockAgent()
+
+        monkeypatch.setattr(mod, "build_replanner_agent", fake_build)
+        mod.run_plan_revision(brief, plan, critique, "projection", "test-model")
+        assert captured_model == ["test-model"]
+
+
+# ---------------------------------------------------------------------------
 # __init__.py re-export tests
 # ---------------------------------------------------------------------------
 
@@ -363,19 +485,23 @@ class TestCheckpointsInit:
             "research.checkpoints.metadata",
             "research.checkpoints.scope",
             "research.checkpoints.plan",
+            "research.checkpoints.replan",
             "research.checkpoints.supervisor",
             "research.checkpoints.subagent",
             "research.checkpoints.draft",
             "research.checkpoints.critique",
             "research.checkpoints.finalize",
+            "research.checkpoints.verify",
             "research.checkpoints.assemble",
             "research.agents",
             "research.agents.scope",
             "research.agents.planner",
+            "research.agents.replanner",
             "research.agents.supervisor",
             "research.agents.subagent",
             "research.agents.generator",
             "research.agents.reviewer",
+            "research.agents.verifier",
             "research.agents.finalizer",
         )
         return importlib.import_module("research.checkpoints")
@@ -408,6 +534,10 @@ class TestCheckpointsInit:
         mod = self._load(monkeypatch)
         assert callable(mod.run_scope)
 
+    def test_exports_run_plan_revision(self, monkeypatch):
+        mod = self._load(monkeypatch)
+        assert callable(mod.run_plan_revision)
+
     def test_exports_run_plan(self, monkeypatch):
         mod = self._load(monkeypatch)
         assert callable(mod.run_plan)
@@ -427,7 +557,9 @@ class TestCheckpointsInit:
             "run_critique",
             "run_draft",
             "run_finalize",
+            "run_verify",
             "run_plan",
+            "run_plan_revision",
             "run_scope",
             "run_supervisor",
             "run_subagent",
@@ -454,6 +586,10 @@ class TestCheckpointsInit:
     def test_exports_run_finalize(self, monkeypatch):
         mod = self._load(monkeypatch)
         assert callable(mod.run_finalize)
+
+    def test_exports_run_verify(self, monkeypatch):
+        mod = self._load(monkeypatch)
+        assert callable(mod.run_verify)
 
     def test_exports_assemble_package(self, monkeypatch):
         mod = self._load(monkeypatch)
@@ -570,6 +706,7 @@ class TestSupervisorCheckpoint:
         assert parsed["remaining_budget_usd"] == 0.05
         assert parsed["iteration_index"] == 2
         assert parsed["ledger_projection"] == "evidence here"
+        assert "critique_feedback" not in parsed
 
     def test_run_supervisor_prompt_contains_max_iterations_and_ledger_size(
         self, monkeypatch
@@ -636,6 +773,48 @@ class TestSupervisorCheckpoint:
         mod.run_supervisor(brief, plan, "", 0.1, 0, "m", breadth_first=True)
         parsed = json.loads(mock.last_prompt)
         assert parsed["mode"] == "breadth_first"
+
+    def test_run_supervisor_threads_critique_feedback_when_provided(
+        self, monkeypatch
+    ):
+        """critique_feedback is included in the prompt only when explicitly passed."""
+        import json
+
+        mod, _ = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.decisions import SupervisorDecision
+        from research.contracts.plan import ResearchPlan
+
+        brief = ResearchBrief(topic="t", raw_request="t")
+        plan = ResearchPlan(goal="g", key_questions=["q"])
+        critique_feedback = (
+            "Supplemental critique feedback:\n"
+            "Issues to address:\n"
+            "- Add stronger benchmark evidence"
+        )
+
+        class MockResult:
+            output = SupervisorDecision(done=False, rationale="r")
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                self.last_prompt = prompt
+                return MockResult()
+
+        mock = MockAgent()
+        monkeypatch.setattr(mod, "build_supervisor_agent", lambda m: mock)
+
+        mod.run_supervisor(
+            brief,
+            plan,
+            "proj",
+            0.1,
+            1,
+            "m",
+            critique_feedback=critique_feedback,
+        )
+        parsed = json.loads(mock.last_prompt)
+        assert parsed["critique_feedback"] == critique_feedback
 
 
 # ---------------------------------------------------------------------------
@@ -1116,9 +1295,227 @@ class TestCritiqueCheckpoint:
 
         monkeypatch.setattr(mod, "build_reviewer_agent", lambda model: MockAgent())
         result = mod.run_critique(draft, plan, ledger, "test-model")
-        assert result is expected
+        assert result == expected
         assert result.require_more_research is False
         assert result.issues == ["minor issue"]
+        assert result.reviewer_disagreements == []
+
+    def test_single_reviewer_clears_model_supplied_disagreements(self, monkeypatch):
+        """Single-reviewer path must not trust model-supplied disagreement metadata."""
+        mod, _ = self._load(monkeypatch)
+
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+            DraftReport,
+            ReviewerDisagreement,
+        )
+
+        draft = DraftReport(content="# Report", sections=["Report"])
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
+        bogus = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness", score=0.8, explanation="good"
+                )
+            ],
+            require_more_research=False,
+            issues=["minor issue"],
+            reviewer_disagreements=[
+                ReviewerDisagreement(
+                    dimension="completeness",
+                    reviewer_1_score=0.2,
+                    reviewer_2_score=0.9,
+                    delta=0.7,
+                )
+            ],
+        )
+
+        class MockResult:
+            output = bogus
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                return MockResult()
+
+        monkeypatch.setattr(mod, "build_reviewer_agent", lambda model: MockAgent())
+        result = mod.run_critique(draft, plan, ledger, "test-model")
+        assert result.reviewer_disagreements == []
+
+    def test_merge_critiques_warns_on_high_delta(self, monkeypatch):
+        """Shared dimensions always record disagreement; large deltas also warn."""
+        mod, _ = self._load(monkeypatch)
+
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+        )
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            mod.logger,
+            "warning",
+            lambda msg, *args: warnings.append(msg % args),
+        )
+
+        critique_a = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.9,
+                    explanation="comprehensive",
+                ),
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.6,
+                    explanation="fine",
+                ),
+            ],
+            require_more_research=False,
+            issues=["issue A"],
+            reviewer_provenance=["reviewer_1:model-a"],
+        )
+        critique_b = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.5,
+                    explanation="large gap",
+                ),
+                CritiqueDimensionScore(
+                    dimension="source_reliability",
+                    score=0.8,
+                    explanation="strong",
+                ),
+            ],
+            require_more_research=True,
+            issues=["issue B"],
+            reviewer_provenance=["reviewer_2:model-b"],
+        )
+
+        result = mod._merge_critiques(
+            critique_a, critique_b, disagreement_threshold=0.3
+        )
+
+        dim_map = {d.dimension: d for d in result.dimensions}
+        assert dim_map["completeness"].score == pytest.approx(0.7)
+        assert "grounding" in dim_map
+        assert "source_reliability" in dim_map
+
+        assert len(result.reviewer_disagreements) == 1
+        disagreement = result.reviewer_disagreements[0]
+        assert disagreement.dimension == "completeness"
+        assert disagreement.reviewer_1_score == pytest.approx(0.9)
+        assert disagreement.reviewer_2_score == pytest.approx(0.5)
+        assert disagreement.delta == pytest.approx(0.4)
+        assert any("Reviewer disagreement on completeness exceeds threshold 0.30" in w for w in warnings)
+
+    def test_merge_critiques_records_low_delta_without_warning(self, monkeypatch):
+        """Low deltas are still recorded but do not emit warnings."""
+        mod, _ = self._load(monkeypatch)
+
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+        )
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            mod.logger,
+            "warning",
+            lambda msg, *args: warnings.append(msg % args),
+        )
+
+        critique_a = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.8,
+                    explanation="good",
+                ),
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.6,
+                    explanation="solid",
+                ),
+            ],
+            require_more_research=False,
+        )
+        critique_b = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.7,
+                    explanation="pretty good",
+                ),
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.55,
+                    explanation="acceptable",
+                ),
+            ],
+            require_more_research=False,
+        )
+
+        result = mod._merge_critiques(
+            critique_a, critique_b, disagreement_threshold=0.3
+        )
+
+        disagreements = {d.dimension: d for d in result.reviewer_disagreements}
+        assert disagreements["completeness"].delta == pytest.approx(0.1)
+        assert disagreements["grounding"].delta == pytest.approx(0.05)
+        assert warnings == []
+
+    def test_merge_critiques_only_records_shared_dimensions(self, monkeypatch):
+        """Non-overlapping dimensions stay in merged scores but not disagreement list."""
+        mod, _ = self._load(monkeypatch)
+
+        from research.contracts.reports import (
+            CritiqueDimensionScore,
+            CritiqueReport,
+        )
+
+        critique_a = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.75,
+                    explanation="good",
+                ),
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.65,
+                    explanation="present only in A",
+                ),
+            ],
+            require_more_research=False,
+        )
+        critique_b = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.55,
+                    explanation="shared",
+                ),
+                CritiqueDimensionScore(
+                    dimension="source_reliability",
+                    score=0.85,
+                    explanation="present only in B",
+                ),
+            ],
+            require_more_research=False,
+        )
+
+        result = mod._merge_critiques(
+            critique_a, critique_b, disagreement_threshold=0.3
+        )
+
+        dim_names = {d.dimension for d in result.dimensions}
+        assert dim_names == {"completeness", "grounding", "source_reliability"}
+        assert [d.dimension for d in result.reviewer_disagreements] == ["completeness"]
 
     def test_dual_reviewer_merges_critiques(self, monkeypatch):
         """Deep tier: two reviewers, merged (averaged scores, union of issues)."""
@@ -1199,6 +1596,7 @@ class TestCritiqueCheckpoint:
         assert len(result.reviewer_provenance) == 2
         assert "reviewer_1:model-a" in result.reviewer_provenance
         assert "reviewer_2:model-b" in result.reviewer_provenance
+        assert [d.dimension for d in result.reviewer_disagreements] == ["completeness"]
 
     def test_dual_reviewer_tolerates_single_failure(self, monkeypatch):
         """Deep tier: one reviewer fails, other succeeds."""
@@ -1249,6 +1647,7 @@ class TestCritiqueCheckpoint:
         assert result.require_more_research is False
         assert result.issues == ["one issue"]
         assert "reviewer_2:model-b" in result.reviewer_provenance
+        assert result.reviewer_disagreements == []
 
     def test_dual_reviewer_both_fail_raises(self, monkeypatch):
         """Deep tier: both reviewers fail => RuntimeError."""
@@ -1373,6 +1772,85 @@ class TestFinalizeCheckpoint:
 
 
 # ---------------------------------------------------------------------------
+# Verify checkpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyCheckpoint:
+    """Unit tests for ``research.checkpoints.verify``."""
+
+    def _load(self, monkeypatch):
+        _install_checkpoint_stubs(monkeypatch)
+        _clear_modules(
+            "research.checkpoints.verify",
+            "research.checkpoints",
+            "research.agents",
+            "research.agents.verifier",
+        )
+        return importlib.import_module("research.checkpoints.verify")
+
+    def test_checkpoint_type_is_llm_call(self, monkeypatch):
+        mod = self._load(monkeypatch)
+        assert mod.run_verify._checkpoint_type == "llm_call"
+
+    def test_run_verify_returns_report(self, monkeypatch):
+        mod = self._load(monkeypatch)
+
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.reports import (
+            FinalReport,
+            VerificationIssue,
+            VerificationReport,
+        )
+
+        report = FinalReport(content="# Final", sections=["Final"])
+        ledger = EvidenceLedger()
+        expected = VerificationReport(
+            issues=[
+                VerificationIssue(
+                    claim_excerpt="Claim",
+                    evidence_ids=["ev_001"],
+                    status="partial",
+                )
+            ],
+            verified_claim_count=4,
+            unsupported_claim_count=0,
+            needs_revision=False,
+        )
+
+        class MockResult:
+            output = expected
+
+        class MockAgent:
+            def run_sync(self, prompt):
+                return MockResult()
+
+        monkeypatch.setattr(mod, "build_verifier_agent", lambda model: MockAgent())
+        result = mod.run_verify(report, ledger, "test-model")
+        assert result is expected
+
+    def test_run_verify_returns_none_on_failure(self, monkeypatch):
+        mod = self._load(monkeypatch)
+
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.reports import DraftReport
+
+        report = DraftReport(content="# Draft", sections=["Draft"])
+        ledger = EvidenceLedger()
+
+        def make_failing(model_name):
+            class FailingAgent:
+                def run_sync(self, prompt):
+                    raise RuntimeError("Verifier LLM error")
+
+            return FailingAgent()
+
+        monkeypatch.setattr(mod, "build_verifier_agent", make_failing)
+        result = mod.run_verify(report, ledger, "test-model")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Assemble checkpoint tests
 # ---------------------------------------------------------------------------
 
@@ -1399,7 +1877,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1424,22 +1906,63 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
 
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.5
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            None,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.5,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.schema_version == "1.0"
         assert pkg.metadata.run_id == "run-123"
         assert pkg.draft is draft
+        assert pkg.verification is None
         assert pkg.prompt_hashes  # should have prompt hashes
         assert pkg.metadata.grounding_density is not None
         assert pkg.metadata.grounding_density >= 0.5  # passes threshold
+
+    def test_assemble_preserves_revised_plan_separately(self, monkeypatch):
+        """Assembly keeps the approved plan and revised plan in separate fields."""
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.package import RunMetadata, ToolProviderManifest
+        from research.contracts.plan import ResearchPlan
+
+        meta = RunMetadata(
+            run_id="run-123", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        approved_plan = ResearchPlan(goal="approved", key_questions=["q1"])
+        revised_plan = ResearchPlan(goal="approved", key_questions=["q1", "q2"])
+
+        pkg = mod.assemble_package(
+            meta,
+            brief,
+            approved_plan,
+            EvidenceLedger(),
+            [],
+            None,
+            None,
+            None,
+            ToolProviderManifest(),
+            revised_plan=revised_plan,
+        )
+
+        assert pkg.plan == approved_plan
+        assert pkg.revised_plan == revised_plan
 
     def test_unresolved_citations_raise(self, monkeypatch):
         """Assembly fails if report cites evidence IDs not in the ledger."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1466,14 +1989,24 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
 
         with pytest.raises(mod.CitationResolutionError, match="ev_999"):
-            mod.assemble_package(meta, brief, plan, ledger, [], draft, None, None)
+            mod.assemble_package(
+                meta,
+                brief,
+                plan,
+                ledger,
+                [],
+                draft,
+                None,
+                None,
+                ToolProviderManifest(),
+            )
 
     def test_grounding_density_below_threshold_raises(self, monkeypatch):
         """Assembly fails if grounding density is below the threshold AND strict_grounding is True."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1512,6 +2045,7 @@ class TestAssembleCheckpoint:
                 draft,
                 None,
                 None,
+                ToolProviderManifest(),
                 grounding_min_ratio=0.7,
                 strict_grounding=True,
             )
@@ -1522,7 +2056,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1561,6 +2099,7 @@ class TestAssembleCheckpoint:
             draft,
             None,
             None,
+            ToolProviderManifest(),
             grounding_min_ratio=0.7,
         )
         assert isinstance(pkg, InvestigationPackage)
@@ -1573,7 +2112,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
 
         meta = RunMetadata(
@@ -1583,7 +2126,9 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
         ledger = EvidenceLedger()
 
-        pkg = mod.assemble_package(meta, brief, plan, ledger, [], None, None, None)
+        pkg = mod.assemble_package(
+            meta, brief, plan, ledger, [], None, None, None, ToolProviderManifest()
+        )
         assert isinstance(pkg, InvestigationPackage)
 
     def test_records_prompt_hashes(self, monkeypatch):
@@ -1591,7 +2136,7 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
 
         meta = RunMetadata(
@@ -1601,7 +2146,9 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
         ledger = EvidenceLedger()
 
-        pkg = mod.assemble_package(meta, brief, plan, ledger, [], None, None, None)
+        pkg = mod.assemble_package(
+            meta, brief, plan, ledger, [], None, None, None, ToolProviderManifest()
+        )
         # Should have hashes for all loaded prompts
         assert isinstance(pkg.prompt_hashes, dict)
         assert len(pkg.prompt_hashes) > 0  # at least some prompts loaded
@@ -1610,12 +2157,58 @@ class TestAssembleCheckpoint:
             assert isinstance(hash_val, str)
             assert len(hash_val) == 64  # SHA256 hex length
 
+    def test_accepts_and_persists_verification_report(self, monkeypatch):
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceLedger
+        from research.contracts.package import RunMetadata, ToolProviderManifest
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import VerificationIssue, VerificationReport
+
+        meta = RunMetadata(
+            run_id="run-123", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+        ledger = EvidenceLedger()
+        verification = VerificationReport(
+            issues=[
+                VerificationIssue(
+                    claim_excerpt="Claim",
+                    evidence_ids=["ev_001"],
+                    status="unsupported",
+                )
+            ],
+            verified_claim_count=2,
+            unsupported_claim_count=1,
+            needs_revision=True,
+        )
+
+        pkg = mod.assemble_package(
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            None,
+            None,
+            None,
+            ToolProviderManifest(),
+            verification=verification,
+        )
+
+        assert pkg.verification is verification
+
     def test_prefers_final_report_for_grounding(self, monkeypatch):
         """When both draft and final exist, grounding checks use the final report."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport, FinalReport
 
@@ -1643,7 +2236,16 @@ class TestAssembleCheckpoint:
 
         # Should NOT raise because it checks final, not draft
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, final, grounding_min_ratio=0.5
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            final,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.5,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.final_report is final
@@ -1654,7 +2256,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1674,7 +2280,16 @@ class TestAssembleCheckpoint:
 
         # Should NOT raise — empty ledger means grounding check is skipped
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.7
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            None,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.7,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.ledger.items == []
@@ -1687,7 +2302,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1728,7 +2347,16 @@ class TestAssembleCheckpoint:
             )
 
             pkg = mod.assemble_package(
-                meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.0
+                meta,
+                brief,
+                plan,
+                ledger,
+                [],
+                draft,
+                None,
+                None,
+                ToolProviderManifest(),
+                grounding_min_ratio=0.0,
             )
 
         # Package should still be produced (non-fatal)

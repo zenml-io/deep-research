@@ -163,10 +163,13 @@ class AgentToolSurface:
         async def search(
             queries: list[str],
             max_results_per_query: int = 10,
+            recency_days: int | None = None,
         ) -> list[dict]:
             """Search across all active providers. Returns list of result dicts."""
             results = await self.search(
-                queries, max_results_per_query=max_results_per_query
+                queries,
+                max_results_per_query=max_results_per_query,
+                recency_days=recency_days,
             )
             return [
                 {

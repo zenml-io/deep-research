@@ -14,6 +14,8 @@ Each iteration, you receive a structured snapshot of the investigation state:
 - **Iteration index**: Which iteration we're on (0-indexed)
 - **Max iterations**: The maximum number of iterations allowed for this run
 - **Ledger size**: Total number of evidence items collected so far across all iterations
+- **Critique feedback** *(optional, supplemental iterations only)*: A compact list of
+  issues and low-scoring dimensions from the most recent draft review
 
 ## Your Task
 
@@ -46,12 +48,14 @@ Define specific, actionable tasks for subagents to execute in the next iteration
 - **`task_description`**: A clear directive — what to search for and what kind of evidence to find. Be concrete: "Find benchmark comparisons of DPO vs RLHF on MT-Bench and AlpacaEval" not "search for more about DPO."
 - **`target_subtopic`**: Which plan subtopic this task addresses. Must match a subtopic from the plan.
 - **`search_strategy_hints`**: Optional list of hints for search — provider suggestions, query terms, paper IDs to chase citations from. Use these to steer subagents toward productive searches.
+- **`recency_days`**: Optional integer freshness window for this task's search calls. Set when a task needs a stricter/explicit time window. Leave `null` to inherit the brief-level default.
 
 **Task design principles:**
 - 1–4 tasks per iteration. More tasks means more cost; fewer means slower progress. Scale to available budget.
 - Target the biggest gaps first. Don't spread tasks across already-covered subtopics.
 - Make tasks specific enough that a subagent can execute them without further clarification.
 - Vary search strategies across tasks: if one task uses keyword search on arxiv, have another try citation chasing or a different provider.
+- Set `recency_days` explicitly only when a task needs a different freshness window than the brief default.
 - When budget is low (< 30% remaining), limit to 1–2 highly targeted tasks.
 
 ### `pinned_evidence_ids` (list of strings)
@@ -62,6 +66,20 @@ List evidence IDs from the ledger that are especially important and should be pr
 - Would be costly to re-discover if dropped from the window
 
 Typically pin 0–5 items per iteration. Don't pin everything — the point is to highlight what's critical.
+
+## Critique Feedback (Supplemental Iterations Only)
+
+When the input includes `critique_feedback`, treat it as the reviewer telling you why
+the previous draft was not yet good enough. Use it to sharpen the next set of gap
+statements and subagent tasks.
+
+- Prioritize the listed issues over generic exploration.
+- Use low-scoring dimensions to decide *how* to improve the next iteration
+  (for example, better grounding, stronger corroboration, or fuller coverage).
+- Do **not** restate the critique verbatim unless it directly helps task quality —
+  translate it into concrete, search-executable work.
+- If `critique_feedback` is absent, ignore this section and plan normally from the
+  brief, plan, and ledger summary alone.
 
 ## Decision-Making Guidelines
 

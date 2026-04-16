@@ -13,7 +13,12 @@ from research.contracts.brief import ResearchBrief
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.plan import ResearchPlan
-from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
+from research.contracts.reports import (
+    CritiqueReport,
+    DraftReport,
+    FinalReport,
+    VerificationReport,
+)
 
 
 class EvidenceStats(TypedDict):
@@ -131,7 +136,10 @@ class InvestigationPackage(StrictBase):
     """The normalized research brief."""
 
     plan: ResearchPlan
-    """The investigation plan."""
+    """The originally approved investigation plan."""
+
+    revised_plan: ResearchPlan | None = None
+    """Supplemental-loop revision of the plan, when one was produced."""
 
     ledger: EvidenceLedger
     """All evidence collected during the run."""
@@ -147,6 +155,9 @@ class InvestigationPackage(StrictBase):
 
     final_report: FinalReport | None = None
     """Final polished report, if produced."""
+
+    verification: VerificationReport | None = None
+    """Optional post-finalize verification report; None when disabled."""
 
     prompt_hashes: dict[str, str] = {}
     """Mapping of role -> sha256 hash of the prompt used."""

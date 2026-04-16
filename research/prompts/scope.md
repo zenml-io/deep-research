@@ -38,6 +38,13 @@ Detect any temporal requirements. Look for year references, recency language ("l
 - "since 2023" → freshness_constraint: "2023 onwards"
 - "historical overview" → freshness_constraint: null (no recency requirement)
 
+### `recency_days` (optional integer)
+When the request implies a concrete retrieval window, normalize it to an integer day count for downstream search tools. Set to `null` when no concrete day window is inferable.
+
+- "last 7 days" → recency_days: 7
+- "past month" → recency_days: 30
+- "latest advances" (without explicit window) → recency_days: null
+
 ### `source_preferences` (optional list)
 Identify any stated or implied preferences for source types. Return an empty list if none are apparent.
 

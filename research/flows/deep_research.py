@@ -34,7 +34,9 @@ from research.checkpoints.metadata import (
     snapshot_wall_clock,
     stamp_run_metadata,
 )
+from research.checkpoints.verify import run_verify
 from research.checkpoints.plan import run_plan
+from research.checkpoints.replan import run_plan_revision
 from research.checkpoints.scope import run_scope
 from research.checkpoints.subagent import run_subagent
 from research.checkpoints.supervisor import run_supervisor
@@ -45,6 +47,7 @@ from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.package import InvestigationPackage, RunMetadata, ToolProviderManifest
 from research.contracts.plan import ResearchPlan, SubagentTask
+from research.contracts.reports import CritiqueReport, VerificationReport
 from research.flows.convergence import StopDecision
 from research.flows.budget import BudgetTracker, reset_active_tracker, set_active_tracker
 from research.flows.convergence import check_convergence
@@ -55,6 +58,80 @@ from research.providers.agent_tools import build_tool_provider_manifest, build_t
 from research.providers.search import ProviderRegistry
 
 logger = logging.getLogger(__name__)
+
+_LOW_CRITIQUE_SCORE_THRESHOLD = 0.7
+_MAX_CRITIQUE_ISSUES = 4
+_MAX_LOW_SCORE_DIMENSIONS = 3
+_MAX_CRITIQUE_FEEDBACK_CHARS = 1200
+
+
+def _summarise_critique_for_supervisor(critique: CritiqueReport) -> str | None:
+    """Project critique findings into a compact, replay-safe supervisor hint."""
+    issues: list[str] = []
+    seen_issues: set[str] = set()
+    for issue in critique.issues:
+        cleaned = issue.strip()
+        if not cleaned or cleaned in seen_issues:
+            continue
+        seen_issues.add(cleaned)
+        issues.append(cleaned)
+
+    low_dimensions = [
+        dimension
+        for dimension in critique.dimensions
+        if dimension.score < _LOW_CRITIQUE_SCORE_THRESHOLD
+    ]
+
+    low_dimension_heading = (
+        f"Low-scoring dimensions (< {_LOW_CRITIQUE_SCORE_THRESHOLD:.2f}):"
+    )
+    if not issues and not low_dimensions:
+        if critique.require_more_research and critique.dimensions:
+            low_dimensions = sorted(
+                critique.dimensions,
+                key=lambda dimension: (dimension.score, dimension.dimension),
+            )[:_MAX_LOW_SCORE_DIMENSIONS]
+            low_dimension_heading = (
+                f"Weakest dimensions (all scores >= "
+                f"{_LOW_CRITIQUE_SCORE_THRESHOLD:.2f}):"
+            )
+        elif critique.require_more_research:
+            return (
+                "Supplemental critique feedback:\n"
+                "Reviewer requested more research; tighten the next iteration "
+                "against the latest draft review."
+            )
+        else:
+            return None
+
+    lines = ["Supplemental critique feedback:"]
+
+    if issues:
+        lines.append("Issues to address:")
+        for issue in issues[:_MAX_CRITIQUE_ISSUES]:
+            lines.append(f"- {issue}")
+        remaining_issues = len(issues) - _MAX_CRITIQUE_ISSUES
+        if remaining_issues > 0:
+            lines.append(f"- ...and {remaining_issues} more issues.")
+
+    if low_dimensions:
+        lines.append(low_dimension_heading)
+        for dimension in low_dimensions[:_MAX_LOW_SCORE_DIMENSIONS]:
+            explanation = dimension.explanation.strip()
+            line = f"- {dimension.dimension} ({dimension.score:.2f})"
+            if explanation:
+                line = f"{line}: {explanation}"
+            lines.append(line)
+        remaining_dimensions = len(low_dimensions) - _MAX_LOW_SCORE_DIMENSIONS
+        if remaining_dimensions > 0:
+            lines.append(
+                f"- ...and {remaining_dimensions} more low-scoring dimensions."
+            )
+
+    summary = "\n".join(lines)
+    if len(summary) > _MAX_CRITIQUE_FEEDBACK_CHARS:
+        summary = summary[: _MAX_CRITIQUE_FEEDBACK_CHARS - 3].rstrip() + "..."
+    return summary
 
 
 
@@ -160,6 +237,25 @@ def _fan_out_subagents(
     return results, all_handles
 
 
+def _apply_brief_recency_default(
+    tasks: list[SubagentTask],
+    brief: ResearchBrief,
+) -> list[SubagentTask]:
+    """Apply brief-level recency default to tasks that leave it unset."""
+    if brief.recency_days is None:
+        return tasks
+
+    resolved_tasks: list[SubagentTask] = []
+    for task in tasks:
+        if task.recency_days is None:
+            resolved_tasks.append(
+                task.model_copy(update={"recency_days": brief.recency_days})
+            )
+        else:
+            resolved_tasks.append(task)
+    return resolved_tasks
+
+
 def _run_supervisor_with_retry(
     brief,
     plan,
@@ -171,6 +267,7 @@ def _run_supervisor_with_retry(
     breadth_first: bool = False,
     max_iterations: int = 5,
     ledger_size: int = 0,
+    critique_feedback: str | None = None,
 ):
     """Call run_supervisor with one retry on failure.
 
@@ -184,19 +281,28 @@ def _run_supervisor_with_retry(
     """
     # Return type: tuple[SupervisorDecision, list[Any]]
     handles: list[Any] = []
-    try:
-        h = run_supervisor.submit(
+
+    def _submit(attempt: int):
+        kwargs = {
+            "breadth_first": breadth_first,
+            "max_iterations": max_iterations,
+            "ledger_size": ledger_size,
+            "id": f"supervisor_{iteration_index}_a{attempt}",
+        }
+        if critique_feedback is not None:
+            kwargs["critique_feedback"] = critique_feedback
+        return run_supervisor.submit(
             brief,
             plan,
             projection,
             remaining,
             iteration_index,
             gen_model,
-            breadth_first=breadth_first,
-            max_iterations=max_iterations,
-            ledger_size=ledger_size,
-            id=f"supervisor_{iteration_index}_a1",
+            **kwargs,
         )
+
+    try:
+        h = _submit(1)
         handles.append(h)
         return h.load(), handles
     except Exception as first_err:
@@ -206,18 +312,7 @@ def _run_supervisor_with_retry(
             first_err,
         )
         try:
-            h = run_supervisor.submit(
-                brief,
-                plan,
-                projection,
-                remaining,
-                iteration_index,
-                gen_model,
-                breadth_first=breadth_first,
-                max_iterations=max_iterations,
-                ledger_size=ledger_size,
-                id=f"supervisor_{iteration_index}_a2",
-            )
+            h = _submit(2)
             handles.append(h)
             return h.load(), handles
         except Exception as second_err:
@@ -237,6 +332,7 @@ def _run_iteration(
     started_at: str,
     tools: list[Callable[..., Any]] | None = None,
     pinned_ids: list[str] | None = None,
+    critique_feedback: str | None = None,
 ) -> tuple[IterationRecord, StopDecision, SupervisorDecision, list[Any]]:
     """Execute one research iteration: supervisor -> subagents -> merge -> record.
 
@@ -274,11 +370,16 @@ def _run_iteration(
         breadth_first=cfg.breadth_first,
         max_iterations=cfg.max_iterations,
         ledger_size=managed_ledger.size,
+        critique_feedback=critique_feedback,
     )
     iter_handles.extend(sup_handles)
 
+    resolved_tasks = _apply_brief_recency_default(decision.subagent_tasks, brief)
+    if resolved_tasks is not decision.subagent_tasks:
+        decision = decision.model_copy(update={"subagent_tasks": resolved_tasks})
+
     subagent_results, sub_handles = _fan_out_subagents(
-        decision.subagent_tasks, sub_model, cfg.max_parallel_subagents, tools=tools
+        resolved_tasks, sub_model, cfg.max_parallel_subagents, tools=tools
     )
     iter_handles.extend(sub_handles)
 
@@ -298,6 +399,7 @@ def _run_iteration(
         supervisor_decision=decision,
         subagent_results=subagent_results,
         ledger_size=managed_ledger.size,
+        supervisor_done_ignored=decision.done and not cfg.respect_supervisor_done,
     )
 
     convergence = check_convergence(
@@ -372,6 +474,8 @@ def deep_research(
         plan_h = run_plan.submit(brief, gen_model)
         all_handles.append(plan_h)
         plan = plan_h.load()
+        original_plan = plan
+        revised_plan: ResearchPlan | None = None
 
         if require_plan_approval:
             _await_plan_approval(question, plan, cfg)
@@ -414,7 +518,14 @@ def deep_research(
         # Phase 6: Critique
         reviewer_model = cfg.slots["reviewer"].model_string
         second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-        critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
+        critique_h = run_critique.submit(
+            draft,
+            plan,
+            ledger,
+            reviewer_model,
+            second,
+            disagreement_threshold=cfg.critique_disagreement_threshold,
+        )
         all_handles.append(critique_h)
         critique = critique_h.load()
 
@@ -426,6 +537,33 @@ def deep_research(
         ):
             supplemental_loops += 1
             idx = len(iterations)
+            critique_feedback = _summarise_critique_for_supervisor(critique)
+            if cfg.enable_plan_revision and supplemental_loops == 1:
+                revised_projection = format_projection(
+                    project_ledger(
+                        managed_ledger.ledger,
+                        idx,
+                        pinned_ids=pinned_ids,
+                        window_iterations=cfg.ledger_window_iterations,
+                    )
+                )
+                try:
+                    replan_h = run_plan_revision.submit(
+                        brief,
+                        plan,
+                        critique,
+                        revised_projection,
+                        gen_model,
+                    )
+                    all_handles.append(replan_h)
+                    plan = replan_h.load()
+                    if plan != original_plan:
+                        revised_plan = plan
+                except Exception as exc:
+                    logger.warning(
+                        "Plan revision failed (%s); continuing with original plan",
+                        exc,
+                    )
             record, _conv, _decision, iter_handles = _run_iteration(
                 cfg,
                 brief,
@@ -435,6 +573,7 @@ def deep_research(
                 stamp.started_at,
                 tools=tools,
                 pinned_ids=pinned_ids,
+                critique_feedback=critique_feedback,
             )
             all_handles.extend(iter_handles)
             iterations.append(record)
@@ -445,7 +584,12 @@ def deep_research(
             draft = draft_h.load()
 
             critique_h = run_critique.submit(
-                draft, plan, ledger, reviewer_model, second
+                draft,
+                plan,
+                ledger,
+                reviewer_model,
+                second,
+                disagreement_threshold=cfg.critique_disagreement_threshold,
             )
             all_handles.append(critique_h)
             critique = critique_h.load()
@@ -475,6 +619,22 @@ def deep_research(
                     "Draft and critique are preserved in checkpoint history for replay."
                 )
 
+        verification: VerificationReport | None = None
+        if cfg.enable_verification:
+            try:
+                verify_h = run_verify.submit(
+                    final_report or draft,
+                    ledger,
+                    cfg.slots["reviewer"].model_string,
+                )
+                all_handles.append(verify_h)
+                verification = verify_h.load()
+            except Exception as verify_err:
+                logger.warning(
+                    "Verification phase failed: %s — continuing without verification",
+                    verify_err,
+                )
+
         # Phase 9: Assemble
         fin_h = finalize_run_metadata.submit(stamp.started_at)
         all_handles.append(fin_h)
@@ -499,15 +659,17 @@ def deep_research(
         assemble_h = assemble_package.submit(
             metadata=run_metadata,
             brief=brief,
-            plan=plan,
+            plan=original_plan,
             ledger=ledger,
             iterations=iterations,
             draft=draft,
             critique=critique,
             final_report=final_report,
             tool_provider_manifest=tool_provider_manifest,
+            revised_plan=revised_plan,
             grounding_min_ratio=cfg.grounding_min_ratio,
             strict_grounding=cfg.strict_grounding,
+            verification=verification,
             after=all_handles,
         )
         all_handles.append(assemble_h)

@@ -10,6 +10,7 @@ You receive a task assignment containing:
 - **`task_description`**: A specific directive — what to search for and what evidence to find
 - **`target_subtopic`**: Which subtopic of the research plan this task addresses
 - **`search_strategy_hints`**: Optional hints — provider suggestions, query terms, citation leads
+- **`recency_days`**: Optional integer freshness window for search calls; if present, pass it to the `search` tool
 
 You may also receive context about the broader research brief and what evidence has already been collected, so you can avoid redundant work.
 
@@ -20,6 +21,8 @@ You have access to the following tools:
 ### `search`
 Runs queries across search providers (arXiv, Semantic Scholar, Brave, Exa, etc.) and returns structured results with titles, URLs, snippets, and metadata.
 
+Accepted arguments: `queries`, `max_results_per_query`, and optional `recency_days`.
+
 **Use search to:**
 - Find academic papers, preprints, and technical reports
 - Discover blog posts, documentation, and benchmark results
@@ -27,6 +30,7 @@ Runs queries across search providers (arXiv, Semantic Scholar, Brave, Exa, etc.)
 
 **Search strategy:**
 - Start with 2–3 well-crafted queries that vary in specificity. One broad, one narrow, one using alternate terminology.
+- If your task includes `recency_days`, pass it through on search calls to enforce freshness.
 - Use technical vocabulary from the task description and search strategy hints.
 - If initial results are thin, reformulate: try synonyms, related concepts, or author names.
 - Don't repeat the exact same query — each search should explore a different angle.

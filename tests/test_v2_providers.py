@@ -1327,6 +1327,46 @@ class TestAgentToolSurface:
         assert len(results) == 1
         assert results[0].title == "Test"
 
+    def test_pydantic_search_tool_forwards_recency_days(self):
+        from research.providers.agent_tools import AgentToolSurface
+
+        config = self._make_config(providers="arxiv")
+        registry = ProviderRegistry(config)
+        surface = AgentToolSurface(config, registry)
+
+        captured: dict[str, object] = {}
+        mock_result = SearchResult(
+            url="https://example.com",
+            title="Example",
+            snippet="Snippet",
+            provider="arxiv",
+        )
+
+        async def _run():
+            with patch.object(
+                surface,
+                "search",
+                new=AsyncMock(return_value=[mock_result]),
+            ) as mock_search:
+                tools = surface.as_pydantic_tools()
+                search_tool = next(tool for tool in tools if tool.__name__ == "search")
+                out = await search_tool(
+                    ["fresh query"],
+                    max_results_per_query=5,
+                    recency_days=14,
+                )
+                captured["out"] = out
+                captured["calls"] = mock_search.call_args_list
+
+        asyncio.run(_run())
+
+        calls = captured["calls"]
+        assert len(calls) == 1
+        assert calls[0].args[0] == ["fresh query"]
+        assert calls[0].kwargs["max_results_per_query"] == 5
+        assert calls[0].kwargs["recency_days"] == 14
+        assert captured["out"][0]["url"] == "https://example.com"
+
     def test_search_returns_empty_when_no_active_providers(self, monkeypatch):
         from research.providers.agent_tools import AgentToolSurface
 

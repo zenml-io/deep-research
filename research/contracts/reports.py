@@ -57,6 +57,22 @@ class CritiqueDimensionScore(StrictBase):
     """Explanation of the score."""
 
 
+class ReviewerDisagreement(StrictBase):
+    """Per-dimension disagreement profile for dual-reviewer critique merges."""
+
+    dimension: str
+    """Shared critique dimension name."""
+
+    reviewer_1_score: float
+    """Score assigned by reviewer 1."""
+
+    reviewer_2_score: float
+    """Score assigned by reviewer 2."""
+
+    delta: float
+    """Absolute difference between the two reviewer scores."""
+
+
 class CritiqueReport(StrictBase):
     """Structured critique of a draft report.
 
@@ -76,6 +92,9 @@ class CritiqueReport(StrictBase):
 
     reviewer_provenance: list[str] = []
     """Per-reviewer tracking for deep tier multi-reviewer merging."""
+
+    reviewer_disagreements: list[ReviewerDisagreement] = []
+    """Per-dimension disagreement profile for shared dual-reviewer dimensions."""
 
 
 class FinalReport(StrictBase):
@@ -107,3 +126,32 @@ class FinalReport(StrictBase):
             sections=_extract_sections(markdown),
             stop_reason=stop_reason,
         )
+
+
+class VerificationIssue(StrictBase):
+    """A single claim flagged during post-finalize verification."""
+
+    claim_excerpt: str
+    """Short excerpt of the claim being verified."""
+
+    evidence_ids: list[str] = []
+    """Citations the claim references, if any."""
+
+    status: str = "unsupported"
+    """One of: 'unsupported', 'partial', 'contradicted'. String for forward-compat."""
+
+    reason: str | None = None
+    """Why the verifier flagged the claim."""
+
+    suggested_fix: str | None = None
+    """Optional concrete edit suggestion; informational only in this PR."""
+
+
+class VerificationReport(StrictBase):
+    """Structured verification output over a report against the ledger."""
+
+    issues: list[VerificationIssue] = []
+    verified_claim_count: int = 0
+    unsupported_claim_count: int = 0
+    needs_revision: bool = False
+    """Reviewer-style advisory flag; NOT consumed by the flow in PR 2."""

@@ -22,6 +22,7 @@ def run_supervisor(
     breadth_first: bool = False,
     max_iterations: int = 5,
     ledger_size: int = 0,
+    critique_feedback: str | None = None,
 ) -> SupervisorDecision:
     """Checkpoint: evaluate research state and decide next actions.
 
@@ -41,6 +42,8 @@ def run_supervisor(
             the prompt so the supervisor agent prioritises breadth over depth.
         max_iterations: Maximum number of iterations for this run.
         ledger_size: Total number of evidence items in the ledger.
+        critique_feedback: Compact critique summary from the most recent draft
+            review. Present only for supplemental iterations.
 
     Returns:
         A SupervisorDecision with done flag, gaps, and subagent tasks.
@@ -57,5 +60,7 @@ def run_supervisor(
     }
     if breadth_first:
         prompt_data["mode"] = "breadth_first"
+    if critique_feedback:
+        prompt_data["critique_feedback"] = critique_feedback
     prompt = json.dumps(prompt_data, indent=2)
     return agent.run_sync(prompt).output

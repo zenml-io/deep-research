@@ -140,7 +140,7 @@ class TestAssemblePackagePurity:
 
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import FinalReport
 
@@ -196,6 +196,7 @@ class TestAssemblePackagePurity:
                 draft=None,
                 critique=None,
                 final_report=final_report,
+                tool_provider_manifest=ToolProviderManifest(),
             )
 
         assert package.metadata.run_id == "guard-test"
@@ -217,7 +218,7 @@ class TestGroundingDensity:
 
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import FinalReport
 
@@ -256,6 +257,7 @@ class TestGroundingDensity:
                 draft=None,
                 critique=None,
                 final_report=bad_report,
+                tool_provider_manifest=ToolProviderManifest(),
                 grounding_min_ratio=0.7,
                 strict_grounding=True,
             )
@@ -266,7 +268,7 @@ class TestGroundingDensity:
 
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import FinalReport
 
@@ -310,6 +312,7 @@ class TestGroundingDensity:
             draft=None,
             critique=None,
             final_report=good_report,
+            tool_provider_manifest=ToolProviderManifest(),
             grounding_min_ratio=0.7,
         )
         assert package.final_report is not None
@@ -322,7 +325,7 @@ class TestGroundingDensity:
 
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import FinalReport
 
@@ -361,6 +364,7 @@ class TestGroundingDensity:
             draft=None,
             critique=None,
             final_report=bad_report,
+            tool_provider_manifest=ToolProviderManifest(),
             grounding_min_ratio=0.7,
         )
         assert package.final_report is not None
@@ -373,7 +377,7 @@ class TestGroundingDensity:
 
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import FinalReport
 
@@ -408,6 +412,7 @@ class TestGroundingDensity:
                 draft=None,
                 critique=None,
                 final_report=report,
+                tool_provider_manifest=ToolProviderManifest(),
             )
 
 

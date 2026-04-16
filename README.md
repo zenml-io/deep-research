@@ -79,7 +79,7 @@ The engine uses three LLM providers across its agent pipeline. The cross-provide
 | Judge | — | `google-gla:gemini-3.1-pro-preview` | `google-gla:gemini-3.1-pro-preview` |
 | 2nd Reviewer | — | — | `google-gla:gemini-3.1-pro-preview` |
 
-The **exhaustive** tier uses the same model assignments as deep, with 10 parallel subagents, a $3.00 budget, and no early stopping.
+The **exhaustive** tier uses the same model assignments as deep, but with 10 parallel subagents, a $3.00 budget, a higher iteration ceiling, and a supervisor prompt biased toward breadth rather than early stopping.
 
 **Option A — All three providers (recommended for deep tier)**
 
@@ -242,7 +242,7 @@ Four conditions checked in strict priority order:
 | 3 | Supervisor done | Supervisor signals `done=True` |
 | 4 | Max iterations | Hard cap reached |
 
-Budget exhaustion does NOT prevent deliverable production — the engine still drafts, critiques, and assembles with whatever evidence it has.
+Budget exhaustion does NOT prevent deliverable production — the engine still drafts, critiques, and assembles with whatever evidence it has. The budget is a soft ceiling checked between iterations, so draft/critique/finalize can overshoot it by up to one phase worth of LLM calls.
 
 ### Cross-provider critique
 
@@ -261,7 +261,7 @@ A separate `council_research()` flow runs the full pipeline once per generator m
 | **deep** | 10 | $0.10 | Dual | Yes | Yes |
 | **exhaustive** | 20 | $3.00 | Dual | Yes | Yes |
 
-Quick/standard/deep fan out 3 parallel subagents per iteration; exhaustive fans out 10.
+Quick/standard/deep fan out 3 parallel subagents per iteration; exhaustive fans out 10 and uses a supervisor prompt that prioritizes broad source coverage.
 
 ## Configuration
 
@@ -272,7 +272,7 @@ All settings use the `RESEARCH_` prefix, loaded via `pydantic-settings`.
 | Variable | Default | Description |
 |---|---|---|
 | `RESEARCH_DEFAULT_TIER` | `standard` | Default tier when not specified |
-| `RESEARCH_DEFAULT_COST_BUDGET_USD` | `0.10` | Soft cost ceiling per run |
+| `RESEARCH_DEFAULT_COST_BUDGET_USD` | `0.10` | Soft cost ceiling per run; checked between iterations, so a run may overshoot by up to one phase worth of LLM calls |
 | `RESEARCH_DAILY_COST_LIMIT_USD` | `10.00` | Global daily ceiling |
 | `RESEARCH_ENABLED_PROVIDERS` | `brave,exa,tavily,arxiv,semantic_scholar` | Comma-separated search providers |
 | `RESEARCH_MAX_PARALLEL_SUBAGENTS` | `3` | Concurrent subagents per iteration |

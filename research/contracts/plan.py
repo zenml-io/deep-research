@@ -46,3 +46,6 @@ class SubagentTask(StrictBase):
 
     search_strategy_hints: list[str] = []
     """Optional hints for the subagent's search approach."""
+
+    recency_days: int | None = None
+    """Optional per-task recency filter in days for search tool calls."""

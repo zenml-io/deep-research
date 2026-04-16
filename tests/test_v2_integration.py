@@ -249,18 +249,22 @@ def _make_passthrough_assemble():
         critique,
         final_report,
         tool_provider_manifest=None,
+        revised_plan=None,
         grounding_min_ratio=0.7,
         strict_grounding=False,
+        verification=None,
     ):
         return InvestigationPackage(
             metadata=metadata,
             brief=brief,
             plan=plan,
+            revised_plan=revised_plan,
             ledger=ledger,
             iterations=iterations,
             draft=draft,
             critique=critique,
             final_report=final_report,
+            verification=verification,
             prompt_hashes={"scope": "abc123", "planner": "def456"},
             tool_provider_manifest=tool_provider_manifest,
         )

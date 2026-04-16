@@ -298,6 +298,7 @@ class TestResearchConfig:
         assert "judge" not in cfg.slots
         assert cfg.second_reviewer is None
         assert cfg.scope_override is None
+        assert cfg.enable_verification is False
 
     def test_for_tier_standard(self):
         cfg = ResearchConfig.for_tier("standard")
@@ -356,11 +357,15 @@ class TestResearchConfig:
     def test_settings_overrides_applied(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_LEDGER_WINDOW_ITERATIONS", "5")
         monkeypatch.setenv("RESEARCH_GROUNDING_MIN_RATIO", "0.8")
+        monkeypatch.setenv("RESEARCH_ENABLE_VERIFICATION", "true")
+        monkeypatch.setenv("RESEARCH_ENABLE_PLAN_REVISION", "true")
         monkeypatch.setenv("RESEARCH_MAX_SUPPLEMENTAL_LOOPS", "2")
         s = ResearchSettings()
         cfg = ResearchConfig.for_tier("standard", settings=s)
         assert cfg.ledger_window_iterations == 5
         assert cfg.grounding_min_ratio == 0.8
+        assert cfg.enable_verification is True
+        assert cfg.enable_plan_revision is True
         assert cfg.max_supplemental_loops == 2
 
     def test_max_parallel_subagents_from_settings(self, monkeypatch):

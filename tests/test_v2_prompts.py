@@ -10,15 +10,17 @@ import pytest
 from research.prompts import PROMPTS, PromptRecord, get_prompt, get_prompt_hashes
 from research.prompts.loader import load_prompt
 
-# The 8 expected prompt names
+# The expected prompt names
 EXPECTED_PROMPTS = frozenset(
     {
         "scope",
         "planner",
+        "replanner",
         "supervisor",
         "subagent",
         "generator",
         "reviewer",
+        "verifier",
         "finalizer",
         "council_judge",
     }
@@ -106,7 +108,7 @@ class TestRegistry:
     """Tests for the PROMPTS registry and accessor functions."""
 
     def test_all_prompts_loaded(self):
-        """All 8 expected prompt files are present in the registry."""
+        """All expected prompt files are present in the registry."""
         for name in EXPECTED_PROMPTS:
             assert name in PROMPTS, f"Missing prompt in registry: {name}"
 
@@ -220,6 +222,19 @@ class TestPlannerPromptSections:
 # ---------------------------------------------------------------------------
 # Subagent prompt alignment tests
 # ---------------------------------------------------------------------------
+
+
+class TestFreshnessPromptAlignment:
+    """Recency field guidance exists across scope/supervisor/subagent prompts."""
+
+    def test_scope_mentions_recency_days(self):
+        assert "recency_days" in get_prompt("scope").text
+
+    def test_supervisor_mentions_recency_days(self):
+        assert "recency_days" in get_prompt("supervisor").text
+
+    def test_subagent_mentions_recency_days(self):
+        assert "recency_days" in get_prompt("subagent").text
 
 
 class TestSubagentPromptAlignment:

@@ -24,7 +24,10 @@ class ResearchSettings(BaseSettings):
     daily_cost_limit_usd: float = 10.0
     ledger_window_iterations: int = 3
     grounding_min_ratio: float = 0.7
+    critique_disagreement_threshold: float = 0.3
     strict_grounding: bool = False
+    enable_verification: bool = False
+    enable_plan_revision: bool = False
     max_supplemental_loops: int = 1
     wait_timeout_seconds: int = 3600
     allow_unfinalized_package: bool = False
@@ -53,7 +56,10 @@ class ResearchConfig(BaseModel):
     max_parallel_subagents: int
     ledger_window_iterations: int
     grounding_min_ratio: float
+    critique_disagreement_threshold: float = 0.3
     strict_grounding: bool = False
+    enable_verification: bool = False
+    enable_plan_revision: bool = False
     max_supplemental_loops: int
     wait_timeout_seconds: int
     allow_unfinalized_package: bool
@@ -113,7 +119,10 @@ class ResearchConfig(BaseModel):
             ),
             ledger_window_iterations=settings.ledger_window_iterations,
             grounding_min_ratio=settings.grounding_min_ratio,
+            critique_disagreement_threshold=settings.critique_disagreement_threshold,
             strict_grounding=settings.strict_grounding,
+            enable_verification=settings.enable_verification,
+            enable_plan_revision=settings.enable_plan_revision,
             max_supplemental_loops=settings.max_supplemental_loops,
             wait_timeout_seconds=settings.wait_timeout_seconds,
             allow_unfinalized_package=settings.allow_unfinalized_package,

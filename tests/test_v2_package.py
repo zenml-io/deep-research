@@ -20,6 +20,7 @@ from research.contracts.package import (
 )
 from research.contracts.plan import ResearchPlan
 from research.contracts.reports import DraftReport, FinalReport
+from research.contracts.reports import VerificationIssue, VerificationReport
 from research.package.assembly import compute_evidence_stats, compute_run_summary
 from research.package.export import read_package, sanitize_path_component, write_package
 
@@ -160,6 +161,32 @@ def test_write_package_round_trip(tmp_path: Path) -> None:
     assert restored.final_report.content == "# Final Report\nPolished content."
     assert restored.metadata.export_path == "artifacts/run-abc-123"
     assert restored.tool_provider_manifest.available_tools == ["search", "fetch"]
+
+
+def test_write_package_round_trip_with_verification(tmp_path: Path) -> None:
+    pkg = _make_package(with_final=True, with_draft=True)
+    pkg = pkg.model_copy(
+        update={
+            "verification": VerificationReport(
+                issues=[
+                    VerificationIssue(
+                        claim_excerpt="Claim",
+                        evidence_ids=["ev-001"],
+                        status="partial",
+                        reason="Only narrower support exists",
+                    )
+                ],
+                verified_claim_count=4,
+                unsupported_claim_count=0,
+                needs_revision=False,
+            )
+        }
+    )
+
+    run_dir = write_package(pkg, tmp_path)
+    restored = read_package(run_dir)
+
+    assert restored.verification == pkg.verification
 
 
 # ---------------------------------------------------------------------------

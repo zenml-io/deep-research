@@ -158,8 +158,8 @@ PydanticAI uses provider-prefixed format:
 
 Four tiers control iteration depth, parallelism, and budget:
 
-| Tier | Max Iterations | Parallel Subagents | Budget | Breadth-First | Supervisor Done |
-|------|---------------:|-------------------:|-------:|--------------:|----------------:|
+| Tier | Max Iterations | Parallel Subagents | Budget | Prompted for Breadth | Supervisor Done |
+|------|---------------:|-------------------:|-------:|---------------------:|----------------:|
 | `quick` | 2 | 3 | $0.10 | No | Respected |
 | `standard` | 5 | 3 | $0.10 | No | Respected |
 | `deep` | 10 | 3 | $0.10 | No | Respected |
@@ -167,7 +167,7 @@ Four tiers control iteration depth, parallelism, and budget:
 
 The **exhaustive** tier is a high-throughput mode designed for comprehensive surveys. Key differences:
 
-- **Breadth-first mode** — supervisor prompt instructs maximum source diversity, varied providers, and no early stopping.
+- **Prompted for breadth** — supervisor prompt instructs maximum source diversity, varied providers, and no early stopping. This is a prompt-level steering hint, not an enforced breadth-first search strategy in the flow.
 - **`respect_supervisor_done=False`** — supervisor's `done=True` signal is ignored; the loop runs until budget ($3.00), time, or 20 iterations.
 - **10 parallel subagents** — 3x the default, for higher source throughput per iteration.
 - **Same model slots as deep** — includes `scope_override` (opus) and `second_reviewer`.
@@ -177,7 +177,7 @@ The **exhaustive** tier is a high-throughput mode designed for comprehensive sur
 All `RESEARCH_*` settings are loaded via pydantic-settings (`ResearchSettings`):
 
 - `RESEARCH_DEFAULT_TIER` — Default tier when not specified (default: `standard`)
-- `RESEARCH_DEFAULT_COST_BUDGET_USD` — Soft cost ceiling per run (default: `0.10`)
+- `RESEARCH_DEFAULT_COST_BUDGET_USD` — Soft cost ceiling per run; checked between iterations, so draft/critique/finalize can overshoot it by up to one phase worth of LLM calls (default: `0.10`)
 - `RESEARCH_DAILY_COST_LIMIT_USD` — Global daily ceiling (default: `10.00`)
 - `RESEARCH_ENABLED_PROVIDERS` — Comma-separated search providers (default: `brave,exa,tavily,arxiv,semantic_scholar`)
 - `RESEARCH_MAX_PARALLEL_SUBAGENTS` — Concurrent subagents per iteration (overrides tier default when set; tier defaults: quick/standard/deep=3, exhaustive=10)

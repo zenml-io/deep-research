@@ -21,6 +21,9 @@ from research.contracts.reports import (
     CritiqueReport,
     DraftReport,
     FinalReport,
+    ReviewerDisagreement,
+    VerificationIssue,
+    VerificationReport,
 )
 
 __all__ = [
@@ -35,8 +38,11 @@ __all__ = [
     "IterationRecord",
     "DraftReport",
     "CritiqueDimensionScore",
+    "ReviewerDisagreement",
     "CritiqueReport",
     "FinalReport",
+    "VerificationIssue",
+    "VerificationReport",
     "EvidenceStats",
     "ProviderResolution",
     "ToolResolution",

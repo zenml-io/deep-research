@@ -27,6 +27,8 @@ from research.contracts.reports import (
     CritiqueReport,
     DraftReport,
     FinalReport,
+    VerificationIssue,
+    VerificationReport,
 )
 
 
@@ -40,21 +42,25 @@ _FLOW_MODULES = [
     "research.checkpoints.metadata",
     "research.checkpoints.scope",
     "research.checkpoints.plan",
+    "research.checkpoints.replan",
     "research.checkpoints.supervisor",
     "research.checkpoints.subagent",
     "research.checkpoints.draft",
     "research.checkpoints.critique",
     "research.checkpoints.finalize",
+    "research.checkpoints.verify",
     "research.checkpoints.assemble",
     "research.checkpoints.export",
     "research.checkpoints",
     "research.agents",
     "research.agents.scope",
     "research.agents.planner",
+    "research.agents.replanner",
     "research.agents.supervisor",
     "research.agents.subagent",
     "research.agents.generator",
     "research.agents.reviewer",
+    "research.agents.verifier",
     "research.agents.finalizer",
 ]
 
@@ -214,6 +220,8 @@ def _make_config(
     max_iterations=5,
     max_parallel_subagents=3,
     max_supplemental_loops=1,
+    enable_verification=False,
+    enable_plan_revision=False,
 ) -> ResearchConfig:
     """Build a minimal ResearchConfig for testing."""
     slots = {
@@ -229,6 +237,8 @@ def _make_config(
         max_parallel_subagents=max_parallel_subagents,
         ledger_window_iterations=3,
         grounding_min_ratio=0.0,
+        enable_verification=enable_verification,
+        enable_plan_revision=enable_plan_revision,
         max_supplemental_loops=max_supplemental_loops,
         wait_timeout_seconds=3600,
         allow_unfinalized_package=False,
@@ -248,6 +258,11 @@ _FINALIZATION = types.SimpleNamespace(
 
 _BRIEF = ResearchBrief(topic="test topic", raw_request="test question")
 _PLAN = ResearchPlan(goal="investigate", key_questions=["what?"])
+_REVISED_PLAN = ResearchPlan(
+    goal="investigate",
+    key_questions=["what?", "which benchmarks remain uncovered?"],
+    subtopics=["benchmark gaps"],
+)
 _DECISION_DONE = SupervisorDecision(
     done=True,
     rationale="sufficient",
@@ -280,6 +295,18 @@ _CRITIQUE_MORE = CritiqueReport(
     issues=["needs more evidence"],
 )
 _FINAL = FinalReport(content="# Final", sections=["Final"])
+_VERIFICATION = VerificationReport(
+    issues=[
+        VerificationIssue(
+            claim_excerpt="Claim",
+            evidence_ids=["ev_001"],
+            status="partial",
+        )
+    ],
+    verified_claim_count=3,
+    unsupported_claim_count=0,
+    needs_revision=False,
+)
 
 
 def _make_passthrough_assemble():
@@ -295,18 +322,22 @@ def _make_passthrough_assemble():
         critique,
         final_report,
         tool_provider_manifest=None,
+        revised_plan=None,
         grounding_min_ratio=0.7,
         strict_grounding=False,
+        verification=None,
     ):
         return InvestigationPackage(
             metadata=metadata,
             brief=brief,
             plan=plan,
+            revised_plan=revised_plan,
             ledger=ledger,
             iterations=iterations,
             draft=draft,
             critique=critique,
             final_report=final_report,
+            verification=verification,
             tool_provider_manifest=tool_provider_manifest,
         )
 
@@ -330,6 +361,7 @@ def _patch_all_checkpoints(
     )
     monkeypatch.setattr(flow_mod, "run_scope", make_checkpoint_stub(_BRIEF))
     monkeypatch.setattr(flow_mod, "run_plan", make_checkpoint_stub(_PLAN))
+    monkeypatch.setattr(flow_mod, "run_plan_revision", make_checkpoint_stub(_REVISED_PLAN))
     monkeypatch.setattr(
         flow_mod,
         "run_supervisor",
@@ -343,6 +375,7 @@ def _patch_all_checkpoints(
         critique_stub or make_checkpoint_stub(_CRITIQUE_OK),
     )
     monkeypatch.setattr(flow_mod, "run_finalize", make_checkpoint_stub(_FINAL))
+    monkeypatch.setattr(flow_mod, "run_verify", make_checkpoint_stub(_VERIFICATION))
     monkeypatch.setattr(flow_mod, "assemble_package", _make_passthrough_assemble())
 
 
@@ -511,6 +544,43 @@ class TestMultiIterationLoop:
         # Supervisor says done => stop_reason is supervisor_done
         assert result.metadata.stop_reason == "supervisor_done"
 
+    def test_supervisor_done_ignored_flag_set_when_config_disables_stop(
+        self, monkeypatch
+    ):
+        """Expose when supervisor requested stop but exhaustive-style config ignored it."""
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        cfg = ResearchConfig(
+            tier="exhaustive",
+            budget=BudgetConfig(soft_budget_usd=3.0),
+            slots={
+                "generator": ModelSlotConfig(provider="test", model="gen"),
+                "subagent": ModelSlotConfig(provider="test", model="sub"),
+                "reviewer": ModelSlotConfig(provider="test", model="rev"),
+            },
+            max_iterations=1,
+            max_parallel_subagents=10,
+            ledger_window_iterations=3,
+            grounding_min_ratio=0.0,
+            max_supplemental_loops=1,
+            wait_timeout_seconds=3600,
+            allow_unfinalized_package=False,
+            strict_unknown_model_cost=False,
+            sandbox_enabled=False,
+            sandbox_backend=None,
+            enabled_providers=["arxiv"],
+            breadth_first=True,
+            respect_supervisor_done=False,
+        )
+
+        result = flow_mod.deep_research("test", config=cfg)
+
+        assert result.metadata.stop_reason == "max_iterations"
+        assert len(result.iterations) == 1
+        assert result.iterations[0].supervisor_decision.done is True
+        assert result.iterations[0].supervisor_done_ignored is True
+
 
 class TestSupplementalLoop:
     """Critique triggers supplemental research, capped at max_supplemental_loops."""
@@ -595,6 +665,262 @@ class TestSupplementalLoop:
         # critique called: 1 (initial) + 1 (supplemental) = 2
         assert critique_calls[0] == 2
         # second require_more_research is recorded in critique but loop exits
+
+    def test_supplemental_supervisor_receives_critique_feedback(self, monkeypatch):
+        """Only the supplemental supervisor pass gets critique-derived feedback."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        critique_with_feedback = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.5,
+                    explanation="Missing benchmark coverage",
+                ),
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.9,
+                    explanation="Well cited",
+                ),
+            ],
+            require_more_research=True,
+            issues=[
+                "Add stronger benchmark comparisons",
+                "Address missing deployment trade-offs",
+            ],
+        )
+
+        critique_calls = [0]
+
+        def critique_stub(*args, **kwargs):
+            critique_calls[0] += 1
+            if critique_calls[0] == 1:
+                return critique_with_feedback
+            return _CRITIQUE_OK
+
+        with_submit(critique_stub)
+
+        supervisor_kwargs: list[dict] = []
+
+        def tracking_supervisor(*args, **kwargs):
+            supervisor_kwargs.append(kwargs)
+            return _DECISION_DONE
+
+        with_submit(tracking_supervisor)
+
+        _patch_all_checkpoints(
+            monkeypatch,
+            flow_mod,
+            supervisor_stub=tracking_supervisor,
+            critique_stub=critique_stub,
+        )
+
+        cfg = _make_config(max_iterations=5, max_supplemental_loops=1)
+        result = flow_mod.deep_research("test", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert len(supervisor_kwargs) == 2
+        assert "critique_feedback" not in supervisor_kwargs[0]
+        assert "critique_feedback" in supervisor_kwargs[1]
+        feedback = supervisor_kwargs[1]["critique_feedback"]
+        assert "Add stronger benchmark comparisons" in feedback
+        assert "missing deployment trade-offs" in feedback
+        assert "completeness (0.50)" in feedback
+
+    def test_plan_revision_runs_once_and_preserves_original_plan(
+        self, monkeypatch
+    ):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        original_run_iteration = flow_mod._run_iteration
+        replan_calls = [0]
+        call_order: list[str] = []
+        supplemental_plans: list[ResearchPlan] = []
+
+        def tracking_replan(*args, **kwargs):
+            replan_calls[0] += 1
+            call_order.append("replan")
+            return _REVISED_PLAN
+
+        with_submit(tracking_replan)
+
+        def tracking_run_iteration(*args, **kwargs):
+            iteration_index = args[4]
+            plan = args[2]
+            if iteration_index >= 1:
+                call_order.append("iteration")
+                supplemental_plans.append(plan)
+            return original_run_iteration(*args, **kwargs)
+
+        critique_calls = [0]
+
+        def critique_stub(*args, **kwargs):
+            critique_calls[0] += 1
+            if critique_calls[0] <= 2:
+                return _CRITIQUE_MORE
+            return _CRITIQUE_OK
+
+        with_submit(critique_stub)
+        monkeypatch.setattr(flow_mod, "run_plan_revision", tracking_replan)
+        monkeypatch.setattr(flow_mod, "_run_iteration", tracking_run_iteration)
+        monkeypatch.setattr(flow_mod, "run_critique", critique_stub)
+
+        result = flow_mod.deep_research(
+            "test",
+            config=_make_config(
+                max_supplemental_loops=2,
+                enable_plan_revision=True,
+            ),
+        )
+
+        assert replan_calls[0] == 1
+        assert call_order[:2] == ["replan", "iteration"]
+        assert supplemental_plans == [_REVISED_PLAN, _REVISED_PLAN]
+        assert result.plan == _PLAN
+        assert result.revised_plan == _REVISED_PLAN
+
+    def test_plan_revision_disabled_keeps_original_plan(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        replan_calls = [0]
+        original_run_iteration = flow_mod._run_iteration
+        supplemental_plans: list[ResearchPlan] = []
+
+        def tracking_replan(*args, **kwargs):
+            replan_calls[0] += 1
+            return _REVISED_PLAN
+
+        with_submit(tracking_replan)
+
+        def tracking_run_iteration(*args, **kwargs):
+            iteration_index = args[4]
+            plan = args[2]
+            if iteration_index >= 1:
+                supplemental_plans.append(plan)
+            return original_run_iteration(*args, **kwargs)
+
+        critique_calls = [0]
+
+        def critique_stub(*args, **kwargs):
+            critique_calls[0] += 1
+            if critique_calls[0] == 1:
+                return _CRITIQUE_MORE
+            return _CRITIQUE_OK
+
+        with_submit(critique_stub)
+        monkeypatch.setattr(flow_mod, "run_plan_revision", tracking_replan)
+        monkeypatch.setattr(flow_mod, "_run_iteration", tracking_run_iteration)
+        monkeypatch.setattr(flow_mod, "run_critique", critique_stub)
+
+        result = flow_mod.deep_research(
+            "test",
+            config=_make_config(enable_plan_revision=False),
+        )
+
+        assert replan_calls[0] == 0
+        assert supplemental_plans == [_PLAN]
+        assert result.plan == _PLAN
+        assert result.revised_plan is None
+
+    def test_plan_revision_failure_falls_back_to_original_plan(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        original_run_iteration = flow_mod._run_iteration
+        supplemental_plans: list[ResearchPlan] = []
+
+        def failing_replan(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        with_submit(failing_replan)
+
+        def tracking_run_iteration(*args, **kwargs):
+            iteration_index = args[4]
+            plan = args[2]
+            if iteration_index >= 1:
+                supplemental_plans.append(plan)
+            return original_run_iteration(*args, **kwargs)
+
+        critique_calls = [0]
+
+        def critique_stub(*args, **kwargs):
+            critique_calls[0] += 1
+            if critique_calls[0] == 1:
+                return _CRITIQUE_MORE
+            return _CRITIQUE_OK
+
+        with_submit(critique_stub)
+        monkeypatch.setattr(flow_mod, "run_plan_revision", failing_replan)
+        monkeypatch.setattr(flow_mod, "_run_iteration", tracking_run_iteration)
+        monkeypatch.setattr(flow_mod, "run_critique", critique_stub)
+
+        result = flow_mod.deep_research(
+            "test",
+            config=_make_config(enable_plan_revision=True),
+        )
+
+        assert supplemental_plans == [_PLAN]
+        assert result.plan == _PLAN
+        assert result.revised_plan is None
+
+    def test_supplemental_feedback_falls_back_to_weakest_dimensions(
+        self, monkeypatch
+    ):
+        """Supplemental feedback is still sent when review asks for more without issues."""
+        flow_mod = _load_flow_module(monkeypatch)
+
+        critique_with_no_explicit_issues = CritiqueReport(
+            dimensions=[
+                CritiqueDimensionScore(
+                    dimension="grounding",
+                    score=0.82,
+                    explanation="Citations are mostly fine",
+                ),
+                CritiqueDimensionScore(
+                    dimension="completeness",
+                    score=0.71,
+                    explanation="Needs fuller coverage",
+                ),
+            ],
+            require_more_research=True,
+            issues=[],
+        )
+
+        critique_calls = [0]
+
+        def critique_stub(*args, **kwargs):
+            critique_calls[0] += 1
+            if critique_calls[0] == 1:
+                return critique_with_no_explicit_issues
+            return _CRITIQUE_OK
+
+        with_submit(critique_stub)
+
+        supervisor_kwargs: list[dict] = []
+
+        def tracking_supervisor(*args, **kwargs):
+            supervisor_kwargs.append(kwargs)
+            return _DECISION_DONE
+
+        with_submit(tracking_supervisor)
+
+        _patch_all_checkpoints(
+            monkeypatch,
+            flow_mod,
+            supervisor_stub=tracking_supervisor,
+            critique_stub=critique_stub,
+        )
+
+        result = flow_mod.deep_research(
+            "test", config=_make_config(max_iterations=5, max_supplemental_loops=1)
+        )
+
+        assert isinstance(result, InvestigationPackage)
+        feedback = supervisor_kwargs[1]["critique_feedback"]
+        assert "Weakest dimensions" in feedback
+        assert "completeness (0.71)" in feedback
 
 
 class TestSubagentFanOut:
@@ -947,6 +1273,69 @@ class TestFinalizerFailure:
         assert result.metadata.stop_reason == "finalizer_failed"
 
 
+class TestVerificationPhase:
+    """Verification is config-gated and advisory only."""
+
+    def test_verification_disabled_skips_checkpoint(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        verify_calls = [0]
+
+        def track_verify(*args, **kwargs):
+            verify_calls[0] += 1
+            return _VERIFICATION
+
+        with_submit(track_verify)
+        monkeypatch.setattr(flow_mod, "run_verify", track_verify)
+
+        result = flow_mod.deep_research(
+            "test question", config=_make_config(enable_verification=False)
+        )
+
+        assert isinstance(result, InvestigationPackage)
+        assert verify_calls[0] == 0
+        assert result.verification is None
+
+    def test_verification_enabled_runs_checkpoint_and_threads_result(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        verify_calls = [0]
+
+        def track_verify(report, ledger, model_name):
+            verify_calls[0] += 1
+            assert report is _FINAL
+            assert model_name == "test:rev"
+            return _VERIFICATION
+
+        with_submit(track_verify)
+        monkeypatch.setattr(flow_mod, "run_verify", track_verify)
+
+        result = flow_mod.deep_research(
+            "test question", config=_make_config(enable_verification=True)
+        )
+
+        assert isinstance(result, InvestigationPackage)
+        assert verify_calls[0] == 1
+        assert result.verification == _VERIFICATION
+
+    def test_verification_checkpoint_failure_is_non_blocking(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+
+        failing_verify, calls = _make_always_failing_stub()
+        monkeypatch.setattr(flow_mod, "run_verify", failing_verify)
+
+        result = flow_mod.deep_research(
+            "test question", config=_make_config(enable_verification=True)
+        )
+
+        assert isinstance(result, InvestigationPackage)
+        assert calls[0] == 1
+        assert result.verification is None
+
+
 class TestBudgetExhaustion:
     """Budget exhaustion sets stop_reason but downstream phases still run."""
 
@@ -1247,6 +1636,63 @@ class TestToolSurfaceThreading:
         assert isinstance(result, InvestigationPackage)
         # Subagents should have received None for tools
         assert all(t is None for t in received_tools)
+
+
+class TestRecencyDefaulting:
+    """Brief-level recency_days defaults are applied before subagent fan-out."""
+
+    def test_brief_recency_days_applied_to_unset_task_before_fan_out(self, monkeypatch):
+        flow_mod = _load_flow_module(monkeypatch)
+
+        submitted_tasks: list[SubagentTask] = []
+
+        def subagent_stub(*args, **kwargs):
+            return _FINDINGS
+
+        def subagent_submit(*args, **kwargs):
+            kwargs.pop("after", None)
+            kwargs.pop("id", None)
+            submitted_tasks.append(args[0])
+            return types.SimpleNamespace(load=lambda: _FINDINGS)
+
+        subagent_stub.submit = subagent_submit
+
+        brief_with_recency = ResearchBrief(
+            topic="test topic",
+            raw_request="test question",
+            recency_days=30,
+        )
+
+        decision = SupervisorDecision(
+            done=True,
+            rationale="enough",
+            subagent_tasks=[
+                SubagentTask(task_description="inherit", target_subtopic="t"),
+                SubagentTask(
+                    task_description="override",
+                    target_subtopic="t",
+                    recency_days=7,
+                ),
+            ],
+        )
+
+        _patch_all_checkpoints(
+            monkeypatch,
+            flow_mod,
+            supervisor_stub=make_checkpoint_stub(decision),
+        )
+        monkeypatch.setattr(flow_mod, "run_scope", make_checkpoint_stub(brief_with_recency))
+        monkeypatch.setattr(flow_mod, "run_subagent", subagent_stub)
+
+        cfg = _make_config(max_iterations=5)
+        result = flow_mod.deep_research("test", config=cfg)
+
+        assert isinstance(result, InvestigationPackage)
+        assert len(submitted_tasks) == 2
+        assert submitted_tasks[0].recency_days == 30
+        assert submitted_tasks[1].recency_days == 7
+        assert result.iterations[0].supervisor_decision.subagent_tasks[0].recency_days == 30
+        assert result.iterations[0].supervisor_decision.subagent_tasks[1].recency_days == 7
 
 
 class TestPinnedIdsPropagate:
