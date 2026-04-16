@@ -7,11 +7,10 @@ wraps the output in a ``FinalReport`` after extracting section headings.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from research.agents._factory import BudgetAwareAgent, _build_agent
 
 
-def build_finalizer_agent(model_name: str):
-    """Build the finalizer agent that produces the final report."""
+def build_finalizer_agent(model_name: str) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="finalizer",

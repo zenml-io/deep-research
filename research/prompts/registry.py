@@ -18,12 +18,9 @@ for _md_file in sorted(_PROMPTS_DIR.glob("*.md")):
 
 def get_prompt(name: str) -> PromptRecord:
     """Return the PromptRecord for *name*, or raise KeyError."""
-    try:
-        return PROMPTS[name]
-    except KeyError:
-        raise KeyError(
-            f"Unknown prompt {name!r}. Available: {sorted(PROMPTS)}"
-        ) from None
+    if name not in PROMPTS:
+        raise KeyError(f"Unknown prompt {name!r}. Available: {sorted(PROMPTS)}")
+    return PROMPTS[name]
 
 
 def get_prompt_hashes() -> dict[str, str]:

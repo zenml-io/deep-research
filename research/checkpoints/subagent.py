@@ -3,6 +3,8 @@
 import json
 import logging
 import time
+from collections.abc import Callable
+from typing import Any
 
 from kitaru import checkpoint
 
@@ -37,7 +39,7 @@ def _is_retryable(exc: Exception) -> bool:
 def run_subagent(
     task: SubagentTask,
     model_name: str,
-    tools: list | None = None,
+    tools: list[Callable[..., Any]] | None = None,
 ) -> SubagentFindings:
     """Checkpoint: execute a single subagent task.
 

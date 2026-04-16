@@ -11,8 +11,17 @@ Pipeline phases:
 """
 
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from kitaru import flow, wait
+
+from research.flows.errors import (
+    FinalizerError,
+    FlowTimeoutError,
+    PlanApprovalRejectedError,
+    SupervisorError,
+)
 
 # Import all checkpoints at module top level (enables monkeypatching in tests)
 from research.checkpoints.assemble import assemble_package
@@ -30,9 +39,13 @@ from research.checkpoints.scope import run_scope
 from research.checkpoints.subagent import run_subagent
 from research.checkpoints.supervisor import run_supervisor
 from research.config.settings import ResearchConfig
+from research.contracts.brief import ResearchBrief
+from research.contracts.decisions import SubagentFindings, SupervisorDecision
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
-from research.contracts.package import InvestigationPackage, RunMetadata
+from research.contracts.package import InvestigationPackage, RunMetadata, ToolProviderManifest
+from research.contracts.plan import ResearchPlan, SubagentTask
+from research.flows.convergence import StopDecision
 from research.flows.budget import BudgetTracker, reset_active_tracker, set_active_tracker
 from research.flows.convergence import check_convergence
 from research.ledger.ledger import ManagedLedger
@@ -44,38 +57,6 @@ from research.providers.search import ProviderRegistry
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Error types
-# ---------------------------------------------------------------------------
-
-
-class FlowTimeoutError(Exception):
-    """Raised when a flow-level wait() exceeds config.wait_timeout_seconds."""
-
-
-class PlanApprovalRejectedError(Exception):
-    """Raised when the operator rejects the generated research plan."""
-
-
-class SupervisorError(Exception):
-    """Raised when the supervisor fails twice consecutively.
-
-    Carries the last valid ledger state so operators can inspect progress
-    and replay from the last good checkpoint.
-    """
-
-    def __init__(self, message: str, ledger: EvidenceLedger | None = None):
-        super().__init__(message)
-        self.ledger = ledger
-
-
-class FinalizerError(Exception):
-    """Raised when the finalizer fails and allow_unfinalized_package is False.
-
-    Draft and critique are preserved in the flow's checkpoint history for
-    replay after the underlying issue is fixed.
-    """
-
 
 def _wait_for_input(
     *,
@@ -84,8 +65,8 @@ def _wait_for_input(
     question: str,
     timeout_seconds: int,
     timeout_message: str,
-    metadata: dict | None = None,
-):
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Resolve a flow-level wait with typed timeout handling."""
     try:
         value = wait(
@@ -125,11 +106,13 @@ def _await_plan_approval(question: str, plan, cfg: ResearchConfig) -> None:
         raise PlanApprovalRejectedError("Research plan was not approved by the operator")
 
 
-def _build_tools_and_manifest(cfg: ResearchConfig) -> tuple[list | None, object]:
+def _build_tools_and_manifest(
+    cfg: ResearchConfig,
+) -> tuple[list[Callable[..., Any]] | None, ToolProviderManifest]:
     """Resolve the subagent tool surface and a durable audit manifest."""
     registry: ProviderRegistry | None = None
     surface = None
-    tools: list | None = None
+    tools: list[Callable[..., Any]] | None = None
     degradation_reasons: list[str] = []
 
     try:
@@ -158,8 +141,11 @@ def _build_tools_and_manifest(cfg: ResearchConfig) -> tuple[list | None, object]
 
 
 def _fan_out_subagents(
-    tasks, model_name: str, max_parallel: int, tools: list | None = None
-):
+    tasks: list[SubagentTask],
+    model_name: str,
+    max_parallel: int,
+    tools: list[Callable[..., Any]] | None = None,
+) -> tuple[list[SubagentFindings], list[Any]]:
     """Fan-out subagent tasks in batches of max_parallel, never spilling across iterations.
 
     Returns (results, submit_handles) — callers need the handles for DAG edge tracking.
@@ -196,7 +182,8 @@ def _run_supervisor_with_retry(
 
     Returns (decision, submit_handles) — callers need the handles for DAG edge tracking.
     """
-    handles: list = []
+    # Return type: tuple[SupervisorDecision, list[Any]]
+    handles: list[Any] = []
     try:
         h = run_supervisor.submit(
             brief,
@@ -243,20 +230,20 @@ def _run_supervisor_with_retry(
 
 def _run_iteration(
     cfg: ResearchConfig,
-    brief,
-    plan,
+    brief: ResearchBrief,
+    plan: ResearchPlan,
     managed_ledger: ManagedLedger,
     iteration_index: int,
     started_at: str,
-    tools: list | None = None,
+    tools: list[Callable[..., Any]] | None = None,
     pinned_ids: list[str] | None = None,
-):
+) -> tuple[IterationRecord, StopDecision, SupervisorDecision, list[Any]]:
     """Execute one research iteration: supervisor -> subagents -> merge -> record.
 
     Returns (record, convergence, decision, submit_handles) — callers need
     the handles for DAG edge tracking and decision for pinned_ids propagation.
     """
-    iter_handles: list = []
+    iter_handles: list[Any] = []
 
     clock_h = snapshot_wall_clock.submit(started_at)
     iter_handles.append(clock_h)
@@ -290,13 +277,11 @@ def _run_iteration(
     )
     iter_handles.extend(sup_handles)
 
-    # Fan-out subagents (batched by max_parallel_subagents)
     subagent_results, sub_handles = _fan_out_subagents(
         decision.subagent_tasks, sub_model, cfg.max_parallel_subagents, tools=tools
     )
     iter_handles.extend(sub_handles)
 
-    # Merge subagent findings into the evidence ledger
     for findings in subagent_results:
         if findings.findings:
             added = managed_ledger.merge_findings(findings, iteration_index)
@@ -315,7 +300,6 @@ def _run_iteration(
         ledger_size=managed_ledger.size,
     )
 
-    # Check convergence after iteration completes
     convergence = check_convergence(
         budget=cfg.budget,
         elapsed_seconds=clock.elapsed_seconds,
@@ -337,7 +321,22 @@ def _run_deep_research_pipeline(
     output_dir: str | None = None,
     require_plan_approval: bool = True,
 ):
-    
+    """Submit the deep research pipeline and return a handle.
+
+    Wraps ``deep_research.run()`` to expose the ``.load()`` interface
+    expected by ``council_research``. All council tests monkeypatch this
+    function, so the implementation is only exercised in production.
+    """
+    import types
+
+    handle = deep_research.run(
+        question,
+        tier=tier,
+        config=cfg,
+        output_dir=output_dir,
+        require_plan_approval=require_plan_approval,
+    )
+    return types.SimpleNamespace(load=handle.wait)
 
 
 @flow
@@ -346,6 +345,7 @@ def deep_research(
     tier: str = "standard",
     config: ResearchConfig | None = None,
     output_dir: str | None = None,
+    require_plan_approval: bool = True,
 ) -> InvestigationPackage:
     """Orchestrate a full deep-research investigation."""
     cfg = config or ResearchConfig.for_tier(tier)
@@ -355,7 +355,7 @@ def deep_research(
     )
     tracker_token = set_active_tracker(tracker)
     try:
-        all_handles: list = []
+        all_handles: list[Any] = []
 
         stamp_h = stamp_run_metadata.submit()
         all_handles.append(stamp_h)
@@ -379,7 +379,7 @@ def deep_research(
         # Phase 3: Build run-scoped tool surface for subagents + durable manifest
         tools, tool_provider_manifest = _build_tools_and_manifest(cfg)
 
-        # Phase 3: Iteration loop
+        # Phase 4: Iteration loop
         managed_ledger = ManagedLedger()
         iterations: list[IterationRecord] = []
         stop_reason: str | None = None
@@ -406,19 +406,19 @@ def deep_research(
 
         ledger = managed_ledger.ledger
 
-        # Phase 4: Draft
+        # Phase 5: Draft
         draft_h = run_draft.submit(brief, plan, ledger, gen_model)
         all_handles.append(draft_h)
         draft = draft_h.load()
 
-        # Phase 5: Critique
+        # Phase 6: Critique
         reviewer_model = cfg.slots["reviewer"].model_string
         second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
         critique_h = run_critique.submit(draft, plan, ledger, reviewer_model, second)
         all_handles.append(critique_h)
         critique = critique_h.load()
 
-        # Phase 6: Supplemental loop (capped at max_supplemental_loops)
+        # Phase 7: Supplemental loop (capped at max_supplemental_loops)
         supplemental_loops = 0
         while (
             critique.require_more_research
@@ -452,7 +452,7 @@ def deep_research(
             # Second require_more_research is recorded but the while guard
             # stops because supplemental_loops == max_supplemental_loops.
 
-        # Phase 7: Finalize
+        # Phase 8: Finalize
         try:
             finalize_h = run_finalize.submit(
                 draft, critique, ledger, gen_model, stop_reason
@@ -475,7 +475,7 @@ def deep_research(
                     "Draft and critique are preserved in checkpoint history for replay."
                 )
 
-        # Phase 8: Assemble
+        # Phase 9: Assemble
         fin_h = finalize_run_metadata.submit(stamp.started_at)
         all_handles.append(fin_h)
         fin = fin_h.load()

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from research.agents._factory import BudgetAwareAgent, _build_agent
 from research.contracts import ResearchBrief
 
 
-def build_scope_agent(model_name: str):
-    """Build the scoping agent that normalizes user requests into briefs."""
+def build_scope_agent(model_name: str) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="scope",

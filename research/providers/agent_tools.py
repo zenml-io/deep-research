@@ -13,7 +13,9 @@ creep.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from research.config import ResearchConfig
 from research.contracts.package import (
@@ -149,14 +151,14 @@ class AgentToolSurface:
     # PydanticAI tool export
     # -----------------------------------------------------------------------
 
-    def as_pydantic_tools(self) -> list:
+    def as_pydantic_tools(self) -> list[Callable[..., Any]]:
         """Return plain async callables that PydanticAI can bind as agent tools.
 
         Each callable has proper type hints for PydanticAI's tool introspection.
         Only includes tools that are available (code_exec omitted when sandbox
         is not configured).
         """
-        tools: list = []
+        tools: list[Callable[..., Any]] = []
 
         async def search(
             queries: list[str],
@@ -233,10 +235,7 @@ def build_tool_surface(
     config: ResearchConfig,
     registry: ProviderRegistry,
 ) -> AgentToolSurface:
-    """Build an ``AgentToolSurface`` for the subagent slot.
-
-    This is the canonical factory for creating the tool surface.
-    """
+    """Build an ``AgentToolSurface`` for the subagent slot."""
     return AgentToolSurface(config=config, registry=registry)
 
 

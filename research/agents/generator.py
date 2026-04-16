@@ -9,11 +9,10 @@ to construct the ``DraftReport`` contract.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from research.agents._factory import BudgetAwareAgent, _build_agent
 
 
-def build_generator_agent(model_name: str):
-    """Build the generator agent that produces draft reports from evidence."""
+def build_generator_agent(model_name: str) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="generator",

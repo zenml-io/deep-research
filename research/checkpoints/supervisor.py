@@ -1,6 +1,7 @@
 """Supervisor checkpoint — runs the supervisor agent to produce a decision."""
 
 import json
+from typing import Any
 
 from kitaru import checkpoint
 
@@ -45,7 +46,7 @@ def run_supervisor(
         A SupervisorDecision with done flag, gaps, and subagent tasks.
     """
     agent = build_supervisor_agent(model_name)
-    prompt_data: dict = {
+    prompt_data: dict[str, Any] = {
         "brief": brief.model_dump(mode="json"),
         "plan": plan.model_dump(mode="json"),
         "ledger_projection": ledger_projection,

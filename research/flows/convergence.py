@@ -136,7 +136,6 @@ def check_convergence(
             diagnostics=diagnostics,
         )
 
-    # Nothing triggered — keep iterating.
     return StopDecision(
         should_stop=False,
         reason=None,

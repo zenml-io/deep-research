@@ -44,6 +44,11 @@ members = [
 [tool.uv.sources]
 kitaru = { git = "https://github.com/zenml-io/kitaru", branch = "feature/pydanticai-integration" }
 
+[dependency-groups]
+dev = [
+    "vulture>=2.16",
+]
+
 [tool.uv]
 override-dependencies = [
   "opentelemetry-sdk>=1.39.0",

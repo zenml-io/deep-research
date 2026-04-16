@@ -30,7 +30,6 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
     - require_more_research: either True => True
     - Provenance: combined
     """
-    # Merge issues (deduplicated, preserving order)
     seen: set[str] = set()
     merged_issues: list[str] = []
     for issue in a.issues + b.issues:
@@ -38,7 +37,6 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
             seen.add(issue)
             merged_issues.append(issue)
 
-    # Merge dimension scores (average matching dimensions, keep unique ones)
     a_dims = {d.dimension: d for d in a.dimensions}
     b_dims = {d.dimension: d for d in b.dimensions}
     all_dims = sorted(set(a_dims) | set(b_dims))
@@ -63,7 +61,6 @@ def _merge_critiques(a: CritiqueReport, b: CritiqueReport) -> CritiqueReport:
         else:
             merged_dims.append(b_dims[dim_name])
 
-    # Merge provenance
     merged_provenance = list(a.reviewer_provenance) + list(b.reviewer_provenance)
 
     return CritiqueReport(
@@ -84,19 +81,9 @@ def run_critique(
 ) -> CritiqueReport:
     """Checkpoint: critique a draft report.
 
-    On standard tier: single reviewer on model_name.
-    On deep tier: two reviewers on different models (model_name and
-    second_model_name). Single reviewer failure is tolerated; both fail = error.
-
-    Args:
-        draft: The draft report to critique.
-        plan: The research plan (for completeness checking).
-        ledger: The evidence ledger (for grounding verification).
-        model_name: PydanticAI model string for the primary reviewer.
-        second_model_name: Optional second reviewer model (deep tier).
-
-    Returns:
-        A CritiqueReport (merged if dual-reviewer).
+    On standard tier: single reviewer. On deep tier (``second_model_name`` set):
+    two reviewers produce independent critiques that are merged. One reviewer
+    failing is tolerated; both failing raises.
     """
     prompt = json.dumps(
         {
@@ -108,11 +95,9 @@ def run_critique(
     )
 
     if second_model_name is None:
-        # Single reviewer (standard tier)
         agent = build_reviewer_agent(model_name)
         return agent.run_sync(prompt).output
 
-    # Dual reviewer (deep tier)
     results: list[CritiqueReport] = []
     errors: list[Exception] = []
 

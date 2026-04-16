@@ -7,12 +7,17 @@ specific subtopics assigned by the supervisor.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from collections.abc import Callable
+from typing import Any
+
+from research.agents._factory import BudgetAwareAgent, _build_agent
 from research.contracts.decisions import SubagentFindings
 
 
-def build_subagent_agent(model_name: str, tools=None):
-    """Build a subagent with optional tool access for research tasks."""
+def build_subagent_agent(
+    model_name: str,
+    tools: list[Callable[..., Any]] | None = None,
+) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="subagent",

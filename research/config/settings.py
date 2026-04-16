@@ -1,4 +1,4 @@
-"""Runtime settings and frozen research config for V2.
+"""Runtime settings and frozen research config.
 
 ResearchSettings: env-var-driven knobs (pydantic-settings).
 ResearchConfig: frozen, assembled config for a single run.
@@ -83,12 +83,10 @@ class ResearchConfig(BaseModel):
 
         defaults: TierDefaults = TIER_DEFAULTS[tier]
 
-        # Convert ModelSlot enum keys to string keys for the frozen dict
         slots: dict[str, ModelSlotConfig] = {
             slot.value: config for slot, config in defaults.slots.items()
         }
 
-        # Parse comma-separated providers into a list
         enabled_providers = [
             p.strip() for p in settings.enabled_providers.split(",") if p.strip()
         ]

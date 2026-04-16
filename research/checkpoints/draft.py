@@ -20,18 +20,8 @@ def run_draft(
 ) -> DraftReport:
     """Checkpoint: generate a draft report from the evidence ledger.
 
-    The generator agent returns plain markdown text (``output_type=str``).
-    This checkpoint wraps the output in a :class:`DraftReport` by extracting
-    section headings from the markdown.
-
-    Args:
-        brief: The normalized research brief.
-        plan: The research plan.
-        ledger: The evidence ledger with all collected items.
-        model_name: PydanticAI model string for the generator agent.
-
-    Returns:
-        A DraftReport with markdown content and section headings.
+    The generator returns plain markdown text (``output_type=str``); this
+    checkpoint wraps it in a :class:`DraftReport` by extracting section headings.
     """
     agent = build_generator_agent(model_name)
     prompt = json.dumps(

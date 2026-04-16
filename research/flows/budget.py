@@ -82,7 +82,7 @@ class ModelPricing:
 # Prefix matching is used so ``gateway/openai:gpt-4o-mini`` resolves to
 # the ``openai:gpt-4o-mini`` entry.
 DEFAULT_MODEL_PRICING: dict[str, ModelPricing] = {
-    # ── Active V2 tier models (defaults.py) ──────────────────────────
+    # ── Active tier models (defaults.py) ─────────────────────────────
     "anthropic:claude-sonnet-4-6": ModelPricing(
         input_per_million_usd=3.00,
         output_per_million_usd=15.00,

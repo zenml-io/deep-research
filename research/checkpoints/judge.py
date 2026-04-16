@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 from kitaru import checkpoint
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 def run_judge(
     packages: dict[str, InvestigationPackage],
     model_name: str,
-    model_settings: dict | None = None,
+    model_settings: dict[str, Any] | None = None,
 ) -> CouncilComparison:
     """Compare investigation packages from different generators.
 

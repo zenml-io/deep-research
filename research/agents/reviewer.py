@@ -8,12 +8,11 @@ the critique checkpoint.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from research.agents._factory import BudgetAwareAgent, _build_agent
 from research.contracts.reports import CritiqueReport
 
 
-def build_reviewer_agent(model_name: str):
-    """Build the reviewer agent that critiques draft reports."""
+def build_reviewer_agent(model_name: str) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="reviewer",

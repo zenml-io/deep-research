@@ -14,6 +14,8 @@ records it via the run-scoped active ``BudgetTracker`` (if one is active).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ class BudgetAwareAgent:
 
     # -- budget-instrumented entry point --------------------------------
 
-    def run_sync(self, *args, **kwargs):
+    def run_sync(self, *args: Any, **kwargs: Any) -> Any:
         """Run the wrapped agent and record token usage if a tracker is active."""
         result = self._wrapped.run_sync(*args, **kwargs)
         self._record_usage(result)
@@ -69,7 +71,7 @@ class BudgetAwareAgent:
 
     # -- transparent delegation -----------------------------------------
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
 
 
@@ -79,9 +81,9 @@ def _build_agent(
     name: str,
     prompt_name: str,
     output_type: type,
-    tools: list | None = None,
-    model_settings: dict | None = None,
-):
+    tools: list[Callable[..., Any]] | None = None,
+    model_settings: dict[str, Any] | None = None,
+) -> BudgetAwareAgent:
     """Construct a PydanticAI Agent wrapped in a KitaruAgent.
 
     Late imports ensure compatibility with the stub-injection test pattern
@@ -93,7 +95,7 @@ def _build_agent(
     from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent
     from research.prompts import get_prompt
 
-    kwargs: dict = {
+    kwargs: dict[str, Any] = {
         "output_type": output_type,
         "system_prompt": get_prompt(prompt_name).text,
     }

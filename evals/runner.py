@@ -12,13 +12,22 @@ from evals.loader import load_dataset
 from evals.logfire import bootstrap_logfire
 from evals.settings import EvalSettings
 from evals.suites import SUITE_REGISTRY
-from evals.suites import web_regression
+
+try:
+    from evals.suites import web_regression as _web_regression
+    _WEB_REGRESSION_AVAILABLE = True
+except ImportError:
+    _web_regression = None  # type: ignore[assignment]
+    _WEB_REGRESSION_AVAILABLE = False
 
 
-SUITE_REGISTRY = {
-    **SUITE_REGISTRY,
-    web_regression.SUITE_NAME: web_regression.run,
-}
+if _WEB_REGRESSION_AVAILABLE and _web_regression is not None:
+    SUITE_REGISTRY = {
+        **SUITE_REGISTRY,
+        _web_regression.SUITE_NAME: _web_regression.run,
+    }
+else:
+    SUITE_REGISTRY = {**SUITE_REGISTRY}
 
 
 def _write_baseline(summary: dict, output_dir: Path, baseline_name: str | None = None) -> Path:

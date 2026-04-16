@@ -6,7 +6,7 @@ Precedence: DOI -> arXiv ID -> canonical URL.
 Also provides ``parse_source_reference`` to extract structured identifiers
 from the pipe-separated format subagents produce in source_references.
 
-V2 intentionally biases dedupe toward over-inclusion rather than incorrect merging.
+Biases toward over-inclusion rather than incorrect merging.
 """
 
 from __future__ import annotations

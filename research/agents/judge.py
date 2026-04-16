@@ -8,12 +8,16 @@ from both generators to eliminate model-bias in the comparison.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from typing import Any
+
+from research.agents._factory import BudgetAwareAgent, _build_agent
 from research.contracts.package import CouncilComparison
 
 
-def build_judge_agent(model_name: str, model_settings: dict | None = None):
-    """Build the council judge agent that compares generator outputs."""
+def build_judge_agent(
+    model_name: str,
+    model_settings: dict[str, Any] | None = None,
+) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="council_judge",

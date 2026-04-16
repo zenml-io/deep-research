@@ -13,17 +13,14 @@ from research.checkpoints.judge import run_judge
 from research.config.settings import ResearchConfig
 from research.config.slots import ModelSlotConfig
 from research.contracts.package import CouncilPackage, InvestigationPackage
-from research.flows.deep_research import FlowTimeoutError, _run_deep_research_pipeline
+from research.flows.deep_research import _run_deep_research_pipeline
+from research.flows.errors import (
+    CouncilConfigError,
+    CouncilSelectionError,
+    FlowTimeoutError,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class CouncilConfigError(Exception):
-    """Raised when council configuration is invalid."""
-
-
-class CouncilSelectionError(Exception):
-    """Raised when the operator selects an invalid council winner."""
 
 
 def _detect_provider_compromise(

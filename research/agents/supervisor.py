@@ -8,12 +8,11 @@ against supervisor-as-executor creep.
 
 from __future__ import annotations
 
-from research.agents._factory import _build_agent
+from research.agents._factory import BudgetAwareAgent, _build_agent
 from research.contracts.decisions import SupervisorDecision
 
 
-def build_supervisor_agent(model_name: str):
-    """Build the supervisor agent that orchestrates the research loop."""
+def build_supervisor_agent(model_name: str) -> BudgetAwareAgent:
     return _build_agent(
         model_name,
         name="supervisor",

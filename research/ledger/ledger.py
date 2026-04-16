@@ -121,7 +121,7 @@ class ManagedLedger:
         excerpt_buckets: dict[int, list[str]] = {}
         unmatched_excerpts: list[str] = []
 
-        for excerpt in findings.excerpts or []:
+        for excerpt in findings.excerpts:
             match = _EXCERPT_SOURCE_RE.match(excerpt)
             matched = False
             if match:
@@ -155,12 +155,6 @@ class ManagedLedger:
                 if pref.url:
                     url = pref.url
                     canonical_url_val = canonicalize_url(pref.url) or None
-            elif idx < len(findings.source_references):
-                # Fallback: raw reference string as URL if it looks like one
-                raw_ref = findings.source_references[idx]
-                if raw_ref and raw_ref.strip().startswith("http"):
-                    url = raw_ref.strip()
-                    canonical_url_val = canonicalize_url(url) or None
 
             # Collect only excerpts matched to this finding by source prefix
             item_excerpts = excerpt_buckets.get(idx, [])

@@ -1,4 +1,4 @@
-"""Model slot definitions for V2 config.
+"""Model slot definitions.
 
 ModelSlot is a StrEnum naming the logical roles an LLM fills.
 ModelSlotConfig holds the provider/model string and per-token costs.
