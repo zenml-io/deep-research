@@ -19,14 +19,8 @@ from research.providers._http import (
 
 logger = logging.getLogger(__name__)
 
-# Defaults ------------------------------------------------------------------
 DEFAULT_FETCH_TIMEOUT_SEC = 15
 DEFAULT_FETCH_MAX_CHARS = 50_000
-
-
-# ---------------------------------------------------------------------------
-# HTML text extraction
-# ---------------------------------------------------------------------------
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -62,11 +56,6 @@ class _HTMLTextExtractor(HTMLParser):
     def text(self) -> str:
         """Return extracted text as a single string."""
         return " ".join(self._chunks)
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 async def fetch_url_content(

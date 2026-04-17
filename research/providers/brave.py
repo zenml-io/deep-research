@@ -8,8 +8,6 @@ from __future__ import annotations
 import logging
 import os
 
-import httpx
-
 from research.providers._http import (
     DEFAULT_RETRY_POLICY,
     build_async_client,

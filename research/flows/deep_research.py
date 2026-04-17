@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+import kitaru
 from kitaru import flow, wait
 
 from research.flows.errors import (
@@ -31,9 +32,11 @@ from research.checkpoints.export import export_package
 from research.checkpoints.finalize import run_finalize
 from research.checkpoints.metadata import (
     finalize_run_metadata,
+    record_iteration_spend,
     snapshot_wall_clock,
     stamp_run_metadata,
 )
+from research.checkpoints.tool_surface import resolve_tool_surface
 from research.checkpoints.verify import run_verify
 from research.checkpoints.plan import run_plan
 from research.checkpoints.replan import run_plan_revision
@@ -45,7 +48,12 @@ from research.contracts.brief import ResearchBrief
 from research.contracts.decisions import SubagentFindings, SupervisorDecision
 from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
-from research.contracts.package import InvestigationPackage, RunMetadata, ToolProviderManifest
+from research.contracts.package import (
+    InvestigationPackage,
+    RunMetadata,
+    SubagentToolSpec,
+    ToolProviderManifest,
+)
 from research.contracts.plan import ResearchPlan, SubagentTask
 from research.contracts.reports import CritiqueReport, VerificationReport
 from research.flows.convergence import StopDecision
@@ -134,17 +142,34 @@ def _summarise_critique_for_supervisor(critique: CritiqueReport) -> str | None:
     return summary
 
 
+def _emit_log(**fields: Any) -> None:
+    """Forward structured fields to ``kitaru.log`` if available.
+
+    Resolved lazily against ``kitaru`` so test fixtures that stub kitaru
+    without a ``log`` attribute don't have to grow the stub; the call
+    becomes a no-op in those tests.
+    """
+    log_fn = getattr(kitaru, "log", None)
+    if callable(log_fn):
+        log_fn(**fields)
+
+
 
 def _wait_for_input(
     *,
-    schema,
+    schema: Any,
     name: str,
     question: str,
     timeout_seconds: int,
     timeout_message: str,
     metadata: dict[str, Any] | None = None,
-) -> None:
-    """Resolve a flow-level wait with typed timeout handling."""
+) -> bool:
+    """Resolve a flow-level wait with typed timeout handling.
+
+    ``schema`` matches ``kitaru.wait()`` (``Any``, typically a builtin type
+    like ``bool``/``str`` or a Pydantic model). The single caller passes
+    ``bool``; the return annotation reflects that.
+    """
     try:
         value = wait(
             schema=schema,
@@ -161,7 +186,7 @@ def _wait_for_input(
     return value
 
 
-def _await_plan_approval(question: str, plan, cfg: ResearchConfig) -> None:
+def _await_plan_approval(question: str, plan: ResearchPlan, cfg: ResearchConfig) -> None:
     """Pause for operator approval of the generated plan."""
     approved = _wait_for_input(
         schema=bool,
@@ -179,59 +204,29 @@ def _await_plan_approval(question: str, plan, cfg: ResearchConfig) -> None:
             "plan": plan.model_dump(mode="json"),
         },
     )
-    if approved is not True:
+    if not approved:
         raise PlanApprovalRejectedError("Research plan was not approved by the operator")
-
-
-def _build_tools_and_manifest(
-    cfg: ResearchConfig,
-) -> tuple[list[Callable[..., Any]] | None, ToolProviderManifest]:
-    """Resolve the subagent tool surface and a durable audit manifest."""
-    registry: ProviderRegistry | None = None
-    surface = None
-    tools: list[Callable[..., Any]] | None = None
-    degradation_reasons: list[str] = []
-
-    try:
-        registry = ProviderRegistry(cfg)
-    except Exception as exc:
-        logger.warning("Failed to build provider registry: %s", exc)
-        degradation_reasons.append(f"provider_registry_failed: {exc}")
-    else:
-        try:
-            surface = build_tool_surface(cfg, registry)
-            tools = surface.as_pydantic_tools()
-        except Exception as exc:
-            logger.warning(
-                "Failed to build tool surface; subagents will run without tools: %s",
-                exc,
-            )
-            degradation_reasons.append(f"tool_surface_build_failed: {exc}")
-
-    manifest = build_tool_provider_manifest(
-        cfg,
-        registry,
-        surface,
-        degradation_reasons=degradation_reasons,
-    )
-    return tools, manifest
 
 
 def _fan_out_subagents(
     tasks: list[SubagentTask],
     model_name: str,
     max_parallel: int,
-    tools: list[Callable[..., Any]] | None = None,
+    tool_spec: SubagentToolSpec | None = None,
 ) -> tuple[list[SubagentFindings], list[Any]]:
-    """Fan-out subagent tasks in batches of max_parallel, never spilling across iterations.
+    """Fan-out subagent tasks in batches of ``max_parallel``, never spilling
+    across iterations.
 
-    Returns (results, submit_handles) — callers need the handles for DAG edge tracking.
+    Returns ``(results, submit_handles)`` — callers need the handles for
+    DAG edge tracking.
     """
     results = []
     all_handles = []
     for batch_start in range(0, len(tasks), max_parallel):
         batch = tasks[batch_start : batch_start + max_parallel]
-        handles = [run_subagent.submit(t, model_name, tools=tools) for t in batch]
+        handles = [
+            run_subagent.submit(t, model_name, tool_spec=tool_spec) for t in batch
+        ]
         all_handles.extend(handles)
         results.extend(h.load() for h in handles)
     return results, all_handles
@@ -256,9 +251,12 @@ def _apply_brief_recency_default(
     return resolved_tasks
 
 
+_SUPERVISOR_MAX_ATTEMPTS = 2
+
+
 def _run_supervisor_with_retry(
-    brief,
-    plan,
+    brief: ResearchBrief,
+    plan: ResearchPlan,
     projection: str,
     remaining: float,
     iteration_index: int,
@@ -268,59 +266,53 @@ def _run_supervisor_with_retry(
     max_iterations: int = 5,
     ledger_size: int = 0,
     critique_feedback: str | None = None,
-):
+) -> tuple[SupervisorDecision, list[Any]]:
     """Call run_supervisor with one retry on failure.
 
-    On first failure: log warning, retry once.
-    On second failure: raise SupervisorError with the last valid ledger.
-
     Each attempt uses a distinct checkpoint ``id`` so Kitaru does not
-    serve a cached failure for the retry.
-
-    Returns (decision, submit_handles) — callers need the handles for DAG edge tracking.
+    serve a cached failure for the retry. On exhaustion, raise
+    ``SupervisorError`` with the last valid ledger.
     """
-    # Return type: tuple[SupervisorDecision, list[Any]]
     handles: list[Any] = []
-
-    def _submit(attempt: int):
-        kwargs = {
-            "breadth_first": breadth_first,
-            "max_iterations": max_iterations,
-            "ledger_size": ledger_size,
-            "id": f"supervisor_{iteration_index}_a{attempt}",
-        }
-        if critique_feedback is not None:
-            kwargs["critique_feedback"] = critique_feedback
-        return run_supervisor.submit(
-            brief,
-            plan,
-            projection,
-            remaining,
-            iteration_index,
-            gen_model,
-            **kwargs,
-        )
-
-    try:
-        h = _submit(1)
-        handles.append(h)
-        return h.load(), handles
-    except Exception as first_err:
-        logger.warning(
-            "Supervisor failed (attempt 1/2) at iteration %d: %s",
-            iteration_index,
-            first_err,
-        )
+    errors: list[Exception] = []
+    for attempt in range(1, _SUPERVISOR_MAX_ATTEMPTS + 1):
         try:
-            h = _submit(2)
+            kwargs: dict[str, Any] = {
+                "breadth_first": breadth_first,
+                "max_iterations": max_iterations,
+                "ledger_size": ledger_size,
+                "id": f"supervisor_{iteration_index}_a{attempt}",
+            }
+            if critique_feedback is not None:
+                kwargs["critique_feedback"] = critique_feedback
+            h = run_supervisor.submit(
+                brief,
+                plan,
+                projection,
+                remaining,
+                iteration_index,
+                gen_model,
+                **kwargs,
+            )
             handles.append(h)
             return h.load(), handles
-        except Exception as second_err:
-            raise SupervisorError(
-                f"Supervisor failed twice at iteration {iteration_index}: "
-                f"first={first_err!r}, second={second_err!r}",
-                ledger=ledger,
-            ) from second_err
+        except Exception as err:
+            errors.append(err)
+            if attempt < _SUPERVISOR_MAX_ATTEMPTS:
+                logger.warning(
+                    "Supervisor failed (attempt %d/%d) at iteration %d: %s",
+                    attempt,
+                    _SUPERVISOR_MAX_ATTEMPTS,
+                    iteration_index,
+                    err,
+                )
+
+    first_err, second_err = errors
+    raise SupervisorError(
+        f"Supervisor failed {_SUPERVISOR_MAX_ATTEMPTS} times at iteration "
+        f"{iteration_index}: first={first_err!r}, second={second_err!r}",
+        ledger=ledger,
+    ) from second_err
 
 
 def _run_iteration(
@@ -330,10 +322,11 @@ def _run_iteration(
     managed_ledger: ManagedLedger,
     iteration_index: int,
     started_at: str,
-    tools: list[Callable[..., Any]] | None = None,
+    cumulative_spent_usd_before: float,
+    tool_spec: SubagentToolSpec | None = None,
     pinned_ids: list[str] | None = None,
     critique_feedback: str | None = None,
-) -> tuple[IterationRecord, StopDecision, SupervisorDecision, list[Any]]:
+) -> tuple[IterationRecord, StopDecision, SupervisorDecision, list[Any], float]:
     """Execute one research iteration: supervisor -> subagents -> merge -> record.
 
     Returns (record, convergence, decision, submit_handles) — callers need
@@ -341,7 +334,9 @@ def _run_iteration(
     """
     iter_handles: list[Any] = []
 
-    clock_h = snapshot_wall_clock.submit(started_at)
+    clock_h = snapshot_wall_clock.submit(
+        started_at, id=f"wall_clock_{iteration_index}"
+    )
     iter_handles.append(clock_h)
     clock = clock_h.load()
 
@@ -357,7 +352,7 @@ def _run_iteration(
             window_iterations=cfg.ledger_window_iterations,
         )
     )
-    remaining = cfg.budget.soft_budget_usd - cfg.budget.spent_usd
+    remaining = cfg.budget.soft_budget_usd - cumulative_spent_usd_before
 
     decision, sup_handles = _run_supervisor_with_retry(
         brief,
@@ -379,7 +374,10 @@ def _run_iteration(
         decision = decision.model_copy(update={"subagent_tasks": resolved_tasks})
 
     subagent_results, sub_handles = _fan_out_subagents(
-        resolved_tasks, sub_model, cfg.max_parallel_subagents, tools=tools
+        resolved_tasks,
+        sub_model,
+        cfg.max_parallel_subagents,
+        tool_spec=tool_spec,
     )
     iter_handles.extend(sub_handles)
 
@@ -394,12 +392,25 @@ def _run_iteration(
                     managed_ledger.size,
                 )
 
+    # Capture the iteration's incremental spend into a checkpoint so replay
+    # sees the original cost even though cached LLM checkpoints don't
+    # re-invoke ``BudgetTracker.record_usage``.
+    live_spent = cfg.budget.spent_usd
+    iteration_cost = max(0.0, live_spent - cumulative_spent_usd_before)
+    spend_h = record_iteration_spend.submit(
+        iteration_index, iteration_cost, id=f"spend_{iteration_index}"
+    )
+    iter_handles.append(spend_h)
+    iteration_cost_cached: float = spend_h.load()
+    cumulative_spent_after = cumulative_spent_usd_before + iteration_cost_cached
+
     record = IterationRecord(
         iteration_index=iteration_index,
         supervisor_decision=decision,
         subagent_results=subagent_results,
         ledger_size=managed_ledger.size,
         supervisor_done_ignored=decision.done and not cfg.respect_supervisor_done,
+        cost_usd=iteration_cost_cached,
     )
 
     convergence = check_convergence(
@@ -410,9 +421,50 @@ def _run_iteration(
         iteration_index=iteration_index,
         max_iterations=cfg.max_iterations,
         respect_supervisor_done=cfg.respect_supervisor_done,
+        cumulative_spent_usd=cumulative_spent_after,
     )
 
-    return record, convergence, decision, iter_handles
+    return record, convergence, decision, iter_handles, cumulative_spent_after
+
+
+def _run_draft_and_critique(
+    brief: ResearchBrief,
+    plan: ResearchPlan,
+    ledger: EvidenceLedger,
+    gen_model: str,
+    reviewer_model: str,
+    second_reviewer_model: str | None,
+    *,
+    checkpoint_id_suffix: str,
+    disagreement_threshold: float | None = None,
+) -> tuple[Any, Any, list[Any]]:
+    """Submit draft then critique with explicit, unique checkpoint IDs.
+
+    *checkpoint_id_suffix* disambiguates the primary pass from each
+    supplemental-loop iteration so Kitaru does not cache-collide.
+    Returns ``(draft, critique, submit_handles)``.
+    """
+    handles: list[Any] = []
+    draft_h = run_draft.submit(
+        brief, plan, ledger, gen_model, id=f"draft_{checkpoint_id_suffix}"
+    )
+    handles.append(draft_h)
+    draft = draft_h.load()
+
+    critique_kwargs: dict[str, Any] = {"id": f"critique_{checkpoint_id_suffix}"}
+    if disagreement_threshold is not None:
+        critique_kwargs["disagreement_threshold"] = disagreement_threshold
+    critique_h = run_critique.submit(
+        draft,
+        plan,
+        ledger,
+        reviewer_model,
+        second_reviewer_model,
+        **critique_kwargs,
+    )
+    handles.append(critique_h)
+    critique = critique_h.load()
+    return draft, critique, handles
 
 
 def _run_deep_research_pipeline(
@@ -463,14 +515,12 @@ def deep_research(
         all_handles.append(stamp_h)
         stamp = stamp_h.load()
 
-        # Phase 1: Scope
         gen_model = cfg.slots["generator"].model_string
         scope_model = cfg.scope_override.model_string if cfg.scope_override else gen_model
         scope_h = run_scope.submit(question, scope_model)
         all_handles.append(scope_h)
         brief = scope_h.load()
 
-        # Phase 2: Plan
         plan_h = run_plan.submit(brief, gen_model)
         all_handles.append(plan_h)
         plan = plan_h.load()
@@ -480,29 +530,50 @@ def deep_research(
         if require_plan_approval:
             _await_plan_approval(question, plan, cfg)
 
-        # Phase 3: Build run-scoped tool surface for subagents + durable manifest
-        tools, tool_provider_manifest = _build_tools_and_manifest(cfg)
+        resolution_h = resolve_tool_surface.submit(cfg)
+        all_handles.append(resolution_h)
+        resolution = resolution_h.load()
+        tool_spec = resolution.spec
+        tool_provider_manifest = resolution.manifest
 
-        # Phase 4: Iteration loop
         managed_ledger = ManagedLedger()
         iterations: list[IterationRecord] = []
         stop_reason: str | None = None
         pinned_ids: list[str] = []
+        cumulative_spent_usd: float = 0.0
 
         for i in range(cfg.max_iterations):
-            record, convergence, decision, iter_handles = _run_iteration(
+            (
+                record,
+                convergence,
+                decision,
+                iter_handles,
+                cumulative_spent_usd,
+            ) = _run_iteration(
                 cfg,
                 brief,
                 plan,
                 managed_ledger,
                 i,
                 stamp.started_at,
-                tools=tools,
+                cumulative_spent_usd,
+                tool_spec=tool_spec,
                 pinned_ids=pinned_ids,
             )
             all_handles.extend(iter_handles)
             iterations.append(record)
             pinned_ids = decision.pinned_evidence_ids
+
+            _emit_log(
+                iteration_index=i,
+                ledger_size=managed_ledger.size,
+                iteration_cost_usd=record.cost_usd,
+                total_cost_usd=cumulative_spent_usd,
+                supervisor_done=decision.done,
+                stop_reason=(
+                    convergence.reason.value if convergence.should_stop else None
+                ),
+            )
 
             if convergence.should_stop:
                 stop_reason = convergence.reason.value
@@ -510,26 +581,22 @@ def deep_research(
 
         ledger = managed_ledger.ledger
 
-        # Phase 5: Draft
-        draft_h = run_draft.submit(brief, plan, ledger, gen_model)
-        all_handles.append(draft_h)
-        draft = draft_h.load()
-
-        # Phase 6: Critique
         reviewer_model = cfg.slots["reviewer"].model_string
         second = cfg.second_reviewer.model_string if cfg.second_reviewer else None
-        critique_h = run_critique.submit(
-            draft,
+
+        draft, critique, dc_handles = _run_draft_and_critique(
+            brief,
             plan,
             ledger,
+            gen_model,
             reviewer_model,
             second,
+            checkpoint_id_suffix="primary",
             disagreement_threshold=cfg.critique_disagreement_threshold,
         )
-        all_handles.append(critique_h)
-        critique = critique_h.load()
+        all_handles.extend(dc_handles)
 
-        # Phase 7: Supplemental loop (capped at max_supplemental_loops)
+        # Supplemental loop — capped at cfg.max_supplemental_loops.
         supplemental_loops = 0
         while (
             critique.require_more_research
@@ -564,14 +631,21 @@ def deep_research(
                         "Plan revision failed (%s); continuing with original plan",
                         exc,
                     )
-            record, _conv, _decision, iter_handles = _run_iteration(
+            (
+                record,
+                _conv,
+                _decision,
+                iter_handles,
+                cumulative_spent_usd,
+            ) = _run_iteration(
                 cfg,
                 brief,
                 plan,
                 managed_ledger,
                 idx,
                 stamp.started_at,
-                tools=tools,
+                cumulative_spent_usd,
+                tool_spec=tool_spec,
                 pinned_ids=pinned_ids,
                 critique_feedback=critique_feedback,
             )
@@ -579,33 +653,23 @@ def deep_research(
             iterations.append(record)
             ledger = managed_ledger.ledger
 
-            draft_h = run_draft.submit(brief, plan, ledger, gen_model)
-            all_handles.append(draft_h)
-            draft = draft_h.load()
-
-            critique_h = run_critique.submit(
-                draft,
+            draft, critique, dc_handles = _run_draft_and_critique(
+                brief,
                 plan,
                 ledger,
+                gen_model,
                 reviewer_model,
                 second,
+                checkpoint_id_suffix=f"supplemental_{supplemental_loops}",
                 disagreement_threshold=cfg.critique_disagreement_threshold,
             )
-            all_handles.append(critique_h)
-            critique = critique_h.load()
-            # Second require_more_research is recorded but the while guard
-            # stops because supplemental_loops == max_supplemental_loops.
+            all_handles.extend(dc_handles)
 
-        # Phase 8: Finalize
-        try:
-            finalize_h = run_finalize.submit(
-                draft, critique, ledger, gen_model, stop_reason
-            )
-            all_handles.append(finalize_h)
-            final_report = finalize_h.load()
-        except Exception as finalize_err:
-            logger.warning("Finalizer failed: %s", finalize_err)
-            final_report = None
+        finalize_h = run_finalize.submit(
+            draft, critique, ledger, gen_model, stop_reason
+        )
+        all_handles.append(finalize_h)
+        final_report = finalize_h.load()
 
         if final_report is None:
             if cfg.allow_unfinalized_package:
@@ -635,10 +699,17 @@ def deep_research(
                     verify_err,
                 )
 
-        # Phase 9: Assemble
         fin_h = finalize_run_metadata.submit(stamp.started_at)
         all_handles.append(fin_h)
         fin = fin_h.load()
+
+        _emit_log(
+            total_cost_usd=cumulative_spent_usd,
+            total_iterations=len(iterations),
+            stop_reason=stop_reason,
+            final_report_produced=final_report is not None,
+            ledger_size=len(ledger.items),
+        )
 
         export_path = (
             str(resolve_package_run_dir(output_dir, stamp.run_id))
@@ -650,7 +721,7 @@ def deep_research(
             tier=cfg.tier,
             started_at=stamp.started_at,
             completed_at=fin.completed_at,
-            total_cost_usd=cfg.budget.spent_usd,
+            total_cost_usd=cumulative_spent_usd,
             total_iterations=len(iterations),
             stop_reason=stop_reason,
             export_path=export_path,

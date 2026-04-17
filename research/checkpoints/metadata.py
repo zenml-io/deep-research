@@ -82,3 +82,16 @@ def finalize_run_metadata(started_at: str) -> RunFinalization:
     """
     completed_at, elapsed = _elapsed_since(started_at)
     return RunFinalization(completed_at=completed_at, elapsed_seconds=elapsed)
+
+
+@checkpoint(type="tool_call")
+def record_iteration_spend(iteration_index: int, cost_usd: float) -> float:
+    """Stamp per-iteration spend so the flow's budget view is replay-stable.
+
+    ``BudgetTracker`` mutates ``BudgetConfig.spent_usd`` during live runs,
+    but cached LLM checkpoints don't re-invoke the tracker on replay —
+    spent_usd would reset to 0 and the flow's convergence decisions would
+    diverge. Submitting this checkpoint with a stable per-iteration ``id``
+    caches the original cost so replay sees the same cumulative spend.
+    """
+    return cost_usd

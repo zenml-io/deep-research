@@ -156,6 +156,7 @@ def _install_stubs(monkeypatch):
         flow=flow_decorator,
         checkpoint=checkpoint_decorator,
         wait=wait,
+        log=lambda **_kwargs: None,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
     )
 
@@ -685,7 +686,8 @@ class TestFinalizerFailureAllowUnfinalized:
     def test_package_has_no_final_report(self, monkeypatch):
         flow_mod = _load_flow_module(monkeypatch)
 
-        failing_finalize, _calls = _make_always_failing_stub()
+        # Real run_finalize returns None on LLM failure (see finalize.py).
+        failing_finalize = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, finalize_stub=failing_finalize)
 
@@ -699,7 +701,8 @@ class TestFinalizerFailureAllowUnfinalized:
         """When iteration loop set a stop_reason, it is preserved even on finalizer failure."""
         flow_mod = _load_flow_module(monkeypatch)
 
-        failing_finalize, _calls = _make_always_failing_stub()
+        # Real run_finalize returns None on LLM failure (see finalize.py).
+        failing_finalize = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, finalize_stub=failing_finalize)
 
@@ -713,7 +716,8 @@ class TestFinalizerFailureAllowUnfinalized:
     def test_draft_and_critique_still_present(self, monkeypatch):
         flow_mod = _load_flow_module(monkeypatch)
 
-        failing_finalize, _calls = _make_always_failing_stub()
+        # Real run_finalize returns None on LLM failure (see finalize.py).
+        failing_finalize = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, finalize_stub=failing_finalize)
 
@@ -730,7 +734,8 @@ class TestFinalizerFailureDisallowUnfinalized:
     def test_raises_finalizer_error(self, monkeypatch):
         flow_mod = _load_flow_module(monkeypatch)
 
-        failing_finalize, _calls = _make_always_failing_stub()
+        # Real run_finalize returns None on LLM failure (see finalize.py).
+        failing_finalize = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod, finalize_stub=failing_finalize)
 

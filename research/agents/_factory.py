@@ -44,29 +44,35 @@ class BudgetAwareAgent:
     # -- internals ------------------------------------------------------
 
     def _record_usage(self, result: object) -> None:
-        """Extract usage from the PydanticAI result and record it."""
+        """Extract usage from the PydanticAI result and record it.
+
+        Reads ``result.usage()`` (a ``RunUsage``) directly, including
+        Anthropic cache-read / cache-write token breakdowns that are
+        priced distinctly from regular input tokens.
+        """
         from research.flows.budget import get_active_tracker
 
         tracker = get_active_tracker()
         if tracker is None:
             return
 
-        usage = getattr(result, "usage", None)
-        if usage is None:
+        usage_fn = getattr(result, "usage", None)
+        if usage_fn is None:
             return
+        usage = usage_fn() if callable(usage_fn) else usage_fn
 
-        # PydanticAI: result.usage is a RunUsage (attribute) or callable
-        if callable(usage):
-            usage = usage()
+        input_tokens = getattr(usage, "input_tokens", 0)
+        output_tokens = getattr(usage, "output_tokens", 0)
+        cache_read_tokens = getattr(usage, "cache_read_tokens", 0)
+        cache_write_tokens = getattr(usage, "cache_write_tokens", 0)
 
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-
-        if input_tokens > 0 or output_tokens > 0:
+        if (input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) > 0:
             tracker.record_usage(
                 self._model_name,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
 
     # -- transparent delegation -----------------------------------------
@@ -89,7 +95,6 @@ def _build_agent(
     Late imports ensure compatibility with the stub-injection test pattern
     used in ``test_v2_agents.py``.
     """
-    # Late imports — resolved against current sys.modules at call time.
     from pydantic_ai import Agent
 
     from kitaru.adapters.pydantic_ai import CapturePolicy, KitaruAgent

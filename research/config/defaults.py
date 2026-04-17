@@ -29,12 +29,9 @@ class TierDefaults(BaseModel):
     default_budget_usd: float | None = None
 
 
-# ---------------------------------------------------------------------------
 # Shared model slot configs — single change point when upgrading a model.
 # All four tiers use the same generator/subagent/reviewer baseline; deeper
 # tiers add judge, second_reviewer, and scope_override on top.
-# ---------------------------------------------------------------------------
-
 _GENERATOR_SLOT = ModelSlotConfig(provider="anthropic", model="claude-sonnet-4-6")
 _SUBAGENT_SLOT = ModelSlotConfig(
     provider="google-gla", model="gemini-3.1-flash-lite-preview"

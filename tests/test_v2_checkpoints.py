@@ -78,6 +78,7 @@ def _install_checkpoint_stubs(monkeypatch):
     )
     kitaru_mod = types.SimpleNamespace(
         checkpoint=checkpoint_decorator,
+        log=lambda **_kwargs: None,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
     )
 
@@ -552,6 +553,8 @@ class TestCheckpointsInit:
             "WallClockSnapshot",
             "assemble_package",
             "finalize_run_metadata",
+            "record_iteration_spend",
+            "resolve_tool_surface",
             "snapshot_wall_clock",
             "stamp_run_metadata",
             "run_critique",
@@ -1990,15 +1993,7 @@ class TestAssembleCheckpoint:
 
         with pytest.raises(mod.CitationResolutionError, match="ev_999"):
             mod.assemble_package(
-                meta,
-                brief,
-                plan,
-                ledger,
-                [],
-                draft,
-                None,
-                None,
-                ToolProviderManifest(),
+                meta, brief, plan, ledger, [], draft, None, None, ToolProviderManifest()
             )
 
     def test_grounding_density_below_threshold_raises(self, monkeypatch):

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import re
+from typing import Annotated, Literal
+
+from pydantic import Field
 
 from research.contracts.base import StrictBase
 
 # Matches markdown headings: "## Heading" or "### Sub-heading" etc.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+
+CritiqueDimension = Literal["source_reliability", "completeness", "grounding"]
+"""The three dimensions every critique must score. Pinned by
+``research/prompts/reviewer.md`` and asserted by the critique merger."""
 
 
 def _extract_sections(markdown: str) -> list[str]:
@@ -43,15 +50,16 @@ class DraftReport(StrictBase):
 class CritiqueDimensionScore(StrictBase):
     """Score for a single critique dimension.
 
-    Standard dimensions include source_reliability, completeness,
-    and grounding.
+    The three dimensions are ``source_reliability``, ``completeness``,
+    and ``grounding``. Scores are in the 0.0-1.0 range per
+    ``research/prompts/reviewer.md``.
     """
 
-    dimension: str
-    """Name of the dimension (e.g. 'source_reliability')."""
+    dimension: CritiqueDimension
+    """Name of the dimension."""
 
-    score: float
-    """Numeric score for this dimension."""
+    score: Annotated[float, Field(ge=0.0, le=1.0)]
+    """Numeric score for this dimension (0.0-1.0)."""
 
     explanation: str
     """Explanation of the score."""

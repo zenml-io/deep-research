@@ -1525,3 +1525,126 @@ class TestToolCallResult:
         r = ToolCallResult(tool="search", success=True)
         with pytest.raises(AttributeError):
             r.success = False  # type: ignore[misc]
+
+
+class TestBuildToolProviderManifest:
+    """Direct unit tests for ``build_tool_provider_manifest``."""
+
+    def _make_config(
+        self,
+        providers: str = "arxiv",
+        sandbox_enabled: bool = False,
+        sandbox_backend: str | None = None,
+    ) -> ResearchConfig:
+        settings = ResearchSettings(
+            enabled_providers=providers,
+            sandbox_enabled=sandbox_enabled,
+            sandbox_backend=sandbox_backend,
+        )
+        return ResearchConfig.for_tier("quick", settings=settings)
+
+    def test_empty_registry_records_each_provider_as_not_built(self):
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv,semantic_scholar")
+        manifest = build_tool_provider_manifest(config, registry=None, surface=None)
+
+        assert manifest.configured_providers == ["arxiv", "semantic_scholar"]
+        assert manifest.instantiated_providers == []
+        assert manifest.active_providers == []
+        # Each configured provider gets a "not built" resolution.
+        assert {r.provider for r in manifest.provider_resolutions} == {
+            "arxiv",
+            "semantic_scholar",
+        }
+        for resolution in manifest.provider_resolutions:
+            assert resolution.instantiated is False
+            assert resolution.available is False
+            assert resolution.reason == "provider_registry_not_built"
+
+    def test_available_provider_appears_in_active_list(self):
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv")  # arxiv is always available
+        registry = ProviderRegistry(config)
+        manifest = build_tool_provider_manifest(config, registry=registry, surface=None)
+
+        assert "arxiv" in manifest.active_providers
+        arxiv_resolution = next(
+            r for r in manifest.provider_resolutions if r.provider == "arxiv"
+        )
+        assert arxiv_resolution.available is True
+        assert arxiv_resolution.instantiated is True
+        assert arxiv_resolution.reason is None
+
+    def test_is_available_raising_is_captured_in_resolution(self):
+        """When a provider's is_available() raises, the manifest records
+        the failure reason instead of crashing."""
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv")
+        registry = ProviderRegistry(config)
+
+        class _Boom:
+            name = "flaky"
+
+            def is_available(self) -> bool:
+                raise RuntimeError("probe exploded")
+
+        registry._providers["flaky"] = _Boom()  # type: ignore[assignment]
+
+        manifest = build_tool_provider_manifest(config, registry=registry, surface=None)
+
+        flaky = next(r for r in manifest.provider_resolutions if r.provider == "flaky")
+        assert flaky.available is False
+        assert flaky.reason is not None
+        assert "availability_check_failed" in flaky.reason
+        assert "probe exploded" in flaky.reason
+        assert "flaky" not in manifest.active_providers
+
+    def test_surface_none_reports_tools_as_unavailable(self):
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv")
+        manifest = build_tool_provider_manifest(config, registry=None, surface=None)
+
+        assert manifest.available_tools == []
+        by_tool = {t.tool: t for t in manifest.tool_resolutions}
+        assert by_tool["search"].enabled is False
+        assert by_tool["search"].reason == "tool_surface_unavailable"
+        assert by_tool["fetch"].enabled is False
+        # code_exec reason reflects the config (sandbox_disabled by default).
+        assert by_tool["code_exec"].reason == "sandbox_disabled"
+
+    def test_degradation_reasons_are_preserved(self):
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv")
+        manifest = build_tool_provider_manifest(
+            config,
+            registry=None,
+            surface=None,
+            degradation_reasons=["registry_build_failed: boom"],
+        )
+
+        assert "registry_build_failed: boom" in manifest.degradation_reasons
+
+    def test_no_active_providers_appends_degradation_reason(self):
+        from research.providers.agent_tools import build_tool_provider_manifest
+
+        config = self._make_config(providers="arxiv")
+        registry = ProviderRegistry(config)
+
+        class _AlwaysUnavailable:
+            name = "arxiv"
+
+            def is_available(self) -> bool:
+                return False
+
+        # Replace the real arxiv provider with one that reports unavailable.
+        registry._providers["arxiv"] = _AlwaysUnavailable()  # type: ignore[assignment]
+
+        manifest = build_tool_provider_manifest(config, registry=registry, surface=None)
+
+        assert manifest.active_providers == []
+        assert "no_active_search_providers" in manifest.degradation_reasons

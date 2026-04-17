@@ -52,13 +52,16 @@ def check_convergence(
     iteration_index: int,
     max_iterations: int,
     respect_supervisor_done: bool = True,
+    cumulative_spent_usd: float | None = None,
 ) -> StopDecision:
     """Check stop rules in priority order and return the first that fires.
 
     Parameters
     ----------
     budget:
-        Current budget state (checked via ``is_exceeded()``).
+        Budget config — only ``soft_budget_usd`` is read; ``spent_usd``
+        is ignored in favour of the explicit ``cumulative_spent_usd``
+        arg so replay sees the same budget view as the original run.
     elapsed_seconds:
         Wall-clock seconds since the run started.
     time_limit_seconds:
@@ -77,6 +80,11 @@ def check_convergence(
         fires rule 3 and stops the loop.  When ``False``, rule 3 is
         skipped entirely — the loop continues until budget, time, or
         max iterations stop it.
+    cumulative_spent_usd:
+        Replay-stable cumulative spend (sourced from cached
+        ``record_iteration_spend`` checkpoints). When ``None``, falls
+        back to ``budget.spent_usd`` for backwards compatibility with
+        callers that do not yet thread this value through.
 
     Returns
     -------
@@ -84,8 +92,11 @@ def check_convergence(
         ``should_stop=True`` with the winning ``reason`` if any rule
         fires, otherwise ``should_stop=False``.
     """
+    spent_usd = (
+        cumulative_spent_usd if cumulative_spent_usd is not None else budget.spent_usd
+    )
     diagnostics: dict[str, float | int | str | bool] = {
-        "spent_usd": budget.spent_usd,
+        "spent_usd": spent_usd,
         "soft_budget_usd": budget.soft_budget_usd,
         "elapsed_seconds": elapsed_seconds,
         "time_limit_seconds": time_limit_seconds,
@@ -98,7 +109,7 @@ def check_convergence(
     }
 
     # 1. Budget exhausted (highest priority)
-    if budget.is_exceeded():
+    if spent_usd >= budget.soft_budget_usd:
         return StopDecision(
             should_stop=True,
             reason=StopReason.BUDGET_EXHAUSTED,

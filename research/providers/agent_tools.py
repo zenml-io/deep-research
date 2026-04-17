@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypedDict
 
 from research.config import ResearchConfig
 from research.contracts.package import (
@@ -26,12 +26,46 @@ from research.contracts.package import (
 from research.providers.code_exec import (
     CodeExecResult,
     SandboxExecutor,
-    SandboxNotAvailableError,
 )
 from research.providers.fetch import fetch_url_content
 from research.providers.search import ProviderRegistry, SearchResult
 
 logger = logging.getLogger(__name__)
+
+
+class SearchToolResult(TypedDict):
+    """Shape surfaced to the subagent LLM for each search hit.
+
+    Using a TypedDict (not a bare ``dict``) gives PydanticAI's schema
+    derivation real field names, so the model can reason about keys
+    instead of guessing from examples.
+    """
+
+    url: str
+    title: str
+    snippet: str
+    provider: str
+
+
+class FetchToolResult(TypedDict):
+    """Shape surfaced to the subagent LLM for a fetch call.
+
+    ``ok=False`` with a ``reason`` distinguishes a failed fetch from a
+    valid-but-empty page; both used to collapse to ``""``.
+    """
+
+    ok: bool
+    content: str
+    reason: str | None
+
+
+class CodeExecToolResult(TypedDict):
+    """Shape surfaced to the subagent LLM for a code_exec call."""
+
+    success: bool
+    stdout: str
+    stderr: str
+    error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,14 +100,9 @@ class AgentToolSurface:
         self._config = config
         self._registry = registry
 
-        # Set up sandbox executor only if enabled and backend is configured.
         self._sandbox: SandboxExecutor | None = None
         if config.sandbox_enabled and config.sandbox_backend:
             self._sandbox = SandboxExecutor(backend=config.sandbox_backend)
-
-    # -----------------------------------------------------------------------
-    # Tool discovery
-    # -----------------------------------------------------------------------
 
     def available_tools(self) -> list[str]:
         """Return names of tools available in this surface.
@@ -85,10 +114,6 @@ class AgentToolSurface:
         if self._sandbox is not None:
             tools.append("code_exec")
         return tools
-
-    # -----------------------------------------------------------------------
-    # search
-    # -----------------------------------------------------------------------
 
     async def search(
         self,
@@ -124,10 +149,6 @@ class AgentToolSurface:
                 )
         return all_results
 
-    # -----------------------------------------------------------------------
-    # fetch
-    # -----------------------------------------------------------------------
-
     async def fetch(
         self,
         url: str,
@@ -147,10 +168,6 @@ class AgentToolSurface:
             logger.exception("Fetch failed for %s", url)
             return None
 
-    # -----------------------------------------------------------------------
-    # PydanticAI tool export
-    # -----------------------------------------------------------------------
-
     def as_pydantic_tools(self) -> list[Callable[..., Any]]:
         """Return plain async callables that PydanticAI can bind as agent tools.
 
@@ -164,27 +181,36 @@ class AgentToolSurface:
             queries: list[str],
             max_results_per_query: int = 10,
             recency_days: int | None = None,
-        ) -> list[dict]:
-            """Search across all active providers. Returns list of result dicts."""
+        ) -> list[SearchToolResult]:
+            """Search across all active providers."""
             results = await self.search(
                 queries,
                 max_results_per_query=max_results_per_query,
                 recency_days=recency_days,
             )
             return [
-                {
-                    "url": r.url,
-                    "title": r.title,
-                    "snippet": r.snippet,
-                    "provider": r.provider,
-                }
+                SearchToolResult(
+                    url=r.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    provider=r.provider,
+                )
                 for r in results
             ]
 
-        async def fetch(url: str) -> str:
-            """Fetch URL content and return extracted plain text."""
+        async def fetch(url: str) -> FetchToolResult:
+            """Fetch URL content, returning structured success/failure.
+
+            ``ok=False`` with a ``reason`` lets the LLM distinguish a
+            genuine empty page (``ok=True, content=""``) from a fetch
+            failure (``ok=False, content="", reason="..."``).
+            """
             content = await self.fetch(url)
-            return content or ""
+            if content is None:
+                return FetchToolResult(
+                    ok=False, content="", reason="fetch_failed_or_unsupported_content"
+                )
+            return FetchToolResult(ok=True, content=content, reason=None)
 
         tools.append(search)
         tools.append(fetch)
@@ -194,24 +220,26 @@ class AgentToolSurface:
             async def code_exec(
                 code: str,
                 language: str = "python",
-            ) -> dict:
+            ) -> CodeExecToolResult:
                 """Execute code in a sandboxed environment."""
                 result = await self.code_exec(code, language=language)
                 if result is None:
-                    return {"success": False, "error": "Sandbox not available"}
-                return {
-                    "success": True,
-                    "stdout": getattr(result, "stdout", ""),
-                    "stderr": getattr(result, "stderr", ""),
-                }
+                    return CodeExecToolResult(
+                        success=False,
+                        stdout="",
+                        stderr="",
+                        error="Sandbox not available",
+                    )
+                return CodeExecToolResult(
+                    success=True,
+                    stdout=getattr(result, "stdout", ""),
+                    stderr=getattr(result, "stderr", ""),
+                    error=None,
+                )
 
             tools.append(code_exec)
 
         return tools
-
-    # -----------------------------------------------------------------------
-    # code_exec
-    # -----------------------------------------------------------------------
 
     async def code_exec(
         self,
@@ -242,27 +270,35 @@ def build_tool_surface(
     return AgentToolSurface(config=config, registry=registry)
 
 
-def _surface_tool_names(surface: AgentToolSurface | object | None) -> list[str]:
-    """Best-effort tool-name extraction for a resolved surface."""
+def _surface_tool_names(surface: AgentToolSurface | None) -> list[str]:
+    """Return the tool-name list for a resolved surface, or empty if none.
+
+    Uses duck-typing on ``available_tools`` so test fixtures that pass a
+    ``SimpleNamespace``-shaped stub work without a full surface instance.
+    """
     if surface is None:
         return []
+    fn = getattr(surface, "available_tools", None)
+    return list(fn()) if callable(fn) else []
 
-    if hasattr(surface, "available_tools") and callable(surface.available_tools):
-        return list(surface.available_tools())
 
-    if hasattr(surface, "as_pydantic_tools") and callable(surface.as_pydantic_tools):
-        return [
-            getattr(tool, "__name__", str(tool))
-            for tool in surface.as_pydantic_tools()
-        ]
-
-    return []
+def _code_exec_reason(
+    available_tools: list[str], config: ResearchConfig
+) -> str | None:
+    """Explain why ``code_exec`` is not in *available_tools*, or None if it is."""
+    if "code_exec" in available_tools:
+        return None
+    if not config.sandbox_enabled:
+        return "sandbox_disabled"
+    if not config.sandbox_backend:
+        return "sandbox_backend_not_configured"
+    return "tool_surface_unavailable"
 
 
 def build_tool_provider_manifest(
     config: ResearchConfig,
     registry: ProviderRegistry | None = None,
-    surface: AgentToolSurface | object | None = None,
+    surface: AgentToolSurface | None = None,
     *,
     degradation_reasons: list[str] | None = None,
 ) -> ToolProviderManifest:
@@ -337,17 +373,7 @@ def build_tool_provider_manifest(
         ToolResolution(
             tool="code_exec",
             enabled="code_exec" in available_tools,
-            reason=(
-                None
-                if "code_exec" in available_tools
-                else (
-                    "sandbox_disabled"
-                    if not config.sandbox_enabled
-                    else "sandbox_backend_not_configured"
-                    if not config.sandbox_backend
-                    else "tool_surface_unavailable"
-                )
-            ),
+            reason=_code_exec_reason(available_tools, config),
         ),
     ]
 
