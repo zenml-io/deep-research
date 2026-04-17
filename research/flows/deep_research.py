@@ -163,12 +163,17 @@ def _wait_for_input(
     timeout_seconds: int,
     timeout_message: str,
     metadata: dict[str, Any] | None = None,
-) -> bool:
+) -> Any:
     """Resolve a flow-level wait with typed timeout handling.
 
-    ``schema`` matches ``kitaru.wait()`` (``Any``, typically a builtin type
-    like ``bool``/``str`` or a Pydantic model). The single caller passes
-    ``bool``; the return annotation reflects that.
+    ``schema`` mirrors ``kitaru.wait()``. The resolved value matches that
+    schema: ``bool`` for yes/no gates, ``str`` for free-text answers, a
+    ``Literal[...]`` for multiple-choice, or a Pydantic model for
+    structured input. Callers should narrow the return type at the call
+    site (``approved: bool = _wait_for_input(schema=bool, ...)``).
+
+    A ``None`` resolution is treated as a timeout — Kitaru's continuation
+    gate returns ``None`` to signal no human input arrived in time.
     """
     try:
         value = wait(
@@ -188,7 +193,7 @@ def _wait_for_input(
 
 def _await_plan_approval(question: str, plan: ResearchPlan, cfg: ResearchConfig) -> None:
     """Pause for operator approval of the generated plan."""
-    approved = _wait_for_input(
+    approved: bool = _wait_for_input(
         schema=bool,
         name="approve_research_plan",
         question=(

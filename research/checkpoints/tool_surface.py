@@ -4,11 +4,14 @@ Wraps provider-registry construction and tool-surface build in a Kitaru
 ``@checkpoint(type="tool_call")`` so the environment probing (``is_available``
 calls on each configured provider, API-key reads, HTTP client setup) runs
 **once** per durable run instead of re-running on every replay.
+
+NOTE: do NOT add ``from __future__ import annotations`` here. ZenML's
+materializer registry inspects the concrete return type of a @checkpoint
+at step-registration time and raises if annotations are strings.
 """
 
-from __future__ import annotations
-
 import logging
+from typing import Optional
 
 from kitaru import checkpoint
 
@@ -36,9 +39,9 @@ def resolve_tool_surface(cfg: ResearchConfig) -> ToolSurfaceResolution:
     manifest records the reason and the spec is set to ``None`` so
     subagents run without tools rather than crashing the flow.
     """
-    registry: ProviderRegistry | None = None
+    registry: Optional[ProviderRegistry] = None
     surface = None
-    spec: SubagentToolSpec | None = None
+    spec: Optional[SubagentToolSpec] = None
     degradation_reasons: list[str] = []
 
     try:
