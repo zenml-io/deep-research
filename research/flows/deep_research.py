@@ -148,10 +148,15 @@ def _emit_log(**fields: Any) -> None:
     Resolved lazily against ``kitaru`` so test fixtures that stub kitaru
     without a ``log`` attribute don't have to grow the stub; the call
     becomes a no-op in those tests.
+
+    ``None``-valued fields are dropped — ZenML's metadata store rejects
+    them (``Metadata type <class 'NoneType'> is not supported``), which
+    would otherwise emit a noisy warning for every optional field like
+    ``stop_reason`` when the run completed before the loop set one.
     """
     log_fn = getattr(kitaru, "log", None)
     if callable(log_fn):
-        log_fn(**fields)
+        log_fn(**{k: v for k, v in fields.items() if v is not None})
 
 
 

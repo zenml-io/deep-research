@@ -58,10 +58,12 @@ def assemble_package(
     2. Grounding density: ratio of grounded sentences >= grounding_min_ratio
     3. Schema validation: InvestigationPackage must be valid
 
-    When ``strict_grounding`` is False (the default), a grounding density
-    below threshold logs a warning but does NOT crash.  The density is
-    always recorded in ``metadata.grounding_density`` for downstream
-    consumers to inspect.
+    ``strict_grounding`` gates both citation resolution AND grounding
+    density. When False (the default), unresolved citation IDs and
+    below-threshold grounding density both log a warning and the package
+    ships with a deflated ``grounding_density`` (hallucinated cites are
+    excluded from the numerator since they don't appear in ``valid_ids``).
+    When True, either condition raises.
 
     Args:
         metadata: Run-level metadata.
@@ -75,14 +77,15 @@ def assemble_package(
         final_report: Final report (may be None).
         tool_provider_manifest: Durable provider/tool manifest for this run.
         grounding_min_ratio: Minimum grounding density (0.0-1.0).
-        strict_grounding: If True, raise GroundingError when density is
-            below threshold.  If False (default), log a warning instead.
+        strict_grounding: If True, raise on unresolved citations or when
+            density is below threshold. If False (default), log warnings.
 
     Returns:
         A valid InvestigationPackage.
 
     Raises:
-        CitationResolutionError: If any citation IDs don't resolve.
+        CitationResolutionError: Only when strict_grounding=True and any
+            citation IDs don't resolve.
         GroundingError: Only when strict_grounding=True and density is
             below threshold.
     """
@@ -108,8 +111,15 @@ def assemble_package(
             valid_ids, unresolved_ids = validate_citations(report_content, ledger)
 
             if unresolved_ids:
-                raise CitationResolutionError(
-                    f"Unresolved citation IDs: {sorted(unresolved_ids)}"
+                if strict_grounding:
+                    raise CitationResolutionError(
+                        f"Unresolved citation IDs: {sorted(unresolved_ids)}"
+                    )
+                logger.warning(
+                    "Unresolved citation IDs %s in report — likely "
+                    "LLM-hallucinated; excluded from grounding density "
+                    "(strict_grounding=False, proceeding anyway)",
+                    sorted(unresolved_ids),
                 )
 
             grounding_density = compute_grounding_density(report_content, valid_ids)

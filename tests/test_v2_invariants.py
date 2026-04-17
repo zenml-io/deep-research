@@ -413,6 +413,7 @@ class TestGroundingDensity:
                 critique=None,
                 final_report=report,
                 tool_provider_manifest=ToolProviderManifest(),
+                strict_grounding=True,
             )
 
 

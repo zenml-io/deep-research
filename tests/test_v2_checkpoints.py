@@ -1961,7 +1961,7 @@ class TestAssembleCheckpoint:
         assert pkg.revised_plan == revised_plan
 
     def test_unresolved_citations_raise(self, monkeypatch):
-        """Assembly fails if report cites evidence IDs not in the ledger."""
+        """Assembly fails if strict_grounding=True and report cites evidence IDs not in the ledger."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
@@ -1993,8 +1993,78 @@ class TestAssembleCheckpoint:
 
         with pytest.raises(mod.CitationResolutionError, match="ev_999"):
             mod.assemble_package(
-                meta, brief, plan, ledger, [], draft, None, None, ToolProviderManifest()
+                meta,
+                brief,
+                plan,
+                ledger,
+                [],
+                draft,
+                None,
+                None,
+                ToolProviderManifest(),
+                strict_grounding=True,
             )
+
+    def test_unresolved_citations_warn_in_soft_mode(self, monkeypatch, caplog):
+        """In soft mode (the default), unresolved citations log a warning
+        and the package still ships — LLMs occasionally hallucinate
+        citation slugs and we don't want the whole run thrown away at
+        the final assembly step."""
+        import logging as _logging
+
+        mod = self._load(monkeypatch)
+        from research.contracts.brief import ResearchBrief
+        from research.contracts.evidence import EvidenceItem, EvidenceLedger
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
+        from research.contracts.plan import ResearchPlan
+        from research.contracts.reports import DraftReport
+
+        ledger = EvidenceLedger(
+            items=[
+                EvidenceItem(
+                    evidence_id="ev_001",
+                    title="Real paper",
+                    synthesis="Real finding",
+                    iteration_added=0,
+                ),
+            ]
+        )
+        draft = DraftReport(
+            content=(
+                "This claims X [investigate-pipeline-run] which is a "
+                "hallucinated slug. But this other claim [ev_001] resolves. "
+                "More text here for length."
+            ),
+            sections=[],
+        )
+        meta = RunMetadata(
+            run_id="run-123", tier="standard", started_at="2024-01-01T00:00:00Z"
+        )
+        brief = ResearchBrief(topic="test", raw_request="test")
+        plan = ResearchPlan(goal="test", key_questions=["q"])
+
+        with caplog.at_level(_logging.WARNING):
+            pkg = mod.assemble_package(
+                meta,
+                brief,
+                plan,
+                ledger,
+                [],
+                draft,
+                None,
+                None,
+                ToolProviderManifest(),
+                grounding_min_ratio=0.0,  # don't tangle with the density branch
+            )
+
+        assert isinstance(pkg, InvestigationPackage)
+        assert any(
+            "investigate-pipeline-run" in rec.getMessage() for rec in caplog.records
+        )
 
     def test_grounding_density_below_threshold_raises(self, monkeypatch):
         """Assembly fails if grounding density is below the threshold AND strict_grounding is True."""
