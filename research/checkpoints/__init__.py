@@ -12,6 +12,8 @@ __all__ = [
     "WallClockSnapshot",
     "assemble_package",
     "finalize_run_metadata",
+    "record_iteration_spend",
+    "resolve_tool_surface",
     "snapshot_wall_clock",
     "stamp_run_metadata",
     "run_critique",
@@ -29,6 +31,7 @@ _METADATA_NAMES = {
     "RunStamp",
     "WallClockSnapshot",
     "finalize_run_metadata",
+    "record_iteration_spend",
     "snapshot_wall_clock",
     "stamp_run_metadata",
 }
@@ -42,6 +45,7 @@ _CRITIQUE_NAMES = {"run_critique"}
 _FINALIZE_NAMES = {"run_finalize"}
 _JUDGE_NAMES = {"run_judge"}
 _ASSEMBLE_NAMES = {"assemble_package", "GroundingError", "CitationResolutionError"}
+_TOOL_SURFACE_NAMES = {"resolve_tool_surface"}
 
 
 def __getattr__(name: str):
@@ -91,4 +95,8 @@ def __getattr__(name: str):
         from research.checkpoints import assemble
 
         return getattr(assemble, name)
+    if name in _TOOL_SURFACE_NAMES:
+        from research.checkpoints import tool_surface
+
+        return getattr(tool_surface, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

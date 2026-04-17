@@ -150,6 +150,7 @@ def _install_stubs(monkeypatch):
         flow=flow_decorator,
         checkpoint=checkpoint_decorator,
         wait=wait,
+        log=lambda **_kwargs: None,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
     )
 
@@ -392,6 +393,16 @@ class TestPlanApprovalWait:
         monkeypatch.setattr(flow_mod, "wait", lambda **kwargs: False)
 
         with pytest.raises(flow_mod.PlanApprovalRejectedError, match="not approved"):
+            flow_mod.deep_research("test question", config=_make_config())
+
+    def test_plan_wait_returning_none_raises_flow_timeout(self, monkeypatch):
+        """``wait()`` returning None (Kitaru's continuation-gate shape) is
+        treated as a timeout, not as silent approval."""
+        flow_mod = _load_flow_module(monkeypatch)
+        _patch_all_checkpoints(monkeypatch, flow_mod)
+        monkeypatch.setattr(flow_mod, "wait", lambda **kwargs: None)
+
+        with pytest.raises(flow_mod.FlowTimeoutError, match="plan approval"):
             flow_mod.deep_research("test question", config=_make_config())
 
 
@@ -805,10 +816,14 @@ class TestFinalizerFailure:
     """Finalizer failure handling based on allow_unfinalized_package config."""
 
     def test_finalizer_failure_with_allow_unfinalized(self, monkeypatch):
-        """run_finalize raises → allow_unfinalized_package=True → package with final_report=None."""
+        """run_finalize returns None → allow_unfinalized_package=True → package with final_report=None.
+
+        Matches the real checkpoint's "returns None on LLM failure" contract
+        (see ``research/checkpoints/finalize.py``).
+        """
         flow_mod = _load_flow_module(monkeypatch)
 
-        finalizer_stub, _calls = _make_always_failing_stub()
+        finalizer_stub = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
@@ -845,10 +860,13 @@ class TestFinalizerFailure:
         assert result.critique is not None
 
     def test_finalizer_failure_without_allow_raises(self, monkeypatch):
-        """run_finalize raises → allow_unfinalized_package=False → FinalizerError."""
+        """run_finalize returns None → allow_unfinalized_package=False → FinalizerError.
+
+        Matches the real checkpoint's "returns None on LLM failure" contract.
+        """
         flow_mod = _load_flow_module(monkeypatch)
 
-        finalizer_stub, _calls = _make_always_failing_stub()
+        finalizer_stub = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
@@ -910,10 +928,13 @@ class TestFinalizerFailure:
             flow_mod.deep_research("test question", config=cfg)
 
     def test_finalizer_failed_sets_stop_reason_when_no_prior(self, monkeypatch):
-        """When no iteration stop_reason exists, finalizer_failed becomes stop_reason."""
+        """When no iteration stop_reason exists, finalizer_failed becomes stop_reason.
+
+        Matches the real checkpoint's "returns None on LLM failure" contract.
+        """
         flow_mod = _load_flow_module(monkeypatch)
 
-        finalizer_stub, _calls = _make_always_failing_stub()
+        finalizer_stub = make_checkpoint_stub(None)
 
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_finalize", finalizer_stub)
@@ -1078,13 +1099,22 @@ class TestDurableExportAndManifest:
     def test_manifest_records_tool_surface_failure(self, monkeypatch):
         flow_mod = _load_flow_module(monkeypatch)
         _patch_all_checkpoints(monkeypatch, flow_mod)
-        monkeypatch.setattr(flow_mod, "build_tool_surface", lambda cfg, registry: (_ for _ in ()).throw(RuntimeError("tool setup boom")))
+
+        from research.checkpoints import tool_surface as tool_surface_mod
+
+        def _boom(cfg, registry):
+            raise RuntimeError("tool setup boom")
+
+        monkeypatch.setattr(tool_surface_mod, "build_tool_surface", _boom)
 
         result = flow_mod.deep_research("test question", config=_make_config())
 
         manifest = result.tool_provider_manifest
         assert manifest.available_tools == []
-        assert any("tool_surface_build_failed" in reason for reason in manifest.degradation_reasons)
+        assert any(
+            "tool_surface_build_failed" in reason
+            for reason in manifest.degradation_reasons
+        )
 
 
 class TestTrackerCleanup:
@@ -1170,13 +1200,17 @@ class TestSubagentDegradedResult:
 
 
 class TestToolSurfaceThreading:
-    """Tools are threaded from the flow through to subagent submissions."""
+    """The replay-stable tool spec is threaded from the flow to subagent
+    submissions. Closures are intentionally *not* passed as checkpoint args —
+    they are rebuilt inside ``run_subagent`` from the spec."""
 
-    def test_subagents_receive_tools(self, monkeypatch):
-        """run_subagent.submit() receives tools kwarg from the flow."""
+    def test_subagents_receive_tool_spec(self, monkeypatch):
+        """run_subagent.submit() receives a ``SubagentToolSpec`` kwarg."""
+        from research.contracts.package import SubagentToolSpec
+
         flow_mod = _load_flow_module(monkeypatch)
 
-        received_tools: list = []
+        received_specs: list = []
 
         def subagent_stub(*args, **kwargs):
             return _FINDINGS
@@ -1184,7 +1218,7 @@ class TestToolSurfaceThreading:
         def subagent_submit(*args, **kwargs):
             kwargs.pop("after", None)
             kwargs.pop("id", None)
-            received_tools.append(kwargs.get("tools"))
+            received_specs.append(kwargs.get("tool_spec"))
             return types.SimpleNamespace(load=lambda: _FINDINGS)
 
         subagent_stub.submit = subagent_submit
@@ -1192,33 +1226,34 @@ class TestToolSurfaceThreading:
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_subagent", subagent_stub)
 
-        # Patch ProviderRegistry and build_tool_surface to avoid real providers
-        fake_tools = [lambda: "search", lambda: "fetch"]
-        monkeypatch.setattr(
-            flow_mod,
-            "ProviderRegistry",
-            lambda cfg: None,
-        )
+        # Stub the live surface build so we don't need real providers.
+        from research.checkpoints import tool_surface as tool_surface_mod
+
+        monkeypatch.setattr(tool_surface_mod, "ProviderRegistry", lambda cfg: None)
         monkeypatch.setattr(
             flow_mod,
             "build_tool_surface",
             lambda cfg, registry: types.SimpleNamespace(
-                as_pydantic_tools=lambda: fake_tools
+                as_pydantic_tools=lambda: [],
+                available_tools=lambda: ["search", "fetch"],
             ),
         )
 
         cfg = _make_config(max_iterations=5)
         flow_mod.deep_research("test", config=cfg)
 
-        # At least one subagent should have received tools
-        assert len(received_tools) >= 1
-        assert received_tools[0] is fake_tools
+        assert len(received_specs) >= 1
+        spec = received_specs[0]
+        assert isinstance(spec, SubagentToolSpec)
+        assert spec.enabled_providers == list(cfg.enabled_providers)
+        assert spec.sandbox_enabled == cfg.sandbox_enabled
+        assert spec.sandbox_backend == cfg.sandbox_backend
 
     def test_tool_surface_failure_degrades_gracefully(self, monkeypatch):
-        """If tool surface construction fails, subagents get tools=None."""
+        """If tool surface construction fails, subagents get tool_spec=None."""
         flow_mod = _load_flow_module(monkeypatch)
 
-        received_tools: list = []
+        received_specs: list = []
 
         def subagent_stub(*args, **kwargs):
             return _FINDINGS
@@ -1226,7 +1261,7 @@ class TestToolSurfaceThreading:
         def subagent_submit(*args, **kwargs):
             kwargs.pop("after", None)
             kwargs.pop("id", None)
-            received_tools.append(kwargs.get("tools"))
+            received_specs.append(kwargs.get("tool_spec"))
             return types.SimpleNamespace(load=lambda: _FINDINGS)
 
         subagent_stub.submit = subagent_submit
@@ -1234,19 +1269,19 @@ class TestToolSurfaceThreading:
         _patch_all_checkpoints(monkeypatch, flow_mod)
         monkeypatch.setattr(flow_mod, "run_subagent", subagent_stub)
 
-        # Make ProviderRegistry raise to simulate failure
+        # ProviderRegistry lives in the tool-surface checkpoint module now.
+        from research.checkpoints import tool_surface as tool_surface_mod
+
         def failing_registry(cfg):
             raise RuntimeError("No providers available")
 
-        monkeypatch.setattr(flow_mod, "ProviderRegistry", failing_registry)
+        monkeypatch.setattr(tool_surface_mod, "ProviderRegistry", failing_registry)
 
         cfg = _make_config(max_iterations=5)
         result = flow_mod.deep_research("test", config=cfg)
 
-        # Flow should still complete
         assert isinstance(result, InvestigationPackage)
-        # Subagents should have received None for tools
-        assert all(t is None for t in received_tools)
+        assert all(spec is None for spec in received_specs)
 
 
 class TestPinnedIdsPropagate:
@@ -1289,7 +1324,9 @@ class TestPinnedIdsPropagate:
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=supervisor_with_pins)
 
         # Patch out tool surface to avoid real providers
-        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
+        from research.checkpoints import tool_surface as tool_surface_mod
+
+        monkeypatch.setattr(tool_surface_mod, "ProviderRegistry", lambda cfg: None)
         monkeypatch.setattr(
             flow_mod,
             "build_tool_surface",
@@ -1354,7 +1391,11 @@ class TestPinnedIdsPropagate:
                 local_flow_mod,
                 supervisor_stub=build_supervisor(),
             )
-            monkeypatch.setattr(local_flow_mod, "ProviderRegistry", lambda cfg: None)
+            from research.checkpoints import tool_surface as tool_surface_mod
+
+            monkeypatch.setattr(
+                tool_surface_mod, "ProviderRegistry", lambda cfg: None
+            )
             monkeypatch.setattr(
                 local_flow_mod,
                 "build_tool_surface",
@@ -1418,7 +1459,9 @@ class TestStalePinnedIdsIgnored:
             monkeypatch, flow_mod, supervisor_stub=supervisor_stale_pins
         )
 
-        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
+        from research.checkpoints import tool_surface as tool_surface_mod
+
+        monkeypatch.setattr(tool_surface_mod, "ProviderRegistry", lambda cfg: None)
         monkeypatch.setattr(
             flow_mod,
             "build_tool_surface",
@@ -1452,9 +1495,11 @@ class TestSupervisorContextEnrichment:
         _patch_all_checkpoints(monkeypatch, flow_mod, supervisor_stub=tracking_supervisor)
 
         # Patch out tool surface
-        monkeypatch.setattr(flow_mod, "ProviderRegistry", lambda cfg: None)
+        from research.checkpoints import tool_surface as tool_surface_mod
+
+        monkeypatch.setattr(tool_surface_mod, "ProviderRegistry", lambda cfg: None)
         monkeypatch.setattr(
-            flow_mod, "build_tool_surface",
+            tool_surface_mod, "build_tool_surface",
             lambda cfg, registry: types.SimpleNamespace(as_pydantic_tools=lambda: []),
         )
 

@@ -53,11 +53,8 @@ class SearchProvider(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# Known provider names → lazy factory functions
-# ---------------------------------------------------------------------------
-
-
+# Known provider names → lazy factory functions (imports deferred to avoid
+# pulling in optional deps at package-import time).
 def _build_brave() -> SearchProvider:
     from research.providers.brave import BraveSearchProvider
 

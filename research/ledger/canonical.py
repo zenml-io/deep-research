@@ -87,10 +87,6 @@ def extract_canonical_id(
     return ("none", "")
 
 
-# ---------------------------------------------------------------------------
-# Source reference parsing
-# ---------------------------------------------------------------------------
-
 # Patterns for extracting structured identifiers from pipe-separated refs.
 _DOI_PATTERN = re.compile(r"(?:^|\||\s)doi:\s*(\S+)", re.IGNORECASE)
 _ARXIV_PATTERN = re.compile(r"(?:^|\||\s)arxiv:\s*(\S+)", re.IGNORECASE)

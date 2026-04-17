@@ -51,11 +51,6 @@ def get_active_tracker() -> BudgetTracker | None:
     return _active_tracker.get()
 
 
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
 class UnknownModelCostError(Exception):
     """Raised when ``strict_unknown_model_cost=True`` and the model has no
     pricing entry."""
@@ -63,11 +58,6 @@ class UnknownModelCostError(Exception):
 
 class HardBudgetExceededError(Exception):
     """Raised when ``hard_budget_usd`` is set and spending exceeds it."""
-
-
-# ---------------------------------------------------------------------------
-# Pricing
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -82,7 +72,7 @@ class ModelPricing:
 # Prefix matching is used so ``gateway/openai:gpt-4o-mini`` resolves to
 # the ``openai:gpt-4o-mini`` entry.
 DEFAULT_MODEL_PRICING: dict[str, ModelPricing] = {
-    # ── Active tier models (defaults.py) ─────────────────────────────
+    # Active tier models (defaults.py)
     "anthropic:claude-sonnet-4-6": ModelPricing(
         input_per_million_usd=3.00,
         output_per_million_usd=15.00,
@@ -103,7 +93,8 @@ DEFAULT_MODEL_PRICING: dict[str, ModelPricing] = {
         input_per_million_usd=0.15,
         output_per_million_usd=0.60,
     ),
-    # ── Legacy / fallback models ─────────────────────────────────────
+    # Older-generation models (still priced; kept for operators overriding
+    # model slots via env vars). Pinned by tests/test_budget.py.
     "google-gla:gemini-2.5-flash": ModelPricing(
         input_per_million_usd=0.15,
         output_per_million_usd=0.60,
@@ -155,11 +146,6 @@ def lookup_pricing(
     return None
 
 
-# ---------------------------------------------------------------------------
-# Usage record (audit trail entry)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class UsageRecord:
     """Single model-call cost record kept in the audit trail."""
@@ -169,11 +155,11 @@ class UsageRecord:
     output_tokens: int
     cost_usd: float
     pricing_known: bool
+    cache_read_tokens: int = 0
+    """Anthropic/OpenAI prompt-cache hits — billed at a reduced rate."""
 
-
-# ---------------------------------------------------------------------------
-# BudgetTracker
-# ---------------------------------------------------------------------------
+    cache_write_tokens: int = 0
+    """Anthropic cache-write tokens — billed at a premium to the base input rate."""
 
 
 @dataclass
@@ -206,10 +192,16 @@ class BudgetTracker:
         model_name: str,
         input_tokens: int,
         output_tokens: int,
+        *,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> UsageRecord:
         """Record token usage from a model call and update spent_usd.
 
-        Returns the ``UsageRecord`` for the call.
+        ``cache_read_tokens`` (billed at ~10% of the input rate) and
+        ``cache_write_tokens`` (billed at ~125% of the input rate) model
+        Anthropic prompt caching. When omitted, existing cost behaviour
+        is unchanged.
 
         Raises
         ------
@@ -241,6 +233,9 @@ class BudgetTracker:
             cost_usd = (
                 pricing.input_per_million_usd * input_tokens / 1_000_000
                 + pricing.output_per_million_usd * output_tokens / 1_000_000
+                # Anthropic prompt-cache rates relative to base input rate.
+                + pricing.input_per_million_usd * cache_read_tokens * 0.1 / 1_000_000
+                + pricing.input_per_million_usd * cache_write_tokens * 1.25 / 1_000_000
             )
             pricing_known = True
 
@@ -250,6 +245,8 @@ class BudgetTracker:
             output_tokens=output_tokens,
             cost_usd=cost_usd,
             pricing_known=pricing_known,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
         )
         self.audit_trail.append(record)
         self.budget.spent_usd += cost_usd
@@ -262,11 +259,6 @@ class BudgetTracker:
             )
 
         return record
-
-
-# ---------------------------------------------------------------------------
-# Iteration-boundary budget check
-# ---------------------------------------------------------------------------
 
 
 def check_iteration_budget(budget: BudgetConfig) -> tuple[bool, str]:

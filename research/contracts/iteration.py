@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from pydantic import Field
+
 from research.contracts.base import StrictBase
 from research.contracts.decisions import SubagentFindings, SupervisorDecision
 
@@ -13,7 +17,7 @@ class IterationRecord(StrictBase):
     iteration-level metrics for auditability.
     """
 
-    iteration_index: int
+    iteration_index: Annotated[int, Field(ge=0)]
     """Zero-based index of this iteration."""
 
     supervisor_decision: SupervisorDecision
@@ -22,11 +26,11 @@ class IterationRecord(StrictBase):
     subagent_results: list[SubagentFindings] = []
     """Results from subagents dispatched this iteration."""
 
-    ledger_size: int = 0
+    ledger_size: Annotated[int, Field(ge=0)] = 0
     """Number of evidence items in the ledger after this iteration."""
 
-    cost_usd: float = 0.0
+    cost_usd: Annotated[float, Field(ge=0.0)] = 0.0
     """Cost in USD incurred during this iteration."""
 
-    duration_seconds: float = 0.0
+    duration_seconds: Annotated[float, Field(ge=0.0)] = 0.0
     """Wall-clock duration of this iteration in seconds."""

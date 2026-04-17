@@ -78,6 +78,7 @@ def _install_checkpoint_stubs(monkeypatch):
     )
     kitaru_mod = types.SimpleNamespace(
         checkpoint=checkpoint_decorator,
+        log=lambda **_kwargs: None,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
     )
 
@@ -422,6 +423,8 @@ class TestCheckpointsInit:
             "WallClockSnapshot",
             "assemble_package",
             "finalize_run_metadata",
+            "record_iteration_spend",
+            "resolve_tool_surface",
             "snapshot_wall_clock",
             "stamp_run_metadata",
             "run_critique",
@@ -1399,7 +1402,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1424,7 +1431,16 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
 
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.5
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            None,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.5,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.schema_version == "1.0"
@@ -1439,7 +1455,7 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1466,14 +1482,16 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
 
         with pytest.raises(mod.CitationResolutionError, match="ev_999"):
-            mod.assemble_package(meta, brief, plan, ledger, [], draft, None, None)
+            mod.assemble_package(
+                meta, brief, plan, ledger, [], draft, None, None, ToolProviderManifest()
+            )
 
     def test_grounding_density_below_threshold_raises(self, monkeypatch):
         """Assembly fails if grounding density is below the threshold AND strict_grounding is True."""
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1512,6 +1530,7 @@ class TestAssembleCheckpoint:
                 draft,
                 None,
                 None,
+                ToolProviderManifest(),
                 grounding_min_ratio=0.7,
                 strict_grounding=True,
             )
@@ -1522,7 +1541,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1561,6 +1584,7 @@ class TestAssembleCheckpoint:
             draft,
             None,
             None,
+            ToolProviderManifest(),
             grounding_min_ratio=0.7,
         )
         assert isinstance(pkg, InvestigationPackage)
@@ -1573,7 +1597,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
 
         meta = RunMetadata(
@@ -1583,7 +1611,9 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
         ledger = EvidenceLedger()
 
-        pkg = mod.assemble_package(meta, brief, plan, ledger, [], None, None, None)
+        pkg = mod.assemble_package(
+            meta, brief, plan, ledger, [], None, None, None, ToolProviderManifest()
+        )
         assert isinstance(pkg, InvestigationPackage)
 
     def test_records_prompt_hashes(self, monkeypatch):
@@ -1591,7 +1621,7 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import RunMetadata
+        from research.contracts.package import RunMetadata, ToolProviderManifest
         from research.contracts.plan import ResearchPlan
 
         meta = RunMetadata(
@@ -1601,7 +1631,9 @@ class TestAssembleCheckpoint:
         plan = ResearchPlan(goal="test", key_questions=["q"])
         ledger = EvidenceLedger()
 
-        pkg = mod.assemble_package(meta, brief, plan, ledger, [], None, None, None)
+        pkg = mod.assemble_package(
+            meta, brief, plan, ledger, [], None, None, None, ToolProviderManifest()
+        )
         # Should have hashes for all loaded prompts
         assert isinstance(pkg.prompt_hashes, dict)
         assert len(pkg.prompt_hashes) > 0  # at least some prompts loaded
@@ -1615,7 +1647,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport, FinalReport
 
@@ -1643,7 +1679,16 @@ class TestAssembleCheckpoint:
 
         # Should NOT raise because it checks final, not draft
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, final, grounding_min_ratio=0.5
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            final,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.5,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.final_report is final
@@ -1654,7 +1699,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1674,7 +1723,16 @@ class TestAssembleCheckpoint:
 
         # Should NOT raise — empty ledger means grounding check is skipped
         pkg = mod.assemble_package(
-            meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.7
+            meta,
+            brief,
+            plan,
+            ledger,
+            [],
+            draft,
+            None,
+            None,
+            ToolProviderManifest(),
+            grounding_min_ratio=0.7,
         )
         assert isinstance(pkg, InvestigationPackage)
         assert pkg.ledger.items == []
@@ -1687,7 +1745,11 @@ class TestAssembleCheckpoint:
         mod = self._load(monkeypatch)
         from research.contracts.brief import ResearchBrief
         from research.contracts.evidence import EvidenceItem, EvidenceLedger
-        from research.contracts.package import InvestigationPackage, RunMetadata
+        from research.contracts.package import (
+            InvestigationPackage,
+            RunMetadata,
+            ToolProviderManifest,
+        )
         from research.contracts.plan import ResearchPlan
         from research.contracts.reports import DraftReport
 
@@ -1728,7 +1790,16 @@ class TestAssembleCheckpoint:
             )
 
             pkg = mod.assemble_package(
-                meta, brief, plan, ledger, [], draft, None, None, grounding_min_ratio=0.0
+                meta,
+                brief,
+                plan,
+                ledger,
+                [],
+                draft,
+                None,
+                None,
+                ToolProviderManifest(),
+                grounding_min_ratio=0.0,
             )
 
         # Package should still be produced (non-fatal)

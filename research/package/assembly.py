@@ -47,21 +47,8 @@ def compute_run_summary(package: InvestigationPackage) -> str:
     return "\n".join(lines)
 
 
-def compute_evidence_stats(
-    package: InvestigationPackage,
-    *,
-    relevance_threshold: float = 0.7,
-) -> EvidenceStats:
-    """Compute statistics about the evidence ledger.
-
-    Parameters
-    ----------
-    package:
-        The investigation package to analyze.
-    relevance_threshold:
-        Not used for filtering (evidence items don't carry a numeric
-        relevance score in the V2 contract), but reserved for future use.
-    """
+def compute_evidence_stats(package: InvestigationPackage) -> EvidenceStats:
+    """Compute statistics about the evidence ledger."""
     items = package.ledger.items
     domains: set[str] = set()
     providers: set[str] = set()

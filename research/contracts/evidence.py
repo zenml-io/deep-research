@@ -7,6 +7,10 @@ lives in the ``ledger/`` module — these are pure data contracts.
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from pydantic import Field
+
 from research.contracts.base import StrictBase
 
 
@@ -47,8 +51,8 @@ class EvidenceItem(StrictBase):
     confidence_notes: str | None = None
     """Notes on reliability or confidence in this evidence."""
 
-    iteration_added: int
-    """Which research iteration discovered this evidence."""
+    iteration_added: Annotated[int, Field(ge=0)]
+    """Which research iteration (0-indexed) discovered this evidence."""
 
     provider: str | None = None
     """Search provider that surfaced this source (e.g. 'arxiv', 'brave')."""

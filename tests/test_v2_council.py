@@ -127,6 +127,7 @@ def _install_stubs(monkeypatch):
         flow=flow_decorator,
         checkpoint=checkpoint_decorator,
         wait=wait,
+        log=lambda **_kwargs: None,
         adapters=types.SimpleNamespace(pydantic_ai=kp_ns),
     )
 

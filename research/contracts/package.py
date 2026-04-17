@@ -6,7 +6,9 @@ that capture everything produced during a research run.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Annotated, Literal, TypedDict
+
+from pydantic import Field
 
 from research.contracts.base import StrictBase
 from research.contracts.brief import ResearchBrief
@@ -14,6 +16,10 @@ from research.contracts.evidence import EvidenceLedger
 from research.contracts.iteration import IterationRecord
 from research.contracts.plan import ResearchPlan
 from research.contracts.reports import CritiqueReport, DraftReport, FinalReport
+
+Tier = Literal["quick", "standard", "deep", "exhaustive"]
+"""The four research tiers. Matches ``run_v2.py`` argparse choices and
+``ResearchConfig.for_tier`` keys."""
 
 
 class EvidenceStats(TypedDict):
@@ -75,6 +81,30 @@ class ToolProviderManifest(StrictBase):
     degradation_reasons: list[str] = []
 
 
+class SubagentToolSpec(StrictBase):
+    """Serialisable spec for rebuilding a subagent's tool surface.
+
+    Passed to ``run_subagent`` as a replay-stable alternative to
+    ``list[Callable]``. Closures are not fingerprint-stable across
+    processes; this spec is.
+    """
+
+    enabled_providers: list[str] = []
+    sandbox_enabled: bool = False
+    sandbox_backend: str | None = None
+
+
+class ToolSurfaceResolution(StrictBase):
+    """Serialisable output of the tool-surface resolution checkpoint.
+
+    Packaging spec + manifest as a single return value lets the result
+    flow through a Kitaru checkpoint without a tuple unwrap boilerplate.
+    """
+
+    spec: SubagentToolSpec | None = None
+    manifest: ToolProviderManifest = ToolProviderManifest()
+
+
 class RunMetadata(StrictBase):
     """Metadata for a single research run.
 
@@ -84,8 +114,8 @@ class RunMetadata(StrictBase):
     run_id: str
     """Unique identifier for this run."""
 
-    tier: str
-    """Research tier (e.g. 'quick', 'standard', 'deep')."""
+    tier: Tier
+    """Research tier."""
 
     started_at: str
     """ISO-8601 timestamp when the run started."""
@@ -93,16 +123,16 @@ class RunMetadata(StrictBase):
     completed_at: str | None = None
     """ISO-8601 timestamp when the run completed, if finished."""
 
-    total_cost_usd: float = 0.0
+    total_cost_usd: Annotated[float, Field(ge=0.0)] = 0.0
     """Total cost in USD for the entire run."""
 
-    total_iterations: int = 0
+    total_iterations: Annotated[int, Field(ge=0)] = 0
     """Number of research iterations completed."""
 
     stop_reason: str | None = None
     """Why the run terminated (e.g. 'converged', 'budget_exhausted')."""
 
-    grounding_density: float | None = None
+    grounding_density: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
     """Fraction of substantive sentences with valid citations (0.0–1.0).
 
     Computed during assembly. None when no report was produced or the

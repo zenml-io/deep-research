@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from research.config.budget import BudgetConfig
 from research.config.defaults import TIER_DEFAULTS, TierDefaults
-from research.config.slots import ModelSlot, ModelSlotConfig
+from research.config.slots import ModelSlotConfig
 
 
 class ResearchSettings(BaseSettings):
