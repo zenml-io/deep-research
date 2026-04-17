@@ -236,19 +236,22 @@ def _apply_brief_recency_default(
     tasks: list[SubagentTask],
     brief: ResearchBrief,
 ) -> list[SubagentTask]:
-    """Apply brief-level recency default to tasks that leave it unset."""
+    """Apply brief-level recency default to tasks that leave it unset.
+
+    Returns *tasks* unchanged (same list reference) when no task needs
+    updating, so callers' ``is``-identity checks can short-circuit the
+    downstream ``decision.model_copy``.
+    """
     if brief.recency_days is None:
         return tasks
-
-    resolved_tasks: list[SubagentTask] = []
-    for task in tasks:
-        if task.recency_days is None:
-            resolved_tasks.append(
-                task.model_copy(update={"recency_days": brief.recency_days})
-            )
-        else:
-            resolved_tasks.append(task)
-    return resolved_tasks
+    if all(t.recency_days is not None for t in tasks):
+        return tasks
+    return [
+        t
+        if t.recency_days is not None
+        else t.model_copy(update={"recency_days": brief.recency_days})
+        for t in tasks
+    ]
 
 
 _SUPERVISOR_MAX_ATTEMPTS = 2
@@ -621,8 +624,12 @@ def deep_research(
                         critique,
                         revised_projection,
                         gen_model,
+                        id=f"plan_revision_{supplemental_loops}",
                     )
                     all_handles.append(replan_h)
+                    # Adopt the revised plan for the supplemental iteration
+                    # about to run; ``original_plan`` and ``revised_plan``
+                    # preserve both for the assembled package.
                     plan = replan_h.load()
                     if plan != original_plan:
                         revised_plan = plan
@@ -690,6 +697,7 @@ def deep_research(
                     final_report or draft,
                     ledger,
                     cfg.slots["reviewer"].model_string,
+                    id="verify",
                 )
                 all_handles.append(verify_h)
                 verification = verify_h.load()

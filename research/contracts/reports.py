@@ -16,6 +16,9 @@ CritiqueDimension = Literal["source_reliability", "completeness", "grounding"]
 """The three dimensions every critique must score. Pinned by
 ``research/prompts/reviewer.md`` and asserted by the critique merger."""
 
+VerificationStatus = Literal["unsupported", "partial", "contradicted"]
+"""Possible claim-level findings from post-finalize verification."""
+
 
 def _extract_sections(markdown: str) -> list[str]:
     """Extract section headings from a markdown string.
@@ -145,8 +148,8 @@ class VerificationIssue(StrictBase):
     evidence_ids: list[str] = []
     """Citations the claim references, if any."""
 
-    status: str = "unsupported"
-    """One of: 'unsupported', 'partial', 'contradicted'. String for forward-compat."""
+    status: VerificationStatus = "unsupported"
+    """Per-claim verification status."""
 
     reason: str | None = None
     """Why the verifier flagged the claim."""

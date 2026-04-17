@@ -21,7 +21,7 @@ class TierDefaults(BaseModel):
 
     slots: dict[ModelSlot, ModelSlotConfig]
     max_iterations: int
-    max_parallel_subagents: int = 5
+    max_parallel_subagents: int = 3
     second_reviewer: ModelSlotConfig | None = None
     scope_override: ModelSlotConfig | None = None
     breadth_first: bool = False
@@ -85,12 +85,12 @@ TIER_DEFAULTS: dict[str, TierDefaults] = {
             ModelSlot.reviewer: _REVIEWER_SLOT,
             ModelSlot.judge: _JUDGE_SLOT,
         },
-        max_iterations=30,
-        max_parallel_subagents=20,
+        max_iterations=20,
+        max_parallel_subagents=10,
         second_reviewer=_SECOND_REVIEWER_SLOT,
         scope_override=_SCOPE_OVERRIDE_SLOT,
         breadth_first=True,
         respect_supervisor_done=False,
-        default_budget_usd=10.00,
+        default_budget_usd=3.00,
     ),
 }

@@ -6,7 +6,9 @@ ResearchConfig: frozen, assembled config for a single run.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from research.config.budget import BudgetConfig
@@ -24,7 +26,7 @@ class ResearchSettings(BaseSettings):
     daily_cost_limit_usd: float = 10.0
     ledger_window_iterations: int = 3
     grounding_min_ratio: float = 0.7
-    critique_disagreement_threshold: float = 0.3
+    critique_disagreement_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.3
     strict_grounding: bool = False
     enable_verification: bool = False
     enable_plan_revision: bool = False
@@ -56,7 +58,7 @@ class ResearchConfig(BaseModel):
     max_parallel_subagents: int
     ledger_window_iterations: int
     grounding_min_ratio: float
-    critique_disagreement_threshold: float = 0.3
+    critique_disagreement_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.3
     strict_grounding: bool = False
     enable_verification: bool = False
     enable_plan_revision: bool = False
