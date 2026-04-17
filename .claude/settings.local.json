@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(interview)",
+      "Skill(interview:*)",
+      "Read(//tmp/**)",
+      "Bash(env)",
+      "Bash(zsh -i -c 'which source; which .; typeset -f source 2>/dev/null; typeset -f . 2>/dev/null; echo \"---aliases---\"; alias | grep -iE \"source|aws|activate\" ; echo \"---functions with aws---\"; typeset -f + | grep -iE \"aws|venv|activate\" ; echo \"---hooks---\"; print -l $preexec_functions $precmd_functions $chpwd_functions 2>/dev/null')",
+      "Bash(zsh -i -c 'env | grep -iE \"aws|profile\"')"
+    ]
+  }
+}
