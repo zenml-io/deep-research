@@ -267,7 +267,10 @@ class TestResearchSettings:
 
     def test_enabled_providers_default(self):
         s = ResearchSettings()
-        assert s.enabled_providers == "brave,exa,tavily,arxiv,semantic_scholar"
+        # Semantic Scholar is intentionally excluded from the default: the
+        # unauthenticated tier rate-limits (HTTP 429) under fan-out load.
+        # Operators can re-enable it via RESEARCH_ENABLED_PROVIDERS.
+        assert s.enabled_providers == "brave,exa,tavily,arxiv"
 
     def test_sandbox_defaults(self):
         s = ResearchSettings()
@@ -335,13 +338,7 @@ class TestResearchConfig:
     def test_enabled_providers_parsed_from_comma_string(self):
         s = ResearchSettings()
         cfg = ResearchConfig.for_tier("standard", settings=s)
-        assert cfg.enabled_providers == [
-            "brave",
-            "exa",
-            "tavily",
-            "arxiv",
-            "semantic_scholar",
-        ]
+        assert cfg.enabled_providers == ["brave", "exa", "tavily", "arxiv"]
 
     def test_enabled_providers_custom(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_ENABLED_PROVIDERS", "arxiv,exa")

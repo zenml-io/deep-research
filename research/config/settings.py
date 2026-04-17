@@ -37,7 +37,11 @@ class ResearchSettings(BaseSettings):
     sandbox_enabled: bool = False
     sandbox_backend: str | None = None
     max_parallel_subagents: int | None = None
-    enabled_providers: str = "brave,exa,tavily,arxiv,semantic_scholar"
+    # Semantic Scholar is off by default: the unauthenticated tier rate-limits
+    # (HTTP 429) under fan-out load from multiple parallel subagents, leading
+    # to a noisy retry storm with little benefit. Re-enable via the env var
+    # ``RESEARCH_ENABLED_PROVIDERS`` when you have a SEMANTIC_SCHOLAR_API_KEY.
+    enabled_providers: str = "brave,exa,tavily,arxiv"
 
 
 class ResearchConfig(BaseModel):
