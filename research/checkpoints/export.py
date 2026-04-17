@@ -1,6 +1,10 @@
-"""Export checkpoint — materializes a durable package to disk."""
+"""Export checkpoint — materializes a durable package to disk.
 
-from __future__ import annotations
+NOTE: do NOT add ``from __future__ import annotations`` here. ZenML's
+materializer registry inspects the concrete return type of a @checkpoint
+at step-registration time and raises if annotations are strings. Same
+constraint applies to every module that defines a @checkpoint.
+"""
 
 from kitaru import checkpoint
 

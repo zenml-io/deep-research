@@ -13,6 +13,11 @@ from research.contracts.evidence import EvidenceLedger
 # Regex to match [evidence_id] references in report text
 _CITATION_RE = re.compile(r"\[([^\]]+)\]")
 
+# Fenced code blocks (``` ... ```) — stripped before citation extraction so
+# square brackets in code examples (JSON arrays, permission manifests, etc.)
+# don't get misread as evidence citations.
+_FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
+
 # Minimum sentence length to count as "substantive" (skip short fragments)
 _MIN_SENTENCE_LENGTH = 20
 
@@ -25,24 +30,36 @@ class CitationResolutionError(Exception):
     """Raised when citation IDs don't resolve to ledger entries."""
 
 
+def _strip_code_blocks(text: str) -> str:
+    """Remove fenced code blocks so their contents don't feed the citation regex."""
+    return _FENCED_CODE_RE.sub("", text)
+
+
 def extract_citation_ids(text: str) -> set[str]:
     """Extract all [evidence_id] references from markdown text.
 
-    Filters out common markdown patterns that aren't evidence citations
-    (e.g. [link text](url), section headers).
+    Filters out:
+    - fenced code blocks (JSON examples, code snippets)
+    - markdown link text like ``[label](url)``
+    - http(s) URLs and section anchors inside brackets
+    - checkbox patterns (``[ ]`` / ``[x]``)
+    - multi-line captures (evidence IDs never span lines)
     """
+    stripped = _strip_code_blocks(text)
     ids: set[str] = set()
-    for match in _CITATION_RE.finditer(text):
+    for match in _CITATION_RE.finditer(stripped):
         candidate = match.group(1)
-        # Skip if it looks like a markdown link text (followed by parentheses)
+        # Skip if followed by '(' — that's a markdown link
         end = match.end()
-        if end < len(text) and text[end] == "(":
+        if end < len(stripped) and stripped[end] == "(":
             continue
-        # Skip common non-citation patterns
         if candidate.startswith("http") or candidate.startswith("#"):
             continue
-        # Skip checkbox patterns like [x] or [ ]
         if candidate in ("x", " ", "X"):
+            continue
+        # Evidence IDs are single-line, quote-free tokens; multiline or
+        # quoted captures are overwhelmingly JSON / code leakage.
+        if "\n" in candidate or '"' in candidate:
             continue
         ids.add(candidate)
     return ids
