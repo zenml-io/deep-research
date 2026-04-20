@@ -4,12 +4,27 @@ from __future__ import annotations
 
 import pytest
 
+from research.contracts.decisions import SubagentFindings
+from research.contracts.evidence import EvidenceItem, EvidenceLedger
 from research.ledger import (
     canonicalize_url,
     extract_canonical_id,
     strip_tracking_params,
 )
-from research.ledger.canonical import _normalize_arxiv_id, _normalize_doi
+from research.ledger.canonical import (
+    ParsedReference,
+    _normalize_arxiv_id,
+    _normalize_doi,
+    parse_source_reference,
+)
+from research.ledger.dedup import compute_dedup_key, is_duplicate
+from research.ledger.ledger import ManagedLedger
+from research.ledger.projection import (
+    ProjectedItem,
+    _COMPACT_SYNTHESIS_LIMIT,
+    format_projection,
+    project_ledger,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +349,6 @@ class TestModuleReExports:
 # Dedup functions
 # ---------------------------------------------------------------------------
 
-from research.contracts.evidence import EvidenceItem
-from research.ledger.dedup import compute_dedup_key, is_duplicate
 
 
 def _make_item(
@@ -411,10 +424,6 @@ class TestIsDuplicate:
 # ManagedLedger
 # ---------------------------------------------------------------------------
 
-from research.contracts.decisions import SubagentFindings
-from research.ledger.ledger import ManagedLedger
-
-
 class TestManagedLedgerBasics:
     def test_starts_empty(self):
         ml = ManagedLedger()
@@ -442,8 +451,6 @@ class TestManagedLedgerBasics:
         assert ml.size == 2
 
     def test_ledger_property_returns_evidence_ledger(self):
-        from research.contracts.evidence import EvidenceLedger
-
         ml = ManagedLedger()
         assert isinstance(ml.ledger, EvidenceLedger)
 
@@ -630,13 +637,6 @@ class TestManagedLedgerGetById:
 # Ledger Projection & Windowing
 # ---------------------------------------------------------------------------
 
-from research.contracts.evidence import EvidenceLedger
-from research.ledger.projection import (
-    ProjectedItem,
-    _COMPACT_SYNTHESIS_LIMIT,
-    format_projection,
-    project_ledger,
-)
 
 
 def _make_ledger(items: list[EvidenceItem]) -> EvidenceLedger:
@@ -1112,9 +1112,6 @@ class TestProjectionReExports:
 # ---------------------------------------------------------------------------
 # Source reference parsing
 # ---------------------------------------------------------------------------
-
-from research.ledger.canonical import ParsedReference, parse_source_reference
-
 
 class TestParseSourceReference:
     """Test extraction of structured identifiers from pipe-separated references."""

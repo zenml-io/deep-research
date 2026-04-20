@@ -24,6 +24,16 @@ _TRACKING_PARAMS = frozenset(
 )
 
 
+def _filter_query_params(query: str) -> str:
+    filtered = [
+        (k, v)
+        for k, vs in parse_qs(query, keep_blank_values=True).items()
+        if k.lower() not in _TRACKING_PARAMS
+        for v in vs
+    ]
+    return urlencode(filtered)
+
+
 def strip_tracking_params(url: str) -> str:
     """Remove known tracking query parameters from a URL.
 
@@ -36,14 +46,7 @@ def strip_tracking_params(url: str) -> str:
     if not parts.query:
         return url
 
-    # Parse and filter query params, preserving order
-    filtered = [
-        (k, v)
-        for k, vs in parse_qs(parts.query, keep_blank_values=True).items()
-        if k.lower() not in _TRACKING_PARAMS
-        for v in vs
-    ]
-    new_query = urlencode(filtered)
+    new_query = _filter_query_params(parts.query)
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
     )
@@ -94,14 +97,7 @@ def canonicalize_url(url: str) -> str:
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
-    # Filter tracking params from query
-    filtered_params = [
-        (k, v)
-        for k, vs in parse_qs(parts.query, keep_blank_values=True).items()
-        if k.lower() not in _TRACKING_PARAMS
-        for v in vs
-    ]
-    query = urlencode(filtered_params)
+    query = _filter_query_params(parts.query)
 
     # Strip fragment entirely
     fragment = ""

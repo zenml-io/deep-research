@@ -5,6 +5,7 @@ Pure Python — no Kitaru or PydanticAI imports needed.
 
 from __future__ import annotations
 
+from contextvars import copy_context
 import warnings
 
 import pytest
@@ -18,7 +19,10 @@ from research.flows.budget import (
     UnknownModelCostError,
     UsageRecord,
     check_iteration_budget,
+    get_active_tracker,
     lookup_pricing,
+    reset_active_tracker,
+    set_active_tracker,
 )
 
 
@@ -504,7 +508,6 @@ class TestBudgetAwareAgent:
 
     def test_records_usage_when_tracker_active(self):
         from research.agents._factory import BudgetAwareAgent
-        from research.flows.budget import set_active_tracker
 
         budget = BudgetConfig(soft_budget_usd=10.0)
         tracker = BudgetTracker(budget=budget)
@@ -539,7 +542,6 @@ class TestBudgetAwareAgent:
 
     def test_no_tracker_no_error(self):
         from research.agents._factory import BudgetAwareAgent
-        from research.flows.budget import set_active_tracker
 
         set_active_tracker(None)
 
@@ -571,7 +573,6 @@ class TestBudgetAwareAgent:
     def test_callable_usage_method(self):
         """Handles older PydanticAI where result.usage is a method."""
         from research.agents._factory import BudgetAwareAgent
-        from research.flows.budget import set_active_tracker
 
         budget = BudgetConfig(soft_budget_usd=10.0)
         tracker = BudgetTracker(budget=budget)
@@ -637,7 +638,6 @@ class TestBudgetAwareAgent:
 
 class TestActiveTracker:
     def test_set_and_get(self):
-        from research.flows.budget import get_active_tracker, set_active_tracker
 
         budget = BudgetConfig(soft_budget_usd=1.0)
         tracker = BudgetTracker(budget=budget)
@@ -649,17 +649,11 @@ class TestActiveTracker:
         assert get_active_tracker() is None
 
     def test_defaults_to_none(self):
-        from research.flows.budget import set_active_tracker, get_active_tracker
 
         set_active_tracker(None)  # reset
         assert get_active_tracker() is None
 
     def test_reset_restores_previous_tracker(self):
-        from research.flows.budget import (
-            get_active_tracker,
-            reset_active_tracker,
-            set_active_tracker,
-        )
 
         outer = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
         inner = BudgetTracker(budget=BudgetConfig(soft_budget_usd=1.0))
@@ -676,7 +670,6 @@ class TestActiveTracker:
         assert get_active_tracker() is None
 
     def test_context_var_isolates_trackers_by_context(self):
-        from contextvars import copy_context
 
         from research.flows.budget import get_active_tracker, set_active_tracker
 
