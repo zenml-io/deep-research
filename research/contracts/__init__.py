@@ -1,0 +1,54 @@
+"""V2 data contracts — re-exports for convenient imports."""
+
+from research.contracts.base import StrictBase
+from research.contracts.brief import ResearchBrief
+from research.contracts.decisions import SubagentFindings, SupervisorDecision
+from research.contracts.evidence import EvidenceItem, EvidenceLedger
+from research.contracts.iteration import IterationRecord
+from research.contracts.package import (
+    CouncilComparison,
+    CouncilPackage,
+    EvidenceStats,
+    InvestigationPackage,
+    ProviderResolution,
+    RunMetadata,
+    ToolProviderManifest,
+    ToolResolution,
+)
+from research.contracts.plan import ResearchPlan, SubagentTask
+from research.contracts.reports import (
+    CritiqueDimensionScore,
+    CritiqueReport,
+    DraftReport,
+    FinalReport,
+    ReviewerDisagreement,
+    VerificationIssue,
+    VerificationReport,
+)
+
+__all__ = [
+    "StrictBase",
+    "ResearchBrief",
+    "ResearchPlan",
+    "SubagentTask",
+    "EvidenceItem",
+    "EvidenceLedger",
+    "SubagentFindings",
+    "SupervisorDecision",
+    "IterationRecord",
+    "DraftReport",
+    "CritiqueDimensionScore",
+    "ReviewerDisagreement",
+    "CritiqueReport",
+    "FinalReport",
+    "VerificationIssue",
+    "VerificationReport",
+    "EvidenceStats",
+    "ProviderResolution",
+    "ToolResolution",
+    "ToolProviderManifest",
+    "RunMetadata",
+    "InvestigationPackage",
+    "CouncilComparison",
+    "CouncilPackage",
+]

@@ -1,0 +1,169 @@
+"""Critique checkpoint — reviewer agent(s) produce a CritiqueReport.
+
+This is the mandatory provider-crossing checkpoint. On the deep tier,
+two reviewers on different providers produce independent critiques that
+are merged deterministically (union of issues, scores averaged).
+"""
+
+import json
+import logging
+
+from kitaru import checkpoint
+
+from research.agents.reviewer import build_reviewer_agent
+from research.contracts.evidence import EvidenceLedger
+from research.contracts.plan import ResearchPlan
+from research.contracts.reports import (
+    CritiqueDimensionScore,
+    CritiqueReport,
+    DraftReport,
+    ReviewerDisagreement,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _merge_critiques(
+    a: CritiqueReport,
+    b: CritiqueReport,
+    *,
+    disagreement_threshold: float = 0.3,
+) -> CritiqueReport:
+    """Merge two independent critiques deterministically.
+
+    - Issues: union (deduplicated, preserving order)
+    - Dimension scores: averaged (matched by dimension name)
+    - require_more_research: either True => True
+    - Provenance: combined
+    - Reviewer disagreement: recorded for every shared dimension
+    """
+    seen: set[str] = set()
+    merged_issues: list[str] = []
+    for issue in a.issues + b.issues:
+        if issue not in seen:
+            seen.add(issue)
+            merged_issues.append(issue)
+
+    a_dims = {d.dimension: d for d in a.dimensions}
+    b_dims = {d.dimension: d for d in b.dimensions}
+    all_dims = sorted(set(a_dims) | set(b_dims))
+
+    merged_dims: list[CritiqueDimensionScore] = []
+    reviewer_disagreements: list[ReviewerDisagreement] = []
+    for dim_name in all_dims:
+        if dim_name in a_dims and dim_name in b_dims:
+            reviewer_1_score = a_dims[dim_name].score
+            reviewer_2_score = b_dims[dim_name].score
+            delta = abs(reviewer_1_score - reviewer_2_score)
+            reviewer_disagreements.append(
+                ReviewerDisagreement(
+                    dimension=dim_name,
+                    reviewer_1_score=reviewer_1_score,
+                    reviewer_2_score=reviewer_2_score,
+                    delta=delta,
+                )
+            )
+            if delta > disagreement_threshold:
+                logger.warning(
+                    "Reviewer disagreement on %s exceeds threshold %.2f: "
+                    "reviewer_1=%.2f reviewer_2=%.2f delta=%.2f",
+                    dim_name,
+                    disagreement_threshold,
+                    reviewer_1_score,
+                    reviewer_2_score,
+                    delta,
+                )
+            avg_score = (a_dims[dim_name].score + b_dims[dim_name].score) / 2.0
+            explanation = (
+                f"[Reviewer 1] {a_dims[dim_name].explanation} "
+                f"[Reviewer 2] {b_dims[dim_name].explanation}"
+            )
+            merged_dims.append(
+                CritiqueDimensionScore(
+                    dimension=dim_name,
+                    score=avg_score,
+                    explanation=explanation,
+                )
+            )
+        elif dim_name in a_dims:
+            merged_dims.append(a_dims[dim_name])
+        else:
+            merged_dims.append(b_dims[dim_name])
+
+    merged_provenance = list(a.reviewer_provenance) + list(b.reviewer_provenance)
+
+    return CritiqueReport(
+        dimensions=merged_dims,
+        require_more_research=a.require_more_research or b.require_more_research,
+        issues=merged_issues,
+        reviewer_provenance=merged_provenance,
+        reviewer_disagreements=reviewer_disagreements,
+    )
+
+
+@checkpoint(type="llm_call")
+def run_critique(
+    draft: DraftReport,
+    plan: ResearchPlan,
+    ledger: EvidenceLedger,
+    model_name: str,
+    second_model_name: str | None = None,
+    disagreement_threshold: float = 0.3,
+) -> CritiqueReport:
+    """Checkpoint: critique a draft report.
+
+    On standard tier: single reviewer. On deep tier (``second_model_name`` set):
+    two reviewers produce independent critiques that are merged. One reviewer
+    failing is tolerated; both failing raises.
+    """
+    prompt = json.dumps(
+        {
+            "draft": draft.model_dump(mode="json"),
+            "plan": plan.model_dump(mode="json"),
+            "ledger": ledger.model_dump(mode="json"),
+        },
+        indent=2,
+    )
+
+    if second_model_name is None:
+        agent = build_reviewer_agent(model_name)
+        result = agent.run_sync(prompt).output
+        return CritiqueReport(
+            dimensions=result.dimensions,
+            require_more_research=result.require_more_research,
+            issues=result.issues,
+            reviewer_provenance=result.reviewer_provenance,
+            reviewer_disagreements=[],
+        )
+
+    results: list[CritiqueReport] = []
+    errors: list[Exception] = []
+
+    for i, mn in enumerate([model_name, second_model_name]):
+        try:
+            agent = build_reviewer_agent(mn)
+            result = agent.run_sync(prompt).output
+            result = CritiqueReport(
+                dimensions=result.dimensions,
+                require_more_research=result.require_more_research,
+                issues=result.issues,
+                reviewer_provenance=[f"reviewer_{i + 1}:{mn}"],
+                reviewer_disagreements=[],
+            )
+            results.append(result)
+        except Exception as exc:
+            logger.warning("Reviewer %d (%s) failed: %s", i + 1, mn, exc)
+            errors.append(exc)
+
+    if len(results) == 0:
+        raise RuntimeError(f"Both reviewers failed: {errors}")
+
+    if len(results) == 1:
+        logger.warning("Only one of two reviewers succeeded; using single critique")
+        return results[0]
+
+    return _merge_critiques(
+        results[0],
+        results[1],
+        disagreement_threshold=disagreement_threshold,
+    )

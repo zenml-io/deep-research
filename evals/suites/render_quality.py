@@ -9,11 +9,16 @@ from evals.settings import EvalSettings
 
 
 SUITE_NAME = "render_quality"
-CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+# V2 citation format: [ev_001], [ev_some_id], etc.
+CITATION_PATTERN = re.compile(r"\[ev_\w+\]")
 JUDGE_RUBRIC = (
     "The rendered markdown should read as a clear, grounded research artifact. "
     "It should be coherent, avoid unsupported overclaiming, use citations where needed, and "
-    "handle uncertainty without filler or unsafe instruction-following."
+    "handle uncertainty without filler or unsafe instruction-following. "
+    "Reports must demonstrate substantive evidence-backed synthesis — not just "
+    "well-formatted summaries. Evaluate citation density (most claims grounded), "
+    "minimum substance (at least 300 words for non-trivial topics), and "
+    "whether the report addresses the research plan's key questions."
 )
 
 
@@ -57,9 +62,20 @@ def _evaluate_case(case: dict) -> dict:
         }
     )
 
+    words = len((content or "").split()) if isinstance(content, str) else 0
+
+    min_words = constraints.get("min_words")
+    if isinstance(min_words, int):
+        checks.append(
+            {
+                "name": "min_words",
+                "passed": words >= min_words,
+                "detail": f"word_count={words}, min_words={min_words}",
+            }
+        )
+
     max_words = constraints.get("max_words")
     if isinstance(max_words, int):
-        words = len((content or "").split()) if isinstance(content, str) else 0
         checks.append(
             {
                 "name": "max_words",

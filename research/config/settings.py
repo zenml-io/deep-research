@@ -1,0 +1,141 @@
+"""Runtime settings and frozen research config.
+
+ResearchSettings: env-var-driven knobs (pydantic-settings).
+ResearchConfig: frozen, assembled config for a single run.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from research.config.budget import BudgetConfig
+from research.config.defaults import TIER_DEFAULTS, TierDefaults
+from research.config.slots import ModelSlotConfig
+
+
+class ResearchSettings(BaseSettings):
+    """Operator-tunable knobs, loaded from RESEARCH_* env vars."""
+
+    model_config = SettingsConfigDict(env_prefix="RESEARCH_", extra="ignore")
+
+    default_tier: str = "standard"
+    default_cost_budget_usd: float = 0.10
+    daily_cost_limit_usd: float = 10.0
+    ledger_window_iterations: int = 3
+    grounding_min_ratio: float = 0.7
+    critique_disagreement_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.3
+    strict_grounding: bool = False
+    enable_verification: bool = False
+    enable_plan_revision: bool = False
+    max_supplemental_loops: int = 1
+    wait_timeout_seconds: int = 3600
+    allow_unfinalized_package: bool = False
+    strict_unknown_model_cost: bool = False
+    sandbox_enabled: bool = False
+    sandbox_backend: str | None = None
+    max_parallel_subagents: int | None = None
+    # Semantic Scholar is off by default: the unauthenticated tier rate-limits
+    # (HTTP 429) under fan-out load from multiple parallel subagents, leading
+    # to a noisy retry storm with little benefit. Re-enable via the env var
+    # ``RESEARCH_ENABLED_PROVIDERS`` when you have a SEMANTIC_SCHOLAR_API_KEY.
+    enabled_providers: str = "brave,exa,tavily,arxiv"
+
+
+class ResearchConfig(BaseModel):
+    """Frozen, fully-resolved config for a single research run.
+
+    Created via the `for_tier()` classmethod which merges tier defaults
+    with operator settings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tier: str
+    budget: BudgetConfig
+    slots: dict[str, ModelSlotConfig]
+    second_reviewer: ModelSlotConfig | None = None
+    scope_override: ModelSlotConfig | None = None
+    max_iterations: int
+    max_parallel_subagents: int
+    ledger_window_iterations: int
+    grounding_min_ratio: float
+    critique_disagreement_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.3
+    strict_grounding: bool = False
+    enable_verification: bool = False
+    enable_plan_revision: bool = False
+    max_supplemental_loops: int
+    wait_timeout_seconds: int
+    allow_unfinalized_package: bool
+    strict_unknown_model_cost: bool
+    sandbox_enabled: bool
+    sandbox_backend: str | None
+    enabled_providers: list[str]
+    breadth_first: bool = False
+    respect_supervisor_done: bool = True
+
+    @classmethod
+    def for_tier(
+        cls,
+        tier: str,
+        settings: ResearchSettings | None = None,
+    ) -> ResearchConfig:
+        """Build a frozen ResearchConfig from tier defaults + settings.
+
+        This is the canonical factory — every run should go through here.
+        """
+        settings = settings or ResearchSettings()
+
+        if tier not in TIER_DEFAULTS:
+            raise ValueError(
+                f"Unknown tier {tier!r}. Valid tiers: {sorted(TIER_DEFAULTS)}"
+            )
+
+        defaults: TierDefaults = TIER_DEFAULTS[tier]
+
+        slots: dict[str, ModelSlotConfig] = {
+            slot.value: config for slot, config in defaults.slots.items()
+        }
+
+        enabled_providers = [
+            p.strip() for p in settings.enabled_providers.split(",") if p.strip()
+        ]
+
+        budget = BudgetConfig(
+            soft_budget_usd=(
+                defaults.default_budget_usd
+                if defaults.default_budget_usd is not None
+                else settings.default_cost_budget_usd
+            ),
+        )
+
+        return cls(
+            tier=tier,
+            budget=budget,
+            slots=slots,
+            second_reviewer=defaults.second_reviewer,
+            scope_override=defaults.scope_override,
+            max_iterations=defaults.max_iterations,
+            max_parallel_subagents=(
+                settings.max_parallel_subagents
+                if settings.max_parallel_subagents is not None
+                else defaults.max_parallel_subagents
+            ),
+            ledger_window_iterations=settings.ledger_window_iterations,
+            grounding_min_ratio=settings.grounding_min_ratio,
+            critique_disagreement_threshold=settings.critique_disagreement_threshold,
+            strict_grounding=settings.strict_grounding,
+            enable_verification=settings.enable_verification,
+            enable_plan_revision=settings.enable_plan_revision,
+            max_supplemental_loops=settings.max_supplemental_loops,
+            wait_timeout_seconds=settings.wait_timeout_seconds,
+            allow_unfinalized_package=settings.allow_unfinalized_package,
+            strict_unknown_model_cost=settings.strict_unknown_model_cost,
+            sandbox_enabled=settings.sandbox_enabled,
+            sandbox_backend=settings.sandbox_backend,
+            enabled_providers=enabled_providers,
+            breadth_first=defaults.breadth_first,
+            respect_supervisor_done=defaults.respect_supervisor_done,
+        )

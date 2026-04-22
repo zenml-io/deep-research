@@ -21,9 +21,7 @@ def _reload_eval_logfire(monkeypatch, logfire_module):
         monkeypatch.setattr(sys, "meta_path", [blocker, *sys.meta_path])
     else:
         monkeypatch.setitem(sys.modules, "logfire", logfire_module)
-    # Both the core observability module and the evals shim cache a
-    # process-wide bootstrap flag, so reload both to get a clean slate.
-    sys.modules.pop("deep_research.observability", None)
+    # The evals shim caches a process-wide bootstrap flag; reload to get a clean slate.
     sys.modules.pop("evals.logfire", None)
     return importlib.import_module("evals.logfire")
 

@@ -7,424 +7,451 @@
 
 Turn any research question into a structured, evidence-backed investigation package — with full provenance, cross-provider critique, and convergence-driven iteration.
 
-**This is the first production application built on [Kitaru](https://kitaru.ai)**, ZenML's durable execution framework for AI workflows. It demonstrates how Kitaru's checkpoints, replay, and wait primitives combine with [PydanticAI](https://ai.pydantic.dev)'s structured completions to build a research system that survives failures, tracks every decision, and knows when to stop.
+Built on [Kitaru](https://kitaru.ai) (ZenML's durable execution framework) and [PydanticAI](https://ai.pydantic.dev) (structured LLM completions). Core research phases are checkpointed, LLM calls return typed output, and every merged source stays traceable.
+
+## Current durability guarantees
+
+- Core phase work is checkpointed: scope, plan, supervisor, subagent, draft, critique, finalize, assemble, and export.
+- Flow-body waits are implemented for **plan approval** and **council generator selection**.
+- Packages record deterministic evidence IDs, durable provider/tool manifests, and exported output paths.
+- The repo now includes a thin real-runtime test slice that proves **completed-checkpoint replay** and **wait → input → resume** behavior on a local Kitaru stack.
+- Most other flow/integration tests still use lightweight stubs, so broader crash/recovery coverage should not be overclaimed yet.
 
 ## Quick Start
 
 ```bash
-# Install
+# Clone and install
 git clone https://github.com/zenml-io/deep-research.git
 cd deep-research
 uv sync
 
-# Set at least one LLM provider key
+# Set LLM provider keys (see Setup below for options)
 export GEMINI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+export OPENAI_API_KEY="..."
 
 # Run a research investigation
-python -c "
-from deep_research.flow.research_flow import research_flow
-
-package = research_flow.run('What are the latest advances in RLHF alternatives?')
-print(package.run_summary)
-print(package.renders[0].content_markdown[:500])
-"
+uv run python run.py "What are the latest advances in RLHF alternatives?"
 ```
 
-Three lines of code. The engine classifies your brief, plans the investigation, iterates through search-evaluate-refine cycles, and hands back a structured `InvestigationPackage` with full evidence provenance.
-
-## What You Get Back
-
-The output isn't a wall of text. It's a structured `InvestigationPackage` with six inspectable layers:
+Output:
 
 ```
 run-a1b2c3d4/
-├── package.json              # Full serialized package (machine-readable)
-├── summary.md                # Run metadata: tier, cost, timing, stop reason
-├── plan.json                 # Research plan: subtopics, queries, success criteria
+├── package.json        # Full serialized package (machine-readable)
+├── report.md           # Final report (or draft fallback)
 ├── evidence/
-│   ├── ledger.json           # Every candidate: considered, selected, rejected
-│   └── ledger.md             # Human-readable evidence index
-├── iterations/
-│   ├── 000.json              # Per-iteration: new candidates, coverage delta, tool calls
-│   └── 001.json
-└── renders/
-    ├── reading_path.md       # Ordered reading guide with synthesized prose
-    └── backing_report.md     # Evidence rationale and gap analysis
+│   └── ledger.json     # Every candidate: considered, merged, deduped
+└── iterations/
+    ├── 000.json        # Per-iteration: supervisor decision, subagent findings
+    └── 001.json
 ```
 
-Every source is traceable. Every decision is logged. Every iteration records what changed and why.
+## Setup
 
-## Why This Exists
+### Requirements
 
-Most "deep research" tools are thin wrappers around search + summarize. They run one query, grab some results, and paste them into a prompt. There's no iteration, no convergence checking, no evidence quality tracking, and no way to inspect what happened.
+- Python >= 3.11
+- [uv](https://docs.astral.sh/uv/) package manager
 
-This engine is different:
+### 1. Install dependencies
 
-- **It iterates until convergence** — not a fixed number of steps, but until coverage metrics plateau or budgets exhaust. Six different stop rules prevent both premature termination and runaway costs.
-- **It tracks evidence provenance** — every candidate gets a deterministic key (SHA256 of DOI/arXiv/URL), scores only ratchet up across iterations, and dedup follows DOI > arXiv > URL > title precedence.
-- **It critiques its own output** — a different model provider reviews what the generator wrote. Citations are verified against actual evidence. This follows the [Microsoft Critique finding](https://arxiv.org/abs/2310.01851): separating generation from evaluation across providers produces measurably better results.
-- **It's durable** — every phase boundary is a Kitaru checkpoint. If the process crashes at iteration 4, replay picks up from the last completed checkpoint. No work is lost.
-- **It understands intent** — the classifier extracts structured preferences from natural language ("compare React vs Vue for our team" becomes `planning_mode: comparison`, `comparison_targets: ["React", "Vue"]`, `deliverable_mode: comparison_memo`).
+```bash
+uv sync                        # core deps
+uv sync --extra dev            # adds pytest for running tests
+uv sync --extra evals          # adds pydantic-evals for offline eval harness
+```
 
-## Built on Kitaru
+Kitaru is installed automatically from the [PydanticAI integration branch](https://github.com/zenml-io/kitaru/tree/feature/pydanticai-integration).
 
-This project showcases [Kitaru](https://kitaru.ai) as the durable execution backbone. Here's how the two layers split responsibilities:
+### 2. Configure LLM provider keys
+
+The engine uses three LLM providers across its agent pipeline. The cross-provider topology is intentional — generation, review, and judging happen on different providers to avoid single-provider blind spots.
+
+**Default model assignments by tier:**
+
+| Role | Quick | Standard | Deep |
+|---|---|---|---|
+| Generator | `anthropic:claude-sonnet-4-6` | `anthropic:claude-sonnet-4-6` | `anthropic:claude-sonnet-4-6` |
+| Scope (override) | — | — | `anthropic:claude-opus-4-6` |
+| Subagent | `google-gla:gemini-3.1-flash-lite-preview` | `google-gla:gemini-3.1-flash-lite-preview` | `google-gla:gemini-3.1-flash-lite-preview` |
+| Reviewer | `openai:gpt-5.4-mini` | `openai:gpt-5.4-mini` | `openai:gpt-5.4-mini` |
+| Judge | — | `google-gla:gemini-3.1-pro-preview` | `google-gla:gemini-3.1-pro-preview` |
+| 2nd Reviewer | — | — | `google-gla:gemini-3.1-pro-preview` |
+
+The **exhaustive** tier uses the same model assignments as deep, but with 10 parallel subagents, a $3.00 budget, a higher iteration ceiling, and a supervisor prompt biased toward breadth rather than early stopping.
+
+**Option A — All three providers (recommended for deep tier)**
+
+```bash
+export GEMINI_API_KEY="..."       # subagent, judge, second reviewer
+export ANTHROPIC_API_KEY="..."    # generator (scope, planner, draft, finalize)
+export OPENAI_API_KEY="..."       # reviewer
+```
+
+**Option B — Gemini + Pydantic Gateway**
+
+Use a [Pydantic Gateway](https://pydantic.dev/docs/ai/overview/gateway/) key to route Anthropic/OpenAI models through a single endpoint:
+
+```bash
+export GEMINI_API_KEY="..."
+export PYDANTIC_AI_GATEWAY_API_KEY="pylf_v..."
+```
+
+**Option C — Override models to use fewer providers**
+
+Override any model slot via environment variables to reduce provider requirements:
+
+```bash
+export GEMINI_API_KEY="..."
+# Route everything through Gemini
+export RESEARCH_GENERATOR_MODEL="google-gla:gemini-2.5-flash"
+export RESEARCH_REVIEWER_MODEL="google-gla:gemini-2.5-flash"
+```
+
+> Note: cross-provider critique is a load-bearing quality mechanism. Overriding all models to the same provider removes this safeguard.
+
+### 3. Configure search providers (optional)
+
+arXiv and Semantic Scholar work without API keys. For broader web search, add:
+
+```bash
+export BRAVE_API_KEY="..."
+export EXA_API_KEY="..."
+export TAVILY_API_KEY="tvly-..."
+export SEMANTIC_SCHOLAR_API_KEY="..."   # optional, increases rate limits
+```
+
+Control which providers are active:
+
+```bash
+export RESEARCH_ENABLED_PROVIDERS="brave,exa,tavily,arxiv,semantic_scholar"
+```
+
+Default: `brave,exa,tavily,arxiv,semantic_scholar` (Brave/Exa/Tavily no-op gracefully when API keys are absent).
+
+### 4. Connect Logfire (optional)
+
+Logfire observability is auto-enabled when the `logfire` SDK is installed and a token is present. It instruments PydanticAI agent spans, httpx HTTP calls, and MCP transports. Zero-config locally — only ships traces when authenticated.
+
+```bash
+uv run logfire auth              # authenticate
+uv run logfire projects use      # select project
+```
+
+Traces show every checkpoint span (`run_supervisor`, `run_scope`, etc.) and per-iteration metrics.
+
+To include full LLM prompt/completion content in traces (off by default):
+
+```bash
+export DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT=true
+```
+
+## Usage
+
+### CLI
+
+```bash
+# Standard tier (default)
+uv run python run.py "What are the latest advances in RLHF alternatives?"
+
+# Quick tier — faster, cheaper, no critique/judge
+uv run python run.py --tier quick "Brief overview of transformer architectures"
+
+# Deep tier — more iterations, dual reviewer, judge verification
+uv run python run.py --tier deep "Comprehensive analysis of protein folding methods"
+
+# Custom output directory
+uv run python run.py --output ./results "My research question"
+
+# Allow package output even if finalizer fails
+uv run python run.py --allow-unfinalized "My research question"
+```
+
+### As a library
+
+```python
+from research.config import ResearchConfig
+from research.flows.deep_research import deep_research
+
+config = ResearchConfig.for_tier("standard")
+package = deep_research(
+    question="What are the latest advances in RLHF alternatives?",
+    config=config,
+)
+
+print(package.metadata.stop_reason)
+print(package.final_report or package.draft.report_markdown)
+```
+
+## Architecture
+
+### Three layers: Flow -> Checkpoints -> Agents
 
 ```
-Kitaru @flow / @checkpoint              PydanticAI Agent
+Kitaru @flow / @checkpoint              PydanticAI Agent + KitaruAgent
 ┌──────────────────────────────┐       ┌─────────────────────────────┐
 │ Owns:                        │       │ Owns:                       │
 │  - Durable state & replay    │ calls │  - Model call routing       │
 │  - Checkpoints & artifacts   │──────>│  - Structured output parse  │
-│  - Wait / resume (HITL)      │       │  - Tool execution           │
-│  - Convergence enforcement   │<──────│  - Response validation      │
-│  - Cost tracking & budgets   │returns│                             │
-│  - Stop rules & time boxes   │ typed │ Does NOT own:               │
+│  - Convergence enforcement   │       │  - Tool execution           │
+│  - Cost tracking & budgets   │<──────│  - Response validation      │
+│  - Stop rules & time boxes   │returns│                             │
+│                              │ typed │ Does NOT own:               │
 │                              │result │  - Iteration state          │
 │                              │       │  - When to stop             │
 │                              │       │  - Checkpointing            │
 └──────────────────────────────┘       └─────────────────────────────┘
 ```
 
-PydanticAI is the structured completion layer — it calls models and returns typed results. Kitaru is the durable execution layer — it owns checkpoints, waits, replay, and convergence. No competing orchestration. The engine's research loop controls iteration, not an agent SDK.
+1. **Flow** (`research/flows/deep_research.py`) — The `@flow`-decorated entry point. Orchestrates phases, owns the iteration loop, and enforces convergence.
 
-### Kitaru Primitives Used
+2. **Checkpoints** (`research/checkpoints/`) — Each research phase is a `@checkpoint` function. Types are `"llm_call"` or `"tool_call"`. Checkpoints are the replay boundary — on crash recovery, completed checkpoints return cached results.
 
-| Primitive | How It's Used |
-|---|---|
-| `@flow` | Top-level research orchestration — the single durable boundary |
-| `@checkpoint` | Every phase boundary: classify, plan, search, score, write, critique, verify |
-| `wait()` | Human-in-the-loop: clarify ambiguous briefs, approve research plans |
-| `log()` | Structured iteration metadata: coverage, cost, tool calls, stop reasons |
-| `.submit().load()` | Parallel checkpoint execution (council generators, dual renders, judge pair) |
-| `kp.wrap()` | PydanticAI adapter — wraps agents for Kitaru observability |
+3. **Agents** (`research/agents/`) — PydanticAI `Agent` factories. Each `build_*_agent()` function creates an agent, wraps it with `KitaruAgent` from `kitaru.adapters.pydantic_ai`, and returns it. Agents produce typed Pydantic output models.
 
-## The Research Loop
+### Research pipeline
 
-```mermaid
-flowchart TD
-    A[classify_request] --> B[build_plan]
-    B --> C{wait: approve plan?}
-    C -->|approved| D[run_supervisor / council]
-
-    subgraph iteration["Iteration Loop"]
-        D --> E[execute_searches]
-        E --> F[extract_candidates]
-        F --> G[score_relevance]
-        G --> H[update_ledger]
-        H --> I[enrich_candidates]
-        I --> J["score_coverage (LLM)"]
-        J --> K{converged?}
-        K -->|"stall / diminishing"| L{replan gate}
-        L -->|replan| D
-        L -->|no replan| M[stop]
-        K -->|"supervisor complete"| M
-        K -->|budget / time / max iter| M
-        K -->|no| D
-    end
-
-    M --> N[rank_evidence]
-    N --> O{deliverable_mode?}
-    O -->|"research_package"| P["write_reading_path ∥ write_backing_report"]
-    O -->|"other modes"| Q[write_full_report]
-    P --> R[critique_reports]
-    Q --> R
-    R --> S["apply_revisions (writer agent)"]
-    S --> T["verify_grounding ∥ verify_coherence"]
-    T --> U[assemble_package]
-    U --> V[InvestigationPackage]
+```
+Question
+  │
+  ├─ 1. Scope ──────────── classify question → ResearchBrief
+  ├─ 2. Plan ───────────── break into subtopics, queries → ResearchPlan
+  │
+  ├─ 3. Iteration Loop ─── [repeat until convergence]
+  │     ├─ Supervisor ───── decide what to search → SupervisorDecision
+  │     ├─ Subagents ────── fan-out search + fetch → SubagentFindings[]
+  │     └─ Convergence ──── check stop rules → continue or stop
+  │
+  ├─ 4. Draft ──────────── generate report from evidence → DraftReport
+  ├─ 5. Critique ───────── cross-provider review → CritiqueReport
+  │     └─ Supplemental ── if reviewer says "need more research" → re-iterate
+  ├─ 6. Finalize ───────── incorporate critique → FinalReport
+  ├─ 7. Assemble ───────── validate & package → InvestigationPackage
+  └─ 8. Export ─────────── durable filesystem materialization
 ```
 
-> [Excalidraw version](https://excalidraw.com/#json=vubTTSYSPtaap6xqmCMQu,14v_EHEIEMOk2RybWmGq7A) (may lag behind the Mermaid diagram above)
+### Stop rules
 
-### How It Works
+Four conditions checked in strict priority order:
 
-1. **Classify** — Determine audience, freshness, complexity. Extract structured preferences (deliverable mode, source biases, comparison targets). Select a research tier.
-2. **Plan** — Break the brief into subtopics, queries, sections, and success criteria. Preferences shape the plan structure.
-3. **Iterate** — The supervisor (or council of N parallel supervisors) decides what to search. Built-in providers execute. Results are extracted, scored for relevance, merged into the evidence ledger, enriched with full page text, and coverage is scored by an LLM agent against the plan's subtopics. If the loop stalls, a replan gate can revise subtopics and queries before giving up. The loop continues until convergence or budget exhaustion.
-4. **Render** — Rank evidence into reading order. Based on deliverable mode, write either a reading path + backing report (research package) or a single full report (other modes). Writer prompts adapt per mode.
-5. **Critique** — A different model provider reviews the output. The writer agent then regenerates prose for each render using critique feedback. Citations are verified against evidence. Coherence is scored against the plan.
-6. **Assemble** — Everything goes into a canonical `InvestigationPackage` with full provenance.
-
-### Stop Rules
-
-| Rule | Condition |
-|---|---|
-| Budget exhausted | `estimated_cost >= cost_budget_usd` |
-| Time exhausted | `elapsed_seconds >= time_box_seconds` |
-| Converged | `coverage >= min_coverage` AND no remaining gaps |
-| Supervisor complete | Supervisor signals `status: "complete"` directly |
-| Loop stall | Zero coverage gain in an iteration (triggers replan gate first) |
-| Diminishing returns | Low gain + over 50% resource usage (triggers replan gate first) |
-| Max iterations | Hard cap reached |
-
-### Research Preferences
-
-The classifier extracts a `ResearchPreferences` object from natural language. Two enforcement levels:
-
-| Type | Fields | Enforcement |
+| Priority | Rule | Condition |
 |---|---|---|
-| **Advisory** | `preferred_source_groups`, `audience`, `freshness`, `cost_bias`, `speed_bias` | Shape LLM decisions via prompt context |
-| **Hard constraint** | `excluded_source_groups`, `excluded_providers` | Enforced at the provider registry — excluded providers never execute |
+| 1 | Budget exhausted | `spent_usd >= soft_budget_usd` |
+| 2 | Time exhausted | `elapsed >= time_limit` |
+| 3 | Supervisor done | Supervisor signals `done=True` |
+| 4 | Max iterations | Hard cap reached |
 
-Structural preferences control the research shape:
+Budget exhaustion does NOT prevent deliverable production — the engine still drafts, critiques, and assembles with whatever evidence it has. The budget is a soft ceiling checked between iterations, so draft/critique/finalize can overshoot it by up to one phase worth of LLM calls.
 
-| Field | Effect |
-|---|---|
-| `deliverable_mode` | `research_package`, `final_report`, `comparison_memo`, `recommendation_brief`, `answer_only` |
-| `planning_mode` | `broad_scan`, `comparison`, `timeline`, `deep_dive`, `decision_support` |
-| `comparison_targets` | Ensures balanced coverage across compared items |
-| `time_window_days` | Constrains recency in search actions |
+### Cross-provider critique
+
+The engine enforces model diversity for quality checks. Generator (Anthropic) and Reviewer (OpenAI) always use different providers. The deep tier adds a second reviewer (Gemini) and a judge. This follows the finding that separating generation from evaluation across providers produces measurably better results.
+
+### Council mode (experimental)
+
+A separate `council_research()` flow runs the full pipeline once per generator model, then uses a judge to compare outputs and waits for an explicit operator selection of the canonical generator. The CLI supports this via `--council`.
 
 ## Tiers
 
-| Tier | Max Iterations | Cost Budget | Time Box | Critique | Judge | Council |
-|---|---|---|---|---|---|---|
-| Quick | 2 | $0.05 | 2 min | No | No | No |
-| Standard | 3 | $0.10 | 10 min | No | No | No |
-| Deep | 6 | $1.00 | 30 min | Yes | Yes | Available |
-| Custom | Configurable | Configurable | Configurable | Configurable | Configurable | Available |
+| Tier | Max Iterations | Cost Budget | Critique | Judge | 2nd Reviewer |
+|---|---|---|---|---|---|
+| **quick** | 2 | $0.10 | Single | No | No |
+| **standard** | 5 | $0.10 | Single | Yes | No |
+| **deep** | 10 | $0.10 | Dual | Yes | Yes |
+| **exhaustive** | 20 | $3.00 | Dual | Yes | Yes |
 
-When `tier = "auto"`, the classifier detects complexity from the brief and selects automatically.
-
-### Council Mode (Opt-In)
-
-N parallel generators (default: 3) each produce independent supervisor decisions. The council aggregator merges and dedupes their `SearchAction`s before built-in provider execution. Available on deep and custom tiers.
+Quick/standard/deep fan out 3 parallel subagents per iteration; exhaustive fans out 10 and uses a supervisor prompt that prioritizes broad source coverage.
 
 ## Configuration
 
-### LLM Models
+### Environment variables
 
-All LLM calls route through PydanticAI. Model strings use `provider/model-name` format. Changing a model is a config change, not a code change.
-
-| Setting | Default | Role |
-|---|---|---|
-| `classifier_model` | `gemini/gemini-2.0-flash-lite` | Request classification |
-| `planner_model` | `gemini/gemini-2.5-flash` | Plan generation |
-| `supervisor_model` | `gemini/gemini-2.5-flash` | Research cycle supervisor |
-| `relevance_scorer_model` | `gemini/gemini-2.5-flash` | Evidence relevance scoring |
-| `coverage_scorer_model` | `gemini/gemini-2.5-flash` | LLM-based coverage scoring |
-| `replanner_model` | `gemini/gemini-2.5-flash` | Replan gate (subtopic/query revision) |
-| `writer_model` | `gemini/gemini-2.5-flash` | Report composition + revision |
-| `review_model` | `anthropic/claude-sonnet-4-20250514` | Cross-provider critique |
-| `judge_model` | `openai/gpt-4o-mini` | Grounding + coherence verification |
-
-### Environment Variables
-
-All settings use the `RESEARCH_` prefix and are loaded via Pydantic Settings.
+All settings use the `RESEARCH_` prefix, loaded via `pydantic-settings`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESEARCH_DEFAULT_TIER` | `standard` | Default when tier not specified |
-| `RESEARCH_DEFAULT_COST_BUDGET_USD` | `0.10` | Default cost ceiling |
+| `RESEARCH_DEFAULT_TIER` | `standard` | Default tier when not specified |
+| `RESEARCH_DEFAULT_COST_BUDGET_USD` | `0.10` | Soft cost ceiling per run; checked between iterations, so a run may overshoot by up to one phase worth of LLM calls |
 | `RESEARCH_DAILY_COST_LIMIT_USD` | `10.00` | Global daily ceiling |
-| `RESEARCH_CONVERGENCE_MIN_COVERAGE` | `0.60` | Minimum acceptable coverage |
-| `RESEARCH_CONVERGENCE_EPSILON` | `0.05` | Minimum coverage delta to continue |
-| `RESEARCH_MAX_TOOL_CALLS_PER_CYCLE` | `5` | Max tool calls per iteration |
-| `RESEARCH_ALLOW_SUPERVISOR_BASH` | `false` | Opt-in exposure of the local `run_bash` supervisor tool |
-| `RESEARCH_ENABLED_PROVIDERS` | `arxiv,semantic_scholar` | Built-in search providers |
+| `RESEARCH_ENABLED_PROVIDERS` | `brave,exa,tavily,arxiv,semantic_scholar` | Comma-separated search providers |
+| `RESEARCH_MAX_PARALLEL_SUBAGENTS` | `3` | Concurrent subagents per iteration |
+| `RESEARCH_LEDGER_WINDOW_ITERATIONS` | `3` | How many recent iterations shown in full to agents |
+| `RESEARCH_GROUNDING_MIN_RATIO` | `0.7` | Minimum citation density for assembly |
+| `RESEARCH_MAX_SUPPLEMENTAL_LOOPS` | `1` | Extra iterations if reviewer requests more research |
+| `RESEARCH_ALLOW_UNFINALIZED_PACKAGE` | `false` | Allow output when finalizer fails |
+| `RESEARCH_SANDBOX_ENABLED` | `false` | Enable sandboxed code execution tool |
+| `DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT` | `false` | Ship LLM content to Logfire |
 
-### Provider API Keys
+### Provider API keys
 
-At least one LLM provider key must be configured. Built-in search providers (arXiv, Semantic Scholar) run with zero extra keys.
-
-| Provider | Variable | Required |
+| Provider | Variable | Used by |
 |---|---|---|
-| Google (Gemini) | `GEMINI_API_KEY` | At least one LLM key |
-| Anthropic (Claude) | `ANTHROPIC_API_KEY` | At least one LLM key |
-| OpenAI (GPT) | `OPENAI_API_KEY` | At least one LLM key |
-| Brave Search | `BRAVE_API_KEY` | No |
-| Exa | `EXA_API_KEY` | No |
-| Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | No |
+| Google (Gemini) | `GEMINI_API_KEY` | Subagent, Judge, 2nd Reviewer |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | Generator (scope, plan, draft, finalize) |
+| OpenAI (GPT) | `OPENAI_API_KEY` | Reviewer |
+| Brave Search | `BRAVE_API_KEY` | Web search provider |
+| Exa | `EXA_API_KEY` | Web search provider |
+| Tavily | `TAVILY_API_KEY` | Web search provider |
+| Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | Academic search provider (optional, increases rate limits) |
 
-## Observability
+### Model string format
 
-Logfire bootstrap is enabled automatically at runtime when the `logfire` SDK is installed. Every checkpoint emits a named span (e.g. `run_supervisor`, `score_coverage`, `revise_render`), and the iteration loop records `iteration_coverage`, `iteration_cost_usd`, and `iteration_candidates` as metrics at each cycle. PydanticAI spans include `content=True` for full prompt/completion visibility. The engine also instruments `httpx` and MCP transports when the Logfire SDK is present, and falls back cleanly when it isn't.
-
-To send traces to Logfire locally, authenticate and select a project:
-
-```bash
-uv run logfire auth
-uv run logfire projects use
-```
-
-Note: per the official Logfire docs, scrubbing does **not** redact PydanticAI message-content attributes such as prompts, completions, and tool-call content. Because this slice intentionally enables content capture, only use it in environments where that content is acceptable to export.
+PydanticAI uses `provider:model` format:
+- `google-gla:gemini-3.1-flash-lite-preview`
+- `anthropic:claude-sonnet-4-6`
+- `openai:gpt-5.4-mini`
 
 ## Testing
 
 ```bash
+# Run all tests
 uv run pytest tests/ -v
+
+# Run only V2 tests
+uv run pytest tests/test_v2_*.py -v
+
+# Run a single test file
+uv run pytest tests/test_v2_agents.py -v
+
+# Run a single test
+uv run pytest tests/test_v2_agents.py::TestScopeAgent::test_creates_agent_with_correct_model -v
 ```
 
-264 tests covering models, evidence pipeline, convergence logic, checkpoints, renderers, agent factories, flow orchestration, and real agent behavior with PydanticAI's `TestModel`.
+V2 tests covering agents, checkpoints, config, convergence, contracts, council, flow orchestration, integration, architectural invariants, evidence ledger, package export, prompts, and search providers. Most of this suite runs offline using stubs; `tests/test_v2_runtime_durability.py` is the small exception that uses a real local Kitaru runtime with isolated temp HOME/XDG dirs.
 
-## Offline Eval Harness (Foundation)
+### Testing patterns
 
-The offline eval harness lives in top-level `evals/` and is intentionally separate from runtime package code.
+- **Kitaru stub injection** — Most tests inject lightweight stubs for `kitaru` and `pydantic_ai` into `sys.modules` before importing. This keeps the fast suite offline and deterministic.
+- **Thin real-runtime slice** — `tests/test_v2_runtime_durability.py` runs two small repo-local probes against actual Kitaru execution: one replay case and one wait/input/resume case.
+- **`FakeKitaruAgent`** — Stands in for `KitaruAgent`, delegating `.run_sync()` to the wrapped PydanticAI agent.
+- **`pydantic_ai.TestModel`** — Agent behavior tests use PydanticAI's `TestModel` for offline structured output.
+- **No shared conftest.py** — Each test file is self-contained.
 
-- Install eval-only dependencies:
+## Evidence Ledger
 
-```bash
-uv sync --extra evals
+The evidence system is pure functions with no LLM calls:
+
+- **Dedup precedence**: DOI > arXiv ID > canonical URL. Items without stable identifiers are always admitted.
+- **Append-only**: Scores only ratchet up across iterations. Nothing is deleted.
+- **URL canonicalization**: Strips tracking params (`utm_*`, `fbclid`, `gclid`), normalizes scheme/host case, removes fragments.
+- **Windowed projection**: Recent iterations shown in full to agents; older items compacted to save context window. Pinned items (high-value evidence) always shown in full.
+
+## Project Layout
+
 ```
+research/                       # V2 package
+├── agents/                     # PydanticAI agent factories (KitaruAgent-wrapped)
+│   ├── scope.py                #   Question → ResearchBrief
+│   ├── planner.py              #   Brief → ResearchPlan
+│   ├── supervisor.py           #   Iteration steering → SupervisorDecision
+│   ├── subagent.py             #   Search + fetch execution → SubagentFindings
+│   ├── generator.py            #   Evidence → DraftReport
+│   ├── reviewer.py             #   Cross-provider critique → CritiqueReport
+│   ├── finalizer.py            #   Draft + critique → FinalReport
+│   └── judge.py                #   Council comparison → CouncilComparison
+├── checkpoints/                # Kitaru @checkpoint functions
+│   ├── metadata.py             #   Run stamping, wall clock, finalization
+│   ├── scope.py                #   Scope checkpoint (llm_call)
+│   ├── plan.py                 #   Plan checkpoint (llm_call)
+│   ├── supervisor.py           #   Supervisor checkpoint (llm_call)
+│   ├── subagent.py             #   Subagent checkpoint (llm_call)
+│   ├── draft.py                #   Draft generation (llm_call)
+│   ├── critique.py             #   Review with dual-reviewer merge (llm_call)
+│   ├── finalize.py             #   Final report (llm_call)
+│   ├── judge.py                #   Council judge (llm_call)
+│   ├── assemble.py             #   Package assembly + validation (tool_call)
+│   └── export.py               #   Durable package export (tool_call)
+├── config/                     # Configuration
+│   ├── settings.py             #   ResearchSettings (env vars)
+│   ├── defaults.py             #   Tier defaults (quick/standard/deep)
+│   ├── slots.py                #   ModelSlot enum + ModelSlotConfig
+│   └── budget.py               #   Mutable budget tracking
+├── contracts/                  # Pydantic data models
+│   ├── base.py                 #   StrictBase (extra="forbid")
+│   ├── brief.py                #   ResearchBrief
+│   ├── plan.py                 #   ResearchPlan, Subtopic, SuccessCriteria
+│   ├── evidence.py             #   EvidenceItem, EvidenceLedger
+│   ├── decisions.py            #   SupervisorDecision, SubagentFindings
+│   ├── reports.py              #   DraftReport, CritiqueReport, FinalReport
+│   ├── iteration.py            #   IterationRecord
+│   └── package.py              #   InvestigationPackage, CouncilPackage
+├── flows/                      # Kitaru @flow orchestration
+│   ├── deep_research.py        #   Main research flow
+│   ├── council.py              #   Multi-generator council flow
+│   ├── convergence.py          #   Stop rule evaluation
+│   └── budget.py               #   Token cost estimation
+├── ledger/                     # Evidence processing (pure, no LLM)
+│   ├── canonical.py            #   DOI/arXiv/URL ID extraction
+│   ├── url.py                  #   URL canonicalization
+│   ├── dedup.py                #   Dedup key computation
+│   ├── ledger.py               #   ManagedLedger (append-only with dedup)
+│   └── projection.py           #   Windowed projection for context management
+├── providers/                  # Search and tool providers
+│   ├── search.py               #   SearchProvider protocol + ProviderRegistry
+│   ├── brave.py                #   Brave web search
+│   ├── arxiv_provider.py       #   arXiv API
+│   ├── semantic_scholar.py     #   Semantic Scholar API
+│   ├── exa_provider.py         #   Exa search
+│   ├── fetch.py                #   URL fetch + HTML text extraction
+│   ├── code_exec.py            #   Sandboxed code execution
+│   ├── agent_tools.py          #   AgentToolSurface (search/fetch/exec as tools)
+│   └── _http.py                #   Retry-with-backoff HTTP client
+├── package/                    # Output materialization
+│   ├── assembly.py             #   Package construction + validation
+│   └── export.py               #   Filesystem export (JSON + markdown)
+├── prompts/                    # System prompts as markdown
+│   ├── scope.md
+│   ├── planner.md
+│   ├── supervisor.md
+│   ├── subagent.md
+│   ├── generator.md
+│   ├── reviewer.md
+│   ├── finalizer.md
+│   ├── council_judge.md
+│   ├── loader.py               #   Load prompt with SHA-256 hash tracking
+│   └── registry.py             #   PROMPTS registry for reproducibility
+└── mcp/                        #   (reserved for MCP server integration)
 
-- Run baseline suites (all three):
-
-```bash
-uv run python -m evals.runner
-```
-
-- Run a single suite:
-
-```bash
-uv run python -m evals.runner --suite brief_to_plan
-```
-
-- Write a baseline artifact for later comparison:
-
-```bash
-uv run python -m evals.runner --write-baseline
-```
-
-This writes timestamped JSON and `artifacts/evals/baseline-latest.json`.
-
-- Enable opt-in `LLMJudge` scoring on top of deterministic checks:
-
-```bash
-uv run python -m evals.runner --use-llm-judge
-```
-
-- Override the judge model or concurrency:
-
-```bash
-uv run python -m evals.runner --use-llm-judge --judge-model openai:gpt-4o-mini --judge-max-concurrency 2
-```
-
-- Export judge runs to Logfire for trace inspection:
-
-```bash
-LOGFIRE_TOKEN=... uv run python -m evals.runner --use-llm-judge --enable-logfire
-```
-
-When Logfire is enabled, eval traces are emitted with service name `deep-research-evals`, so failed cases can be inspected in the Logfire UI with their evaluation metadata and any task spans produced during the run.
-
-If `pydantic-evals` is not installed, suites degrade to native checks and print guidance (`uv sync --extra evals`) instead of failing unrelated tests. If `LLMJudge` mode is requested without the extra installed, the runner reports `judge_mode: skipped_unavailable` and keeps deterministic results intact.
-
-By default, `pytest` still targets `tests/` only. Live eval execution is not part of default test runs.
+run.py                       # CLI entry point
+tests/
+├── test_v2_agents.py           # Agent factory tests
+├── test_v2_checkpoints.py      # Checkpoint behavior tests
+├── test_v2_config.py           # Config + tier defaults tests
+├── test_v2_convergence.py      # Stop rule tests
+├── test_v2_council.py          # Council flow tests
+├── test_v2_flow.py             # Flow orchestration tests
+├── test_v2_integration.py      # End-to-end integration tests
+├── test_v2_invariants.py       # Architectural guard tests
+├── test_v2_ledger.py           # Evidence ledger + projection tests
+├── test_v2_package.py          # Package export tests
+├── test_v2_prompts.py          # Prompt loading tests
+├── test_v2_providers.py        # Search provider tests
+├── test_v2_imports.py          # Import smoke tests
+├── test_v2_run.py              # CLI entry point tests
+└── test_v2_runtime_durability.py # Thin real-runtime replay/wait slice
 
 ## Design Principles
 
-**Library-first.** The engine is a Python library. The `@flow` is the entry point. Wrap it in any API or CLI you want.
+**Library-first.** The engine is a Python library. The `@flow` is the entry point. Wrap it in any API or CLI.
 
-**Package-canonical.** The `InvestigationPackage` is the canonical output. Reports are rendered views derived from it. Different consumers get different surfaces from the same package.
+**Durable phase boundaries.** Core research work is checkpointed and the repo now has thin real-runtime proof for completed-checkpoint replay and wait/resume. Broader crash-recovery behavior is still mostly validated by stubbed tests.
 
-**Immutable evidence.** Pydantic models use `extra="forbid"` and `model_copy(update=...)` throughout. The ratchet rule ensures evidence only accumulates — scores go up, snippets merge, nothing is lost.
+**Cross-provider critique.** Generator and reviewer always use different LLM providers. Self-evaluation is unreliable — the engine enforces model diversity for quality checks.
 
-**Prompts as markdown.** System prompts live in `prompts/*.md`, loaded at agent construction time. Prompt changes don't require code changes.
+**Immutable evidence.** Evidence only accumulates. Scores ratchet up, snippets merge, nothing is deleted. All contracts use `extra="forbid"`.
 
-**Durable everything.** Every major phase boundary is a Kitaru checkpoint. Runs survive process crashes, support replay from any checkpoint, and produce inspectable artifacts at every iteration.
+**Prompts as markdown.** System prompts live in `research/prompts/*.md`, loaded at agent construction time with SHA-256 tracking for reproducibility. Prompt changes don't require code changes.
 
-**Cross-provider critique.** The reviewer and judges use different providers than the generators. Self-evaluation is unreliable — the engine enforces model diversity for quality checks.
-
-## Requirements
-
-- Python 3.11+
-- [Kitaru](https://kitaru.ai) — durable execution for AI workflows
-- [PydanticAI](https://ai.pydantic.dev) — structured LLM completions
-- Pydantic v2 + pydantic-settings
-
-<details>
-<summary><strong>Project Layout</strong></summary>
-
-```
-deep_research/
-├── agents/                  # PydanticAI agent factories (Kitaru-wrapped)
-│   ├── supervisor.py        #   Search supervisor with MCP tools + bash
-│   ├── classifier.py        #   Request classification + preference extraction
-│   ├── planner.py           #   Research plan generation
-│   ├── relevance_scorer.py  #   Evidence relevance scoring
-│   ├── coverage_scorer.py   #   LLM-based coverage scoring
-│   ├── replanner.py         #   Replan gate (subtopic/query revision on stall)
-│   ├── reviewer.py          #   Cross-provider critique
-│   ├── judge.py             #   Grounding + coherence verification
-│   ├── writer.py            #   Report composition + revision
-│   └── curator.py           #   Evidence curation
-├── checkpoints/             # Kitaru checkpoint functions
-│   ├── classify.py          #   classify_request
-│   ├── plan.py              #   build_plan
-│   ├── supervisor.py        #   run_supervisor — decision + MCP capture
-│   ├── council.py           #   run_council_generator — parallel generators
-│   ├── search.py            #   execute_searches — built-in provider execution
-│   ├── normalize.py         #   extract_candidates
-│   ├── relevance.py         #   score_relevance
-│   ├── merge.py             #   update_ledger
-│   ├── fetch.py             #   enrich_candidates
-│   ├── evaluate.py          #   score_coverage (LLM-scored)
-│   ├── replan.py            #   evaluate_replan — stall recovery gate
-│   ├── select.py            #   rank_evidence
-│   ├── rendering.py         #   write_reading_path / write_backing_report / write_full_report
-│   ├── review.py            #   critique_reports
-│   ├── revise.py            #   apply_revisions (writer agent regeneration)
-│   ├── grounding.py         #   verify_grounding
-│   ├── coherence.py         #   verify_coherence
-│   ├── metadata.py          #   stamp_run_metadata / finalize_run_metadata
-│   └── assemble.py          #   assemble_package
-├── evidence/                # Evidence processing (no LLM calls)
-│   ├── dedup.py             #   DOI > arXiv > URL > title precedence
-│   ├── ledger.py            #   Ratchet merge (scores only go up)
-│   ├── scoring.py           #   Heuristic quality by source kind
-│   ├── url.py               #   URL canonicalization
-│   └── resolution.py        #   Selected/coverage entry resolution
-├── flow/
-│   ├── research_flow.py     #   @flow — top-level orchestration (~116 lines)
-│   ├── _pipeline.py         #   Iteration loop, rendering, critique, assembly helpers
-│   ├── convergence.py       #   Stop decision logic
-│   └── costing.py           #   Token → USD estimation
-├── models.py                # All Pydantic models (strict, immutable)
-├── config.py                # ResearchConfig, tier defaults, env settings
-├── enums.py                 # StopReason, Tier, SourceKind, DeliverableMode, PlanningMode
-├── observability.py         # Logfire bootstrap, span(), metric() helpers
-├── agent_io.py              # Tool-result collection (Hooks-based) + serialization
-├── providers/
-│   ├── __init__.py          #   build_supervisor_surface + ProviderRegistry
-│   ├── mcp_config.py        #   MCPServerConfig + toolset factory
-│   ├── normalization.py     #   Raw tool results → EvidenceCandidate
-│   └── search/
-│       ├── __init__.py      #   SearchProvider protocol + ProviderRegistry
-│       ├── brave.py         #   Brave web search
-│       ├── arxiv_provider.py
-│       ├── semantic_scholar.py
-│       ├── exa_provider.py
-│       └── fetcher.py       #   URL fetch + HTML extraction
-├── renderers/               # Pure functions: package data → deterministic scaffolds
-│   ├── reading_path.py
-│   ├── backing_report.py
-│   ├── full_report.py
-│   └── materialization.py   #   Writer synthesis + deliverable-mode prompt adaptation
-├── tools/
-│   ├── bash_executor.py     #   Allow-listed bash sandbox
-│   └── state_reader.py      #   read_plan, read_gaps tools for supervisor
-├── package/
-│   ├── assembly.py          #   InvestigationPackage construction
-│   └── io.py                #   write_package / read_package (JSON + markdown)
-└── prompts/                 #   System prompts as markdown files
-    ├── supervisor.md
-    ├── planner.md
-    ├── classifier.md
-    ├── coverage_scorer.md
-    ├── replanner.md
-    └── ...
-```
-
-</details>
+**Typed everything.** Every agent produces a Pydantic model. Every checkpoint has a typed return. The `InvestigationPackage` is the canonical, serializable output.
 
 ## Contributing
 
-Contributions are welcome. This is an active project by the [ZenML](https://zenml.io) team.
+Contributions welcome. This is an active project by the [ZenML](https://zenml.io) team.
 
 - **Issues**: Bug reports and feature requests via [GitHub Issues](https://github.com/zenml-io/deep-research/issues)
-- **PRs**: Fork, branch, test (`uv run pytest tests/`), and open a PR
-- **Prompts**: System prompts live in `prompts/*.md` — prompt improvements are high-impact, low-risk contributions
+- **PRs**: Fork, branch, test (`uv run pytest tests/test_v2_*.py -v`), and open a PR
+- **Prompts**: System prompts in `research/prompts/*.md` are high-impact, low-risk contributions
 
 ## License
 

@@ -1,15 +1,13 @@
 """Optional Logfire bootstrap for eval runs.
 
-Delegates to :func:`deep_research.observability.configure_logfire` so the
-eval harness and the core app share one bootstrap path. Evals always enable
-pydantic-ai instrumentation — the previous implementation forgot to do so.
+Configures Logfire for the eval harness, always enabling pydantic-ai
+instrumentation. Returns False when the Logfire SDK is not installed.
 """
 
 from __future__ import annotations
 
 import logging
 
-from deep_research.observability import configure_logfire
 from evals.settings import EvalSettings
 
 logger = logging.getLogger(__name__)
@@ -18,12 +16,23 @@ logger = logging.getLogger(__name__)
 def bootstrap_logfire(settings: EvalSettings) -> bool:
     """Configure Logfire once per process for eval runs.
 
-    Uses the shared helper from :mod:`deep_research.observability` with
-    eval-specific service name and environment. Returns ``True`` when the
-    Logfire SDK is installed and configuration succeeded.
+    Returns ``True`` when the Logfire SDK is installed and configuration
+    succeeded, ``False`` when Logfire is not installed.
     """
-    return configure_logfire(
+    try:
+        import logfire
+    except ImportError:
+        logger.debug("Logfire SDK not installed; skipping eval bootstrap")
+        return False
+
+    scrubbing = logfire.ScrubbingOptions(extra_patterns=["bearer"])
+    logfire.configure(
+        send_to_logfire="if-token-present",
         service_name=settings.logfire_service_name,
         environment=settings.logfire_environment,
-        instrument_pydantic_ai=True,
+        scrubbing=scrubbing,
     )
+    logfire.instrument_pydantic_ai()
+    logfire.instrument_httpx()
+    logfire.instrument_mcp()
+    return True
