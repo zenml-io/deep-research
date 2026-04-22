@@ -619,29 +619,29 @@ class TestLedgerDedup:
 
 
 # ---------------------------------------------------------------------------
-# 5. run_v2.py Size Threshold Tests
+# 5. run.py Size Threshold Tests
 # ---------------------------------------------------------------------------
 
 
-RUN_V2_PATH = Path(__file__).parent.parent / "run_v2.py"
+RUN_PATH = Path(__file__).parent.parent / "run.py"
 
 
 class TestRunV2SizeThreshold:
-    """run_v2.py must stay thin — no embedded reusable helpers."""
+    """run.py must stay thin — no embedded reusable helpers."""
 
-    def test_run_v2_under_120_lines(self) -> None:
-        lines = RUN_V2_PATH.read_text().splitlines()
-        assert len(lines) < 120, f"run_v2.py has {len(lines)} lines, exceeds 120"
+    def test_run_under_120_lines(self) -> None:
+        lines = RUN_PATH.read_text().splitlines()
+        assert len(lines) < 120, f"run.py has {len(lines)} lines, exceeds 120"
 
-    def test_run_v2_only_main_function(self) -> None:
-        tree = ast.parse(RUN_V2_PATH.read_text())
+    def test_run_only_main_function(self) -> None:
+        tree = ast.parse(RUN_PATH.read_text())
         func_names = [
             node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         ]
         assert func_names == ["main"], f"Unexpected functions: {func_names}"
 
-    def test_run_v2_no_classes(self) -> None:
-        tree = ast.parse(RUN_V2_PATH.read_text())
+    def test_run_no_classes(self) -> None:
+        tree = ast.parse(RUN_PATH.read_text())
         class_names = [
             node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
         ]

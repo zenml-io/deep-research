@@ -23,7 +23,7 @@ from research.contracts.reports import (
 )
 
 Tier = Literal["quick", "standard", "deep", "exhaustive"]
-"""The four research tiers. Matches ``run_v2.py`` argparse choices and
+"""The four research tiers. Matches ``run.py`` argparse choices and
 ``ResearchConfig.for_tier`` keys."""
 
 

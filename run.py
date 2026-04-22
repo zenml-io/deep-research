@@ -1,9 +1,9 @@
 """Run a V2 deep research investigation from the command line.
 
 Usage:
-    uv run python run_v2.py "What are the latest advances in RLHF alternatives?"
-    uv run python run_v2.py --tier deep "My research question"
-    uv run python run_v2.py --output ./results "My research question"
+    uv run python run.py "What are the latest advances in RLHF alternatives?"
+    uv run python run.py --tier deep "My research question"
+    uv run python run.py --output ./results "My research question"
 """
 
 from __future__ import annotations

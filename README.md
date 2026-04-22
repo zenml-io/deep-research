@@ -31,7 +31,7 @@ export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
 
 # Run a research investigation
-uv run python run_v2.py "What are the latest advances in RLHF alternatives?"
+uv run python run.py "What are the latest advances in RLHF alternatives?"
 ```
 
 Output:
@@ -153,19 +153,19 @@ export DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT=true
 
 ```bash
 # Standard tier (default)
-uv run python run_v2.py "What are the latest advances in RLHF alternatives?"
+uv run python run.py "What are the latest advances in RLHF alternatives?"
 
 # Quick tier — faster, cheaper, no critique/judge
-uv run python run_v2.py --tier quick "Brief overview of transformer architectures"
+uv run python run.py --tier quick "Brief overview of transformer architectures"
 
 # Deep tier — more iterations, dual reviewer, judge verification
-uv run python run_v2.py --tier deep "Comprehensive analysis of protein folding methods"
+uv run python run.py --tier deep "Comprehensive analysis of protein folding methods"
 
 # Custom output directory
-uv run python run_v2.py --output ./results "My research question"
+uv run python run.py --output ./results "My research question"
 
 # Allow package output even if finalizer fails
-uv run python run_v2.py --allow-unfinalized "My research question"
+uv run python run.py --allow-unfinalized "My research question"
 ```
 
 ### As a library
@@ -413,7 +413,7 @@ research/                       # V2 package
 │   └── registry.py             #   PROMPTS registry for reproducibility
 └── mcp/                        #   (reserved for MCP server integration)
 
-run_v2.py                       # CLI entry point
+run.py                       # CLI entry point
 tests/
 ├── test_v2_agents.py           # Agent factory tests
 ├── test_v2_checkpoints.py      # Checkpoint behavior tests

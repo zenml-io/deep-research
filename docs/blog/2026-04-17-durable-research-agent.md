@@ -118,7 +118,7 @@ Every phase is `.submit()` then `.load()`. The submission is the checkpoint boun
 A concrete run looks like this — question in, package out:
 
 ```
-$ uv run python run_v2.py "Tradeoffs of MoE vs dense transformers for inference latency"
+$ uv run python run.py "Tradeoffs of MoE vs dense transformers for inference latency"
 [scope]        ResearchBrief    — 2 subtopics, 4 success criteria
 [plan]         ResearchPlan     — 7 queries across arxiv, semantic_scholar, exa
 [iter 0]       SupervisorDecision(done=False) → 3 subagents → 12 findings
@@ -221,13 +221,13 @@ Two modes extend the default pipeline in different directions.
 
 ```bash
 # Standard run
-uv run python run_v2.py "What are the latest advances in RLHF alternatives?"
+uv run python run.py "What are the latest advances in RLHF alternatives?"
 
 # Exhaustive: 20 iterations, 10 parallel subagents, $3 budget
-uv run python run_v2.py --tier exhaustive "Comprehensive survey of transformer architectures"
+uv run python run.py --tier exhaustive "Comprehensive survey of transformer architectures"
 
 # Council: parallel runs across generator models + operator selection
-uv run python run_v2.py --council "My research question"
+uv run python run.py --council "My research question"
 ```
 
 ## What the composition buys

@@ -77,10 +77,10 @@ export DEEP_RESEARCH_LOGFIRE_INCLUDE_CONTENT=true
 ### 5. Run a research investigation
 
 ```bash
-uv run python run_v2.py --output ./results "What are the latest advances in RLHF alternatives?"
-uv run python run_v2.py --tier deep "My research question"
-uv run python run_v2.py --tier quick --output ./results "Brief overview of X"
-uv run python run_v2.py --tier exhaustive "Comprehensive survey of transformer architectures"
+uv run python run.py --output ./results "What are the latest advances in RLHF alternatives?"
+uv run python run.py --tier deep "My research question"
+uv run python run.py --tier quick --output ./results "Brief overview of X"
+uv run python run.py --tier exhaustive "Comprehensive survey of transformer architectures"
 ```
 
 ## Commands

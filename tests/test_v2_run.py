@@ -1,6 +1,6 @@
-"""Structural tests for the V2 CLI entrypoint (run_v2.py).
+"""Structural tests for the V2 CLI entrypoint (run.py).
 
-These tests verify that run_v2.py stays a thin dispatch surface:
+These tests verify that run.py stays a thin dispatch surface:
 no embedded helpers, no business logic, just argparse -> flow -> write.
 They do NOT import the flow or call deep_research.
 """
@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Absolute path to run_v2.py in the worktree root
-RUN_V2_PATH = Path(__file__).resolve().parent.parent / "run_v2.py"
+# Absolute path to run.py in the worktree root
+RUN_PATH = Path(__file__).resolve().parent.parent / "run.py"
 
 
 # ---------------------------------------------------------------------------
@@ -26,11 +26,11 @@ RUN_V2_PATH = Path(__file__).resolve().parent.parent / "run_v2.py"
 
 
 def _read_source() -> str:
-    return RUN_V2_PATH.read_text(encoding="utf-8")
+    return RUN_PATH.read_text(encoding="utf-8")
 
 
 def _parse_ast() -> ast.Module:
-    return ast.parse(_read_source(), filename=str(RUN_V2_PATH))
+    return ast.parse(_read_source(), filename=str(RUN_PATH))
 
 
 # ---------------------------------------------------------------------------
@@ -39,17 +39,17 @@ def _parse_ast() -> ast.Module:
 
 
 class TestRunV2Structure:
-    """Structural invariants for run_v2.py — enforced via AST / line count."""
+    """Structural invariants for run.py — enforced via AST / line count."""
 
-    def test_run_v2_stays_below_line_limit(self):
+    def test_run_stays_below_line_limit(self):
         """Dispatch surface must stay under 120 lines."""
         source = _read_source()
         line_count = len(source.splitlines())
         assert line_count < 120, (
-            f"run_v2.py is {line_count} lines — dispatch surface should be < 120"
+            f"run.py is {line_count} lines — dispatch surface should be < 120"
         )
 
-    def test_run_v2_no_embedded_helpers(self):
+    def test_run_no_embedded_helpers(self):
         """Only `main` should be defined as a function. No class defs."""
         tree = _parse_ast()
 
@@ -73,7 +73,7 @@ class TestRunV2Structure:
             f"No classes should be defined in dispatch surface, found: {class_names}"
         )
 
-    def test_run_v2_imports_runtime_only(self):
+    def test_run_imports_runtime_only(self):
         """Lazy imports inside main() should be from `research.` package."""
         tree = _parse_ast()
 
@@ -98,7 +98,7 @@ class TestRunV2Structure:
                 f"not 'deep_research.' or other"
             )
 
-    def test_run_v2_has_required_flags(self):
+    def test_run_has_required_flags(self):
         """Source must contain all required CLI flags."""
         source = _read_source()
         required_flags = [
@@ -115,7 +115,7 @@ class TestRunV2Structure:
 class TestRunV2Argparse:
     """Behavioral tests for argparse configuration."""
 
-    def test_run_v2_argparse_tier_choices(self):
+    def test_run_argparse_tier_choices(self):
         """--tier accepts quick/standard/deep and rejects invalid values."""
         # Run as subprocess to test argparse without importing flow modules
         for valid_tier in ("quick", "standard", "deep"):
@@ -125,7 +125,7 @@ class TestRunV2Argparse:
                     "-c",
                     textwrap.dedent(f"""\
                         import sys
-                        sys.argv = ["run_v2.py", "--tier", "{valid_tier}", "test question"]
+                        sys.argv = ["run.py", "--tier", "{valid_tier}", "test question"]
                         # Patch imports before main() can reach them
                         import types
                         mock_research = types.ModuleType("research")
@@ -168,7 +168,7 @@ class TestRunV2Argparse:
                 "-c",
                 textwrap.dedent("""\
                     import sys, argparse
-                    sys.argv = ["run_v2.py", "--tier", "ultra", "test question"]
+                    sys.argv = ["run.py", "--tier", "ultra", "test question"]
                     parser = argparse.ArgumentParser()
                     parser.add_argument("question")
                     parser.add_argument("--tier", choices=["quick", "standard", "deep"], default="standard")
@@ -181,7 +181,7 @@ class TestRunV2Argparse:
         )
         assert result.returncode != 0, "--tier ultra should be rejected"
 
-    def test_run_v2_council_flag_dispatches_to_council_flow(self):
+    def test_run_council_flag_dispatches_to_council_flow(self):
         """--council dispatches to the council flow and prints a council summary."""
         result = subprocess.run(
             [
@@ -220,9 +220,9 @@ class TestRunV2Argparse:
                     sys.modules["research.flows.deep_research"].deep_research = FakeFlow()
                     sys.modules["research.flows.council"].council_research = FakeFlow()
 
-                    sys.argv = ["run_v2.py", "--council", "test question"]
-                    sys.path.insert(0, "{RUN_V2_PATH.parent}")
-                    from run_v2 import main
+                    sys.argv = ["run.py", "--council", "test question"]
+                    sys.path.insert(0, "{RUN_PATH.parent}")
+                    from run import main
                     main()
                 """
                 ),
